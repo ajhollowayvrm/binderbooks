@@ -30,15 +30,10 @@ Cloudflare Pages, GitHub Pages, S3, etc.). No backend required.
 
 ## Deploy to GitHub Pages
 
-The site is hosted on GitHub Pages from the `gh-pages` branch. To publish the
-latest code:
-
-```bash
-npm run deploy     # builds and pushes ./dist to the gh-pages branch
-```
-
-The change appears at https://ajhollowayvrm.github.io/binderbooks/ within a
-minute or two.
+Every push to `main` triggers the GitHub Actions workflow in
+`.github/workflows/deploy.yml`, which builds the app and deploys it to
+https://ajhollowayvrm.github.io/binderbooks/ — live within a minute or two.
+No manual deploy step needed.
 
 ## Optional: pokemontcg.io API key (recommended once hosted)
 
