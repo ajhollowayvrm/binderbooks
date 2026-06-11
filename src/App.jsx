@@ -21,6 +21,13 @@ const storage = {
 const SYNC_URL = "https://j18dixq7ei.execute-api.us-west-2.amazonaws.com/";
 const TOKEN_KEY = "cardledger:syncToken";
 const STAMP_KEY = "cardledger:updatedAt";
+// magic-link setup: opening the app with #sync=<token> installs the token on
+// this device and scrubs it from the URL — new devices are one tap, no paste.
+// The fragment never leaves the browser (not sent to servers or logged).
+try {
+  const m = location.hash.match(/[#&]sync=([\w-]+)/);
+  if (m) { localStorage.setItem("cardledger:syncToken", m[1]); history.replaceState(null, "", location.pathname + location.search); }
+} catch {}
 const syncToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; } };
 const setSyncTokenLS = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} };
 const localStamp = () => { try { return Number(localStorage.getItem(STAMP_KEY)) || 0; } catch { return 0; } };
@@ -466,6 +473,12 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
 
 function SyncPanel({ sync, connect, disconnect }) {
   const [tok, setTok] = useState("");
+  const [copied, setCopied] = useState(false);
+  const shareLink = async () => {
+    const link = `${location.origin}${location.pathname}#sync=${syncToken()}`;
+    if (navigator.share) { try { await navigator.share({ title: "BinderBooks", url: link }); } catch {} }
+    else { try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {} }
+  };
   const label = {
     off: "Not connected — paste your sync token to back up this ledger",
     checking: "Connecting…",
@@ -482,6 +495,7 @@ function SyncPanel({ sync, connect, disconnect }) {
           <button className="cl-sync-connect" disabled={!tok.trim()} onClick={() => connect(tok)}>Connect</button>
         </div>
       )}
+      {sync === "on" && <button className="cl-link cl-sync-off" onClick={shareLink}>{copied ? "Link copied!" : "Send setup link to another device"}</button>}
       {(sync === "on" || sync === "error") && <button className="cl-link cl-sync-off" onClick={disconnect}>Disconnect this device</button>}
     </div>
   );
