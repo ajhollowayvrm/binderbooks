@@ -692,7 +692,7 @@ function LineRow({ line, sets, onChange, onRemove, removable }) {
       </div>
       <div className={"cl-line-r2" + (removable ? "" : " nox")}>
         <select className="cl-in" value={line.product} onChange={(e) => onChange({ ...line, product: e.target.value })}>{PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}</select>
-        <MoneyInput value={line.cost} onChange={(v) => onChange({ ...line, cost: v })} />
+        <MoneyInput value={line.cost} onChange={(v) => onChange({ ...line, cost: v })} placeholder="auto" />
         {removable && <button className="cl-x" onClick={onRemove}><X size={13} /></button>}
       </div>
     </div>
@@ -702,15 +702,36 @@ function BuyForm({ initial, onSave, onCancel }) {
   const sets = useSets();
   const blank = () => ({ id: uid(), qty: "1", set: "", product: "Booster Pack", cost: "" });
   const [f, setF] = useState(initial
-    ? { category: initial.category, source: initial.source, date: initial.date, item: initial.item || "", cost: numStr(initial.cost),
+    ? { category: initial.category, source: initial.source, date: initial.date, item: initial.item || "", cost: numStr(initial.cost), total: "",
         lines: initial.lines?.length ? initial.lines.map((l) => ({ ...l, qty: String(l.qty || 1), cost: numStr(l.cost) })) : null }
-    : { category: "Sealed", source: "Gamecraft", date: today(), item: "", cost: "", lines: [blank()] });
+    : { category: "Sealed", source: "Gamecraft", date: today(), item: "", cost: "", total: "", lines: [blank()] });
   const setLine = (ln) => setF((p) => ({ ...p, lines: p.lines.map((l) => (l.id === ln.id ? ln : l)) }));
-  const total = f.lines ? f.lines.reduce((s, l) => s + (Number(l.cost) || 0), 0) : Number(f.cost) || 0;
+  const anyBlank = !!f.lines && f.lines.some((l) => !l.cost);
+  const sumExplicit = f.lines ? f.lines.reduce((s, l) => s + (Number(l.cost) || 0), 0) : 0;
+  const total = f.lines ? (anyBlank ? Number(f.total) || 0 : sumExplicit) : Number(f.cost) || 0;
+  // blank-cost lines split whatever the typed total leaves over, weighted by
+  // qty; rounding cents land on the last blank line so the sum stays exact
+  const lineCosts = () => {
+    if (!anyBlank) return f.lines.map((l) => Number(l.cost) || 0);
+    const blanks = f.lines.map((l, i) => (!l.cost ? i : -1)).filter((i) => i >= 0);
+    const blankQty = blanks.reduce((s, i) => s + (Number(f.lines[i].qty) || 1), 0);
+    const remainder = Math.max(0, total - sumExplicit);
+    const out = f.lines.map((l) => Number(l.cost) || 0);
+    let used = 0;
+    blanks.forEach((i, k) => {
+      out[i] = k === blanks.length - 1
+        ? Math.round((remainder - used) * 100) / 100
+        : Math.round((remainder * ((Number(f.lines[i].qty) || 1) / blankQty)) * 100) / 100;
+      used += out[i];
+    });
+    return out;
+  };
   const label = f.lines
     ? f.lines.filter((l) => l.set || l.product).map((l) => `${Number(l.qty) || 1}× ${l.set} ${l.product}`.replace(/\s+/g, " ").trim()).join(" · ")
     : f.item;
-  const valid = f.lines ? f.lines.every((l) => l.set && l.product && l.cost) : !!f.item && !!f.cost;
+  const valid = f.lines
+    ? f.lines.every((l) => l.set && l.product) && (anyBlank ? !!f.total : sumExplicit > 0)
+    : !!f.item && !!f.cost;
   return (
     <Form editing={!!initial}>
       {f.lines ? (
@@ -730,13 +751,15 @@ function BuyForm({ initial, onSave, onCancel }) {
       <div className="cl-grid2"><Field label="Category"><Select opts={BUY_CATS} value={f.category} onChange={(v) => setF({ ...f, category: v })} /></Field><Field label="From"><Select opts={SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field></div>
       <div className="cl-grid2">
         {f.lines
-          ? <Field label="Total (sum of lines)"><div className="cl-in cl-total-ro">{fmt(total)}</div></Field>
+          ? anyBlank
+            ? <Field label="Total cost"><MoneyInput value={f.total} onChange={(v) => setF({ ...f, total: v })} /></Field>
+            : <Field label="Total (sum of lines)"><div className="cl-in cl-total-ro">{fmt(total)}</div></Field>
           : <Field label="Cost"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field>}
         <Field label="Date"><input className="cl-in" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
       </div>
       <Actions onCancel={onCancel} label={initial ? "Update buy" : "Save buy"} disabled={!valid || !total}
-        onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), item: label, category: f.category, source: f.source, date: f.date, cost: total,
-          ...(f.lines ? { lines: f.lines.map((l) => ({ id: l.id, qty: Number(l.qty) || 1, set: l.set, product: l.product, cost: Number(l.cost) || 0 })) } : {}) })} />
+        onSave={() => { const costs = f.lines ? lineCosts() : null; onSave({ ...(initial ? { id: initial.id } : {}), item: label, category: f.category, source: f.source, date: f.date, cost: total,
+          ...(f.lines ? { lines: f.lines.map((l, i) => ({ id: l.id, qty: Number(l.qty) || 1, set: l.set, product: l.product, cost: costs[i] })) } : {}) }); }} />
     </Form>
   );
 }
