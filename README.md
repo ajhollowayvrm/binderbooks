@@ -59,4 +59,7 @@ retry if the API doesn't respond.
 - A "Reset all data" button lives at the bottom of the Overview tab.
 - The app seeds with example data on first run; edit or delete those rows freely.
 - Card search matches substrings of the **card name** and supports multi-word
-  (e.g. "pika ex"), but the API doesn't do typo correction.
+  (e.g. "pika ex"), but the API doesn't do typo correction. Set names in the
+  query become set filters ("ampharos chaos rising"), and variant words like
+  "full art" / "secret" / "reverse" float matching rarities to the top instead
+  of being matched against the name.

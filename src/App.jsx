@@ -66,9 +66,34 @@ async function fetchSets() {
    queries kept. Repeat searches are instant and rate-limit failures drop. */
 const QCACHE_KEY = "cardledger:qcache:v1";
 const QCACHE_TTL = 24 * 3600 * 1000;
-const qTerms = (q) => {
-  const tokens = q.replace(/[^\w\s-]/g, " ").trim().split(/\s+/).filter(Boolean);
-  return tokens.map((t) => `name:*${t}*`).join(" ") || `name:*${q}*`;
+const cachedSets = () => { try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); return c?.names || null; } catch { return null; } };
+// words that describe a variant, not a card name — "ampharos full art" should
+// search name:*ampharos* and float Illustration/Ultra Rares, not find nothing
+const SEARCH_STOP = new Set(["full", "art", "fullart", "alt", "illustration", "special", "secret", "rainbow", "hyper", "holo", "reverse", "foil", "textured", "sir", "ir", "promo"]);
+const DESC_RARITY = { full: ["illustration", "ultra", "full"], art: ["illustration", "ultra", "full"], fullart: ["illustration", "ultra", "full"], alt: ["illustration"], illustration: ["illustration"], special: ["special"], sir: ["special illustration"], ir: ["illustration"], secret: ["secret", "hyper"], rainbow: ["rainbow", "hyper"], hyper: ["hyper"], holo: ["holo"], reverse: ["reverse"], foil: ["holo"], textured: ["special illustration"], promo: ["promo"] };
+const buildQuery = (q) => {
+  const sets = cachedSets();
+  let tokens = q.replace(/[^\w\s-]/g, " ").trim().split(/\s+/).filter(Boolean);
+  // a set name in the query becomes a set filter ("ampharos chaos rising")
+  let setFilter = null;
+  if (sets?.length) {
+    const lower = tokens.map((t) => t.toLowerCase());
+    outer:
+    for (let len = Math.min(4, tokens.length); len >= 1; len--) {
+      for (let i = 0; i + len <= tokens.length; i++) {
+        const phrase = lower.slice(i, i + len).join(" ");
+        const exact = sets.find((s) => s.toLowerCase() === phrase);
+        const partial = len >= 2 ? sets.filter((s) => s.toLowerCase().includes(phrase)) : [];
+        const hit = exact || (partial.length === 1 ? partial[0] : null);
+        if (hit) { setFilter = hit; tokens = tokens.filter((_, k) => k < i || k >= i + len); break outer; }
+      }
+    }
+  }
+  const descriptors = [...new Set(tokens.filter((t) => SEARCH_STOP.has(t.toLowerCase())).map((t) => t.toLowerCase()))];
+  const nameTokens = tokens.filter((t) => !SEARCH_STOP.has(t.toLowerCase()));
+  const parts = nameTokens.map((t) => `name:*${t}*`);
+  if (setFilter) parts.push(`set.name:"${setFilter}"`);
+  return { terms: parts.join(" ") || `name:*${q.trim()}*`, descriptors, first: (nameTokens[0] || "").toLowerCase() };
 };
 const qcacheRead = () => { try { return JSON.parse(localStorage.getItem(QCACHE_KEY)) || {}; } catch { return {}; } };
 const qcacheGet = (terms) => { const c = qcacheRead()[terms]; return c && Date.now() - c.t < QCACHE_TTL ? c.r : null; };
@@ -572,8 +597,8 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
   const run = async (q, attempt = 0) => {
     setError(false); setPending(false); setLoading(true); setOpen(true);
     try {
-      const terms = qTerms(q);
-      const first = (q.replace(/[^\w\s-]/g, " ").trim().split(/\s+/)[0] || "").toLowerCase();
+      const { terms, descriptors, first } = buildQuery(q);
+      const want = [...new Set(descriptors.flatMap((d) => DESC_RARITY[d] || []))];
       const r = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(terms)}&pageSize=24`, PTCG_OPTS);
       if (!r.ok) throw new Error(String(r.status));
       const data = await r.json();
@@ -581,6 +606,11 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
         const av = a.name.toLowerCase().startsWith(first) ? 0 : 1;
         const bv = b.name.toLowerCase().startsWith(first) ? 0 : 1;
         if (av !== bv) return av - bv;
+        if (want.length) {
+          const ad = want.some((w) => (a.rarity || "").toLowerCase().includes(w)) ? 0 : 1;
+          const bd = want.some((w) => (b.rarity || "").toLowerCase().includes(w)) ? 0 : 1;
+          if (ad !== bd) return ad - bd;
+        }
         return (cardPrice(b) || 0) - (cardPrice(a) || 0);
       }).slice(0, 14).map(slimCard);
       qcacheSet(terms, list);
@@ -596,7 +626,7 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
     if (skip.current) { skip.current = false; setPending(false); return; }
     const q = value.trim();
     if (q.length < 2) { setResults([]); setOpen(false); setPending(false); setError(false); return; }
-    const cached = qcacheGet(qTerms(q));
+    const cached = qcacheGet(buildQuery(q).terms);
     if (cached) { setResults(cached); setError(false); setPending(false); setLoading(false); setOpen(true); return; }
     setPending(true);
     timer.current = setTimeout(() => run(q), 3000);
