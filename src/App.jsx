@@ -197,11 +197,35 @@ export default function App() {
   const [sync, setSync] = useState(() => (syncToken() ? "checking" : "off"));
   const saving = useRef(false);
   const pushTimer = useRef(null);
+  const pendingPush = useRef(null);
+  const remoteApply = useRef(false); // state change came FROM the cloud — must not be re-stamped or re-pushed
 
   const adoptRemote = useCallback((remote) => {
     setLocalStamp(remote.updatedAt);
+    remoteApply.current = true;
     setState(migrate(JSON.parse(remote.data)));
   }, []);
+
+  const flushPush = useCallback(async (keepalive = false) => {
+    const p = pendingPush.current;
+    if (!p || !syncToken()) return;
+    pendingPush.current = null;
+    clearTimeout(pushTimer.current);
+    try {
+      const r = await fetch(SYNC_URL, {
+        method: "PUT",
+        headers: { "x-sync-token": syncToken(), "content-type": "application/json" },
+        body: JSON.stringify({ updatedAt: p.ts, data: p.data }),
+        keepalive, // lets the request outlive the page when iOS backgrounds us
+      });
+      if (r.status === 409) { const remote = await syncFetch("GET"); if (remote) adoptRemote(remote); setSync("on"); return; }
+      if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; }
+      setSync("on");
+    } catch (e) {
+      if (!pendingPush.current) pendingPush.current = p; // keep it queued — retried on next edit or focus change
+      setSync(e.status === 401 ? "badtoken" : "error");
+    }
+  }, [adoptRemote]);
 
   useEffect(() => { (async () => {
     let local = null;
@@ -210,41 +234,56 @@ export default function App() {
     try {
       const remote = await syncFetch("GET");
       if (remote && remote.updatedAt > localStamp()) adoptRemote(remote);
-      else setState(local || seed());
+      else {
+        const cur = local || seed();
+        remoteApply.current = true; // loading isn't editing — don't re-stamp
+        setState(cur);
+        const ts = localStamp() || Date.now();
+        if (!remote || ts > remote.updatedAt) {
+          // cloud is behind us (a push never made it out) — heal it, same stamp
+          setLocalStamp(ts);
+          await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(cur) });
+        }
+      }
       setSync("on");
     } catch (e) {
-      setState(local || seed());
+      setState((s) => s || local || seed());
       setSync(e.status === 401 ? "badtoken" : "error");
     }
   })(); }, [adoptRemote]);
 
   useEffect(() => {
     if (!state || saving.current) return;
+    if (remoteApply.current) {
+      // cloud-sourced state: cache it locally but never push it back
+      remoteApply.current = false;
+      storage.set(KEY, JSON.stringify(state)).catch(() => {});
+      return;
+    }
     saving.current = true;
-    const ts = Date.now();
+    const ts = Math.max(Date.now(), localStamp() + 1); // monotonic across device clock skew
     setLocalStamp(ts);
     storage.set(KEY, JSON.stringify(state)).catch(() => {}).finally(() => { saving.current = false; });
     if (!syncToken()) return;
+    pendingPush.current = { ts, data: JSON.stringify(state) };
     clearTimeout(pushTimer.current);
-    pushTimer.current = setTimeout(async () => {
-      try { await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(state) }); setSync("on"); }
-      catch (e) {
-        if (e.status === 409) {
-          // another device wrote newer data — adopt it
-          try { const remote = await syncFetch("GET"); if (remote) adoptRemote(remote); setSync("on"); } catch { setSync("error"); }
-        } else setSync(e.status === 401 ? "badtoken" : "error");
-      }
-    }, 1200);
-  }, [state, adoptRemote]);
+    pushTimer.current = setTimeout(() => flushPush(), 1200);
+  }, [state, flushPush]);
 
   useEffect(() => {
-    const onVis = async () => {
-      if (document.visibilityState !== "visible" || !syncToken()) return;
-      try { const remote = await syncFetch("GET"); if (remote && remote.updatedAt > localStamp()) adoptRemote(remote); setSync("on"); } catch {}
+    const onVis = () => {
+      if (!syncToken()) return;
+      if (document.visibilityState === "hidden") { flushPush(true); return; } // iOS may kill us — push NOW
+      if (pendingPush.current) { flushPush(); return; }
+      (async () => {
+        try { const remote = await syncFetch("GET"); if (remote && remote.updatedAt > localStamp()) adoptRemote(remote); setSync("on"); } catch {}
+      })();
     };
+    const onHide = () => flushPush(true);
     document.addEventListener("visibilitychange", onVis);
-    return () => document.removeEventListener("visibilitychange", onVis);
-  }, [adoptRemote]);
+    window.addEventListener("pagehide", onHide);
+    return () => { document.removeEventListener("visibilitychange", onVis); window.removeEventListener("pagehide", onHide); };
+  }, [adoptRemote, flushPush]);
 
   const connectSync = useCallback(async (token) => {
     setSyncTokenLS(token.trim());
@@ -252,7 +291,7 @@ export default function App() {
     try {
       const remote = await syncFetch("GET");
       if (remote && remote.updatedAt > localStamp()) adoptRemote(remote);
-      else if (state) { const ts = Date.now(); setLocalStamp(ts); await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(state) }); }
+      else if (state) { const ts = Math.max(Date.now(), localStamp() + 1); setLocalStamp(ts); await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(state) }); }
       setSync("on");
     } catch (e) { setSync(e.status === 401 ? "badtoken" : "error"); }
   }, [state, adoptRemote]);
