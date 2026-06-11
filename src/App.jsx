@@ -783,8 +783,10 @@ function SaleForm({ initial, inventory, onSave, onCancel }) {
     : { item: "", channel: "TCGplayer", price: "", fees: "", shipping: "", consign: "", date: today(), cards: [] });
   const [tname, setTname] = useState("");
   const [tbasis, setTbasis] = useState("");
+  const [tmeta, setTmeta] = useState(null); // set/number from a picked search result
   const addInv = (id) => { const c = kept.find((x) => x.id === id); if (!c) return; setF((s) => ({ ...s, cards: [...s.cards, { id: uid(), invId: c.id, name: c.name, set: c.set, number: c.number, basis: invBasis(c) }] })); };
-  const addTyped = () => { if (!tname) return; setF((s) => ({ ...s, cards: [...s.cards, { id: uid(), name: tname, basis: Number(tbasis) || 0 }] })); setTname(""); setTbasis(""); };
+  const pickTyped = (c) => { setTname(c.name); setTmeta({ set: c.set?.name || "", number: c.number || "" }); };
+  const addTyped = () => { if (!tname) return; setF((s) => ({ ...s, cards: [...s.cards, { id: uid(), name: tname, ...(tmeta || {}), basis: Number(tbasis) || 0 }] })); setTname(""); setTbasis(""); setTmeta(null); };
   const rmCard = (cid) => setF((s) => ({ ...s, cards: s.cards.filter((c) => c.id !== cid) }));
   const net = (Number(f.price) || 0) - (Number(f.fees) || 0) - (Number(f.shipping) || 0) - (Number(f.consign) || 0);
   const basis = f.cards.reduce((a, c) => a + (Number(c.basis) || 0), 0);
@@ -802,7 +804,7 @@ function SaleForm({ initial, inventory, onSave, onCancel }) {
       </Field>
       {availInv.length > 0 && <Field label="Add a card you kept"><select className="cl-in" value="" onChange={(e) => { addInv(e.target.value); }}><option value="">\u2014 choose from inventory \u2014</option>{availInv.map((c) => <option key={c.id} value={c.id}>{c.name}{c.number ? " " + c.number : ""} \u00b7 basis {fmt(invBasis(c))}</option>)}</select></Field>}
       <div className="cl-typedadd">
-        <input className="cl-in" placeholder="\u2026or type a card name" value={tname} onChange={(e) => setTname(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addTyped()} />
+        <CardAutocomplete value={tname} onChange={(v) => { setTname(v); setTmeta(null); }} onSelect={pickTyped} placeholder="\u2026or search a card name" />
         <div className="cl-money-in cl-basisbox"><span>$</span><input className="cl-in bare" inputMode="decimal" placeholder="basis" value={tbasis} onChange={(e) => setTbasis(e.target.value.replace(/[^0-9.]/g, ""))} /></div>
         <button className="cl-add-card" onClick={addTyped}><Plus size={15} /></button>
       </div>
@@ -1060,7 +1062,7 @@ function Fonts() {
     .cl-chip-x{background:none;border:none;color:var(--mut);cursor:pointer;display:flex;padding:0;}
     .cl-chip-x:hover{color:var(--neg);}
     .cl-typedadd{display:flex;gap:6px;align-items:stretch;}
-    .cl-typedadd>.cl-in{flex:1;}
+    .cl-typedadd>.cl-in,.cl-typedadd>.cl-ac{flex:1;}
     .cl-basisbox{max-width:110px;}
     .cl-add-card{background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:9px;width:44px;display:grid;place-items:center;cursor:pointer;flex:none;}
     .cl-reset{margin-top:6px;display:flex;justify-content:center;}
