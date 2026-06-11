@@ -279,6 +279,14 @@ const fmt = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-US"
 const ripValue = (r) => (r.hits || []).reduce((s, h) => s + (Number(h.value) || 0), 0);
 const ripCostOf = (r, buys) => (r.buyId ? (Number((buys || []).find((b) => b.id === r.buyId)?.cost) || 0) : (Number(r.cost) || 0));
 const ripPL = (r, buys) => ripValue(r) - ripCostOf(r, buys);
+// a logged hit is a card you now hold — mirror it into inventory as a rip
+// pull. Basis stays 0 because the rip already carries the cost.
+function addHitToState(s, ripId, hit) {
+  const h = { id: uid(), ...hit };
+  const rip = s.rips.find((r) => r.id === ripId);
+  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", grade: "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, value: Number(h.value) || 0, date: rip?.date || today() };
+  return { rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r)), inventory: [inv, ...(s.inventory || [])] };
+}
 const buyLineSet = (b) => { const s = [...new Set((b?.lines || []).map((l) => l.set).filter(Boolean))]; return s.length === 1 ? s[0] : ""; };
 // which set a rip belongs to: explicit field, else the linked buy's lines,
 // else a set name found in the product text, else the majority set of the hits
@@ -573,14 +581,7 @@ function Rips({ state, patch }) {
     const hitIds = new Set((s.rips.find((r) => r.id === id)?.hits || []).map((h) => h.id));
     return { rips: s.rips.filter((r) => r.id !== id), inventory: (s.inventory || []).filter((c) => !(hitIds.has(c.hitId) && c.status !== "Sold")) };
   });
-  // a logged hit is a card you now hold — mirror it into inventory as a rip
-  // pull. Basis stays 0 because the rip already carries the cost.
-  const addHit = (ripId, hit) => patch((s) => {
-    const h = { id: uid(), ...hit };
-    const rip = s.rips.find((r) => r.id === ripId);
-    const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", grade: "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, value: Number(h.value) || 0, date: rip?.date || today() };
-    return { rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r)), inventory: [inv, ...(s.inventory || [])] };
-  });
+  const addHit = (ripId, hit) => patch((s) => addHitToState(s, ripId, hit));
   const delHit = (ripId, hitId) => patch((s) => ({
     rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: r.hits.filter((h) => h.id !== hitId) } : r)),
     inventory: (s.inventory || []).filter((c) => !(c.hitId === hitId && c.status !== "Sold")),
@@ -644,6 +645,7 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
   const [error, setError] = useState(false);
   const timer = useRef();
   const skip = useRef(false);
+  const fillSeq = useRef(0);
 
   const run = async (q, attempt = 0) => {
     setError(false); setPending(false); setLoading(true); setOpen(true);
@@ -679,7 +681,16 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
     const q = value.trim();
     if (q.length < 2) { setResults([]); setOpen(false); setPending(false); setError(false); return; }
     const cached = qcacheGet(buildQuery(q).terms);
-    if (cached) { setResults(cached); setError(false); setPending(false); setLoading(false); setOpen(true); return; }
+    if (cached) {
+      setResults(cached); setError(false); setPending(false); setLoading(false); setOpen(true);
+      const seq = ++fillSeq.current;
+      fillMissingPrices(cached).then((filled) => {
+        if (seq !== fillSeq.current || !filled.some((c, i) => c !== cached[i])) return;
+        qcacheSet(buildQuery(q).terms, filled);
+        setResults(filled);
+      });
+      return;
+    }
     setPending(true);
     timer.current = setTimeout(() => run(q), 3000);
     return () => clearTimeout(timer.current);
@@ -1002,10 +1013,13 @@ function Lookup({ state, patch }) {
     if (!q.trim()) return;
     setLoading(true); setErr(""); setRes([]);
     try {
-      const url = `https://api.pokemontcg.io/v2/cards?q=name:"${encodeURIComponent(q.trim())}"&pageSize=18&orderBy=-set.releaseDate`;
+      const { terms } = buildQuery(q.trim());
+      const url = `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(terms)}&pageSize=18&orderBy=-set.releaseDate`;
       const r = await fetch(url, PTCG_OPTS); if (!r.ok) throw new Error();
-      const data = await r.json(); setRes(data.data || []);
-      if (!data.data?.length) setErr("No cards matched. Try just the Pokémon's name.");
+      const data = await r.json();
+      const filled = await fillMissingPrices(data.data || []);
+      setRes(filled);
+      if (!filled.length) setErr("No cards matched. Try just the Pokémon's name.");
     } catch { setErr("Couldn't reach the price API. Check your connection and try again."); }
     finally { setLoading(false); }
   };
@@ -1013,7 +1027,7 @@ function Lookup({ state, patch }) {
 
   const asBuy = (c) => { patch((s) => ({ buys: [{ id: uid(), item: `${c.name} ${c.number || ""}`.trim(), category: "Single", source: "Other", cost: priceOf(c) || 0, date: today() }, ...s.buys] })); flash(c.id, "Added to Buys"); };
   const asKeep = (c) => { patch((s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, grade: "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, value: priceOf(c) || 0, date: today() }, ...(s.inventory || [])] })); flash(c.id, "Kept in inventory"); };
-  const asHit = (c) => { const ripId = ripFor[c.id] || state.rips[0]?.id; if (!ripId) { flash(c.id, "Make a rip first"); return; } patch((s) => ({ rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), { id: uid(), name: c.name, set: c.set?.name, number: c.number, value: priceOf(c) || 0 }] } : r)) })); flash(c.id, "Added as hit"); };
+  const asHit = (c) => { const ripId = ripFor[c.id] || state.rips[0]?.id; if (!ripId) { flash(c.id, "Make a rip first"); return; } patch((s) => addHitToState(s, ripId, { name: c.name, set: c.set?.name, number: c.number, value: priceOf(c) || 0 })); flash(c.id, "Added as hit"); };
 
   return (
     <div className="cl-stack">
