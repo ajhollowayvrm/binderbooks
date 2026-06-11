@@ -15,6 +15,28 @@ const storage = {
   set: async (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* quota / private mode */ } return { key: k, value: v }; },
 };
 
+/* cloud sync: API Gateway -> Lambda -> DynamoDB (see aws/index.mjs).
+   The URL is public but useless without the secret token, which lives
+   only in localStorage after you paste it once per device. */
+const SYNC_URL = "https://j18dixq7ei.execute-api.us-west-2.amazonaws.com/";
+const TOKEN_KEY = "cardledger:syncToken";
+const STAMP_KEY = "cardledger:updatedAt";
+const syncToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; } };
+const setSyncTokenLS = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} };
+const localStamp = () => { try { return Number(localStorage.getItem(STAMP_KEY)) || 0; } catch { return 0; } };
+const setLocalStamp = (t) => { try { localStorage.setItem(STAMP_KEY, String(t)); } catch {} };
+const syncFetch = async (method, body) => {
+  const r = await fetch(SYNC_URL, {
+    method,
+    headers: { "x-sync-token": syncToken(), ...(body ? { "content-type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (r.status === 404) return null;
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
+  return j;
+};
+
 /* ------------------------------------------------------------------ */
 const KEY = "cardledger:v1";
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -143,18 +165,69 @@ const cardPrice = (c) => { const p = c.tcgplayer?.prices; if (!p) return null; c
 export default function App() {
   const [state, setState] = useState(null);
   const [tab, setTab] = useState("dash");
+  const [sync, setSync] = useState(() => (syncToken() ? "checking" : "off"));
   const saving = useRef(false);
+  const pushTimer = useRef(null);
+
+  const adoptRemote = useCallback((remote) => {
+    setLocalStamp(remote.updatedAt);
+    setState(migrate(JSON.parse(remote.data)));
+  }, []);
 
   useEffect(() => { (async () => {
-    try { const r = await storage.get(KEY); setState(r && r.value ? migrate(JSON.parse(r.value)) : seed()); }
-    catch { setState(seed()); }
-  })(); }, []);
+    let local = null;
+    try { const r = await storage.get(KEY); if (r && r.value) local = migrate(JSON.parse(r.value)); } catch {}
+    if (!syncToken()) { setState(local || seed()); return; }
+    try {
+      const remote = await syncFetch("GET");
+      if (remote && remote.updatedAt > localStamp()) adoptRemote(remote);
+      else setState(local || seed());
+      setSync("on");
+    } catch (e) {
+      setState(local || seed());
+      setSync(e.status === 401 ? "badtoken" : "error");
+    }
+  })(); }, [adoptRemote]);
 
   useEffect(() => {
     if (!state || saving.current) return;
     saving.current = true;
+    const ts = Date.now();
+    setLocalStamp(ts);
     storage.set(KEY, JSON.stringify(state)).catch(() => {}).finally(() => { saving.current = false; });
-  }, [state]);
+    if (!syncToken()) return;
+    clearTimeout(pushTimer.current);
+    pushTimer.current = setTimeout(async () => {
+      try { await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(state) }); setSync("on"); }
+      catch (e) {
+        if (e.status === 409) {
+          // another device wrote newer data — adopt it
+          try { const remote = await syncFetch("GET"); if (remote) adoptRemote(remote); setSync("on"); } catch { setSync("error"); }
+        } else setSync(e.status === 401 ? "badtoken" : "error");
+      }
+    }, 1200);
+  }, [state, adoptRemote]);
+
+  useEffect(() => {
+    const onVis = async () => {
+      if (document.visibilityState !== "visible" || !syncToken()) return;
+      try { const remote = await syncFetch("GET"); if (remote && remote.updatedAt > localStamp()) adoptRemote(remote); setSync("on"); } catch {}
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [adoptRemote]);
+
+  const connectSync = useCallback(async (token) => {
+    setSyncTokenLS(token.trim());
+    setSync("checking");
+    try {
+      const remote = await syncFetch("GET");
+      if (remote && remote.updatedAt > localStamp()) adoptRemote(remote);
+      else if (state) { const ts = Date.now(); setLocalStamp(ts); await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(state) }); }
+      setSync("on");
+    } catch (e) { setSync(e.status === 401 ? "badtoken" : "error"); }
+  }, [state, adoptRemote]);
+  const disconnectSync = useCallback(() => { setSyncTokenLS(""); setSync("off"); }, []);
 
   const patch = useCallback((fn) => setState((s) => ({ ...s, ...fn(s) })), []);
   const reset = useCallback(() => { const fresh = seed(); storage.set(KEY, JSON.stringify(fresh)).catch(() => {}); setState(fresh); }, []);
@@ -177,7 +250,7 @@ export default function App() {
         {TABS.map(([k, label, Icon]) => (<button key={k} className={"cl-tab" + (tab === k ? " on" : "")} onClick={() => setTab(k)}><Icon size={15} /> <span>{label}</span></button>))}
       </nav>
       <main className="cl-main">
-        {tab === "dash" && <Dashboard state={state} go={setTab} reset={reset} />}
+        {tab === "dash" && <Dashboard state={state} go={setTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} />}
         {tab === "rips" && <Rips state={state} patch={patch} />}
         {tab === "buys" && <Buys state={state} patch={patch} />}
         {tab === "sales" && <Sales state={state} patch={patch} />}
@@ -189,7 +262,7 @@ export default function App() {
 }
 
 /* ================================================================== */
-function Dashboard({ state, go, reset }) {
+function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
   const [confirmReset, setConfirmReset] = useState(false);
   const buyCost = state.buys.reduce((s, b) => s + (Number(b.cost) || 0), 0);
   const ripExtra = state.rips.filter((r) => !r.buyId).reduce((s, r) => s + (Number(r.cost) || 0), 0);
@@ -233,11 +306,35 @@ function Dashboard({ state, go, reset }) {
               <div key={r.id} className="cl-row"><div className="cl-row-main"><div className="cl-row-title">{r.product || "Rip"}</div><div className="cl-row-meta">{(r.hits || []).length} hits · cost {fmt(ripCostOf(r, state.buys))}</div></div><div className={"cl-money " + (ripPL(r, state.buys) >= 0 ? "pos" : "neg")}>{fmt(ripPL(r, state.buys))}</div></div>
             ))}</div>}
       </Panel>
+      <Panel title="Cloud sync"><SyncPanel sync={sync} connect={connectSync} disconnect={disconnectSync} /></Panel>
       <div className="cl-reset">
         {!confirmReset
           ? <button className="cl-reset-btn" onClick={() => setConfirmReset(true)}>Reset all data</button>
           : <div className="cl-reset-confirm"><span>Wipes everything and reloads the starter data.</span><div className="cl-reset-actions"><button className="cl-cancel" onClick={() => setConfirmReset(false)}>Cancel</button><button className="cl-reset-go" onClick={() => { reset(); setConfirmReset(false); }}>Reset</button></div></div>}
       </div>
+    </div>
+  );
+}
+
+function SyncPanel({ sync, connect, disconnect }) {
+  const [tok, setTok] = useState("");
+  const label = {
+    off: "Not connected — paste your sync token to back up this ledger",
+    checking: "Connecting…",
+    on: "Synced — changes back up to your AWS account",
+    error: "Sync hiccup — working locally, will retry on your next change",
+    badtoken: "Token rejected — paste it again",
+  }[sync];
+  return (
+    <div className="cl-sync">
+      <div className="cl-sync-status"><span className={"cl-sync-dot " + sync} />{label}</div>
+      {(sync === "off" || sync === "badtoken") && (
+        <div className="cl-sync-join">
+          <input className="cl-in" type="password" placeholder="Sync token" value={tok} onChange={(e) => setTok(e.target.value)} />
+          <button className="cl-sync-connect" disabled={!tok.trim()} onClick={() => connect(tok)}>Connect</button>
+        </div>
+      )}
+      {(sync === "on" || sync === "error") && <button className="cl-link cl-sync-off" onClick={disconnect}>Disconnect this device</button>}
     </div>
   );
 }
@@ -764,6 +861,17 @@ function Fonts() {
     .cl-reset-actions{display:flex;gap:8px;}
     .cl-reset-actions .cl-cancel{flex:1;}
     .cl-reset-go{flex:1;background:#3a2030;border:1px solid var(--neg);color:var(--neg);border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-family:'Space Grotesk';font-weight:600;}
+    .cl-sync{display:flex;flex-direction:column;gap:10px;}
+    .cl-sync-status{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--mut);}
+    .cl-sync-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--mut);}
+    .cl-sync-dot.on{background:var(--pos);box-shadow:0 0 8px rgba(63,214,140,.55);}
+    .cl-sync-dot.error,.cl-sync-dot.badtoken{background:var(--neg);}
+    .cl-sync-dot.checking{background:var(--out);}
+    .cl-sync-join{display:flex;gap:6px;}
+    .cl-sync-join .cl-in{flex:1;}
+    .cl-sync-connect{background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:9px;padding:0 16px;cursor:pointer;font-family:'Inter';font-size:13px;flex:none;}
+    .cl-sync-connect:disabled{opacity:.5;cursor:default;}
+    .cl-sync-off{align-self:flex-start;padding:0;}
     .cl-ac{position:relative;}
     .cl-ac-pop{position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:4px;background:var(--surf);border:1px solid var(--line);border-radius:10px;max-height:280px;overflow-y:auto;box-shadow:0 14px 34px rgba(0,0,0,.55);}
     .cl-ac-loading{padding:12px;text-align:center;color:var(--mut);font-size:12px;}

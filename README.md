@@ -5,7 +5,13 @@ A Pokémon card buying / selling / ripping P&L ledger. Tracks purchases, rips
 graded-card inventory with a lifecycle status, and a debounced fuzzy card-search
 that pulls live TCGplayer market prices from the free pokemontcg.io API.
 
-Data is saved in your browser's **localStorage** (per device/browser).
+Data is saved in your browser's **localStorage** and synced to a private AWS
+backend (DynamoDB behind a Lambda + API Gateway — see `aws/index.mjs`), so the
+ledger persists across devices. Paste the sync token into the **Cloud sync**
+panel on the Overview tab once per device; the token lives in `.sync-token`
+locally (never committed) and as the `SYNC_TOKEN` env var on the
+`binderbooks-sync` Lambda (us-west-2). Conflicts resolve last-write-wins; the
+app re-pulls whenever it regains focus.
 
 **Live site:** https://ajhollowayvrm.github.io/binderbooks/
 
