@@ -111,6 +111,44 @@ const slimCard = (c) => ({
   ...(c.tcgplayer ? { tcgplayer: { prices: c.tcgplayer.prices } } : {}),
 });
 
+/* fallback prices: pokemontcg.io has no price data for sets newer than
+   Nov 2025, so cards missing a price get TCGplayer market values from the
+   tcgcsv.com dump, proxied through our Lambda (see aws/index.mjs). */
+const SETPRICE_KEY = "cardledger:setprices:v1";
+const normNum = (s) => String(s).split("/")[0].trim().replace(/^0+(?=\w)/, "").toUpperCase();
+const setPricesGet = (set) => { try { const c = (JSON.parse(localStorage.getItem(SETPRICE_KEY)) || {})[set]; return c && Date.now() - c.t < 24 * 3600 * 1000 ? c.p : null; } catch { return null; } };
+const setPricesPut = (set, p) => {
+  try {
+    const all = JSON.parse(localStorage.getItem(SETPRICE_KEY)) || {};
+    all[set] = { t: Date.now(), p };
+    const keys = Object.keys(all);
+    if (keys.length > 12) keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - 12).forEach((k) => delete all[k]);
+    localStorage.setItem(SETPRICE_KEY, JSON.stringify(all));
+  } catch {}
+};
+async function fillMissingPrices(list) {
+  const missing = list.filter((c) => cardPrice(c) == null && c.set?.name && c.number);
+  if (!missing.length || !syncToken()) return list;
+  const maps = {};
+  await Promise.all([...new Set(missing.map((c) => c.set.name))].map(async (s) => {
+    let m = setPricesGet(s);
+    if (!m) {
+      try {
+        const r = await fetch(`${SYNC_URL}prices?set=${encodeURIComponent(s)}`, { headers: { "x-sync-token": syncToken() } });
+        if (!r.ok) return;
+        m = (await r.json()).prices || {};
+        setPricesPut(s, m);
+      } catch { return; }
+    }
+    maps[s] = m;
+  }));
+  return list.map((c) => {
+    if (cardPrice(c) != null) return c;
+    const v = maps[c.set?.name]?.[normNum(c.number)];
+    return v == null ? c : { ...c, tcgplayer: { prices: { holofoil: { market: v } } } };
+  });
+}
+
 function useSets() {
   const [sets, setSets] = useState(() => {
     try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); if (c && Date.now() - c.t < 7 * 864e5 && c.names?.length) return c.names; } catch {}
@@ -602,7 +640,8 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
       const r = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(terms)}&pageSize=24`, PTCG_OPTS);
       if (!r.ok) throw new Error(String(r.status));
       const data = await r.json();
-      const list = (data.data || []).sort((a, b) => {
+      const filled = await fillMissingPrices((data.data || []).map(slimCard));
+      const list = filled.sort((a, b) => {
         const av = a.name.toLowerCase().startsWith(first) ? 0 : 1;
         const bv = b.name.toLowerCase().startsWith(first) ? 0 : 1;
         if (av !== bv) return av - bv;
@@ -612,7 +651,7 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
           if (ad !== bd) return ad - bd;
         }
         return (cardPrice(b) || 0) - (cardPrice(a) || 0);
-      }).slice(0, 14).map(slimCard);
+      }).slice(0, 14);
       qcacheSet(terms, list);
       setResults(list);
     } catch (e) {

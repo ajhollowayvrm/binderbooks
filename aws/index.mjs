@@ -27,11 +27,63 @@ const authed = (event) => {
   return got.length === want.length && timingSafeEqual(got, want);
 };
 
+/* GET /prices?set=<name> — pokemontcg.io stopped publishing prices for sets
+   after Nov 2025, so this proxies TCGplayer market prices from tcgcsv.com's
+   daily dump (which has no CORS headers, hence the server-side hop) and
+   returns { prices: { cardNumber: market } } for the set. */
+const PRICE_TTL = 6 * 3600 * 1000;
+const priceCache = new Map();
+let groupsCache = null;
+// some CDNs reject UA-less requests from cloud IPs; send a normal browser UA
+const TCGCSV_HEADERS = { "user-agent": "Mozilla/5.0 (BinderBooks price sync; personal use)" };
+const normNum = (s) => String(s).split("/")[0].trim().replace(/^0+(?=\w)/, "").toUpperCase();
+async function setPrices(setName) {
+  const key = setName.toLowerCase();
+  const hit = priceCache.get(key);
+  if (hit && Date.now() - hit.t < PRICE_TTL) return hit.body;
+  if (!groupsCache || Date.now() - groupsCache.t > PRICE_TTL) {
+    const gr = await fetch("https://tcgcsv.com/tcgplayer/3/groups", { headers: TCGCSV_HEADERS });
+    if (!gr.ok) throw new Error(`groups HTTP ${gr.status}`);
+    const g = await gr.json();
+    groupsCache = { t: Date.now(), list: g.results || [] };
+  }
+  const group = groupsCache.list.find((x) => x.name.toLowerCase().endsWith(key))
+    || groupsCache.list.find((x) => x.name.toLowerCase().includes(key));
+  if (!group) return null;
+  const [prods, prices] = await Promise.all([
+    fetch(`https://tcgcsv.com/tcgplayer/3/${group.groupId}/products`, { headers: TCGCSV_HEADERS }).then((r) => { if (!r.ok) throw new Error(`products HTTP ${r.status}`); return r.json(); }),
+    fetch(`https://tcgcsv.com/tcgplayer/3/${group.groupId}/prices`, { headers: TCGCSV_HEADERS }).then((r) => { if (!r.ok) throw new Error(`prices HTTP ${r.status}`); return r.json(); }),
+  ]);
+  const byProd = {};
+  for (const p of prices.results || []) {
+    if (p.marketPrice == null) continue;
+    (byProd[p.productId] ||= {})[p.subTypeName] = p.marketPrice;
+  }
+  const out = {};
+  for (const pr of prods.results || []) {
+    const num = (pr.extendedData || []).find((d) => d.name === "Number"); // absent on sealed products
+    const sub = num && byProd[pr.productId];
+    if (!sub) continue;
+    const val = sub["Normal"] ?? sub["Holofoil"] ?? Object.values(sub)[0];
+    if (val != null) out[normNum(num.value)] = val;
+  }
+  const body = { set: setName, group: group.name, prices: out };
+  priceCache.set(key, { t: Date.now(), body });
+  return body;
+}
+
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method;
   // CORS preflight must get a 2xx; API Gateway injects the CORS headers
   if (method === "OPTIONS") return { statusCode: 204 };
   if (!authed(event)) return res(401, { error: "unauthorized" });
+
+  if (method === "GET" && event.rawPath?.endsWith("/prices")) {
+    const setName = event.queryStringParameters?.set;
+    if (!setName) return res(400, { error: "set required" });
+    try { const body = await setPrices(setName); return body ? res(200, body) : res(404, { error: "set not found" }); }
+    catch (e) { console.error("prices route failed:", e); return res(502, { error: "price source unavailable" }); }
+  }
 
   if (method === "GET") {
     const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: { id: ID } }));
