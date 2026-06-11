@@ -26,7 +26,13 @@ const STAMP_KEY = "cardledger:updatedAt";
 // The fragment never leaves the browser (not sent to servers or logged).
 try {
   const m = location.hash.match(/[#&]sync=([\w-]+)/);
-  if (m) { localStorage.setItem("cardledger:syncToken", m[1]); history.replaceState(null, "", location.pathname + location.search); }
+  if (m) {
+    // flag a token this device didn't have before, so the app can ask which
+    // ledger wins instead of letting timestamps decide silently
+    if (localStorage.getItem("cardledger:syncToken") !== m[1]) sessionStorage.setItem("cardledger:fresh", "1");
+    localStorage.setItem("cardledger:syncToken", m[1]);
+    history.replaceState(null, "", location.pathname + location.search);
+  }
 } catch {}
 const syncToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; } };
 const setSyncTokenLS = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} };
@@ -342,6 +348,8 @@ export default function App() {
   const pushTimer = useRef(null);
   const pendingPush = useRef(null);
   const remoteApply = useRef(false); // state change came FROM the cloud — must not be re-stamped or re-pushed
+  const pendingRemote = useRef(null); // cloud copy held while the user picks a winner
+  const choosing = useRef(false); // while true, nothing pushes or adopts
 
   const adoptRemote = useCallback((remote) => {
     setLocalStamp(remote.updatedAt);
@@ -376,6 +384,18 @@ export default function App() {
     if (!syncToken()) { setState(local || seed()); return; }
     try {
       const remote = await syncFetch("GET", null, localStamp());
+      const freshToken = (() => { try { return sessionStorage.getItem("cardledger:fresh") === "1"; } catch { return false; } })();
+      if (remote && !remote.unchanged && freshToken && localStamp() > 0) {
+        // setup link just installed a token, but this device already has its
+        // own ledger — hold everything and let the user pick the winner
+        pendingRemote.current = remote;
+        choosing.current = true;
+        remoteApply.current = true;
+        setState(local || seed());
+        setSync("choose");
+        return;
+      }
+      try { sessionStorage.removeItem("cardledger:fresh"); } catch {}
       if (remote && !remote.unchanged && remote.updatedAt > localStamp()) adoptRemote(remote);
       else {
         const cur = local || seed();
@@ -407,7 +427,7 @@ export default function App() {
     const ts = Math.max(Date.now(), localStamp() + 1); // monotonic across device clock skew
     setLocalStamp(ts);
     storage.set(KEY, JSON.stringify(state)).catch(() => {}).finally(() => { saving.current = false; });
-    if (!syncToken()) return;
+    if (!syncToken() || choosing.current) return;
     pendingPush.current = { ts, data: JSON.stringify(state) };
     clearTimeout(pushTimer.current);
     pushTimer.current = setTimeout(() => flushPush(), 1200);
@@ -415,7 +435,7 @@ export default function App() {
 
   useEffect(() => {
     const onVis = () => {
-      if (!syncToken()) return;
+      if (!syncToken() || choosing.current) return;
       if (document.visibilityState === "hidden") { flushPush(true); return; } // iOS may kill us — push NOW
       if (pendingPush.current) { flushPush(); return; }
       (async () => {
@@ -433,12 +453,25 @@ export default function App() {
     setSync("checking");
     try {
       const remote = await syncFetch("GET");
-      if (remote && remote.updatedAt > localStamp()) adoptRemote(remote);
+      if (remote && localStamp() > 0) { pendingRemote.current = remote; choosing.current = true; setSync("choose"); return; }
+      if (remote) adoptRemote(remote);
       else if (state) { const ts = Math.max(Date.now(), localStamp() + 1); setLocalStamp(ts); await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(state) }); }
       setSync("on");
     } catch (e) { setSync(e.status === 401 ? "badtoken" : "error"); }
   }, [state, adoptRemote]);
-  const disconnectSync = useCallback(() => { setSyncTokenLS(""); setSync("off"); }, []);
+  const resolveChoice = useCallback(async (useCloud) => {
+    const remote = pendingRemote.current;
+    pendingRemote.current = null;
+    try { sessionStorage.removeItem("cardledger:fresh"); } catch {}
+    setSync("checking");
+    try {
+      if (useCloud && remote) adoptRemote(remote);
+      else if (state) { const ts = Math.max(Date.now(), localStamp() + 1); setLocalStamp(ts); await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(state) }); }
+      choosing.current = false;
+      setSync("on");
+    } catch (e) { choosing.current = false; setSync(e.status === 401 ? "badtoken" : "error"); }
+  }, [state, adoptRemote]);
+  const disconnectSync = useCallback(() => { setSyncTokenLS(""); choosing.current = false; pendingRemote.current = null; setSync("off"); }, []);
 
   const patch = useCallback((fn) => setState((s) => ({ ...s, ...fn(s) })), []);
   const reset = useCallback(() => { const fresh = seed(); storage.set(KEY, JSON.stringify(fresh)).catch(() => {}); setState(fresh); }, []);
@@ -461,7 +494,7 @@ export default function App() {
         {TABS.map(([k, label, Icon]) => (<button key={k} className={"cl-tab" + (tab === k ? " on" : "")} onClick={() => setTab(k)}><Icon size={15} /> <span>{label}</span></button>))}
       </nav>
       <main className="cl-main">
-        {tab === "dash" && <Dashboard state={state} go={setTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} />}
+        {tab === "dash" && <Dashboard state={state} go={setTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} resolveChoice={resolveChoice} />}
         {tab === "rips" && <Rips state={state} patch={patch} />}
         {tab === "buys" && <Buys state={state} patch={patch} />}
         {tab === "sales" && <Sales state={state} patch={patch} />}
@@ -473,7 +506,7 @@ export default function App() {
 }
 
 /* ================================================================== */
-function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
+function Dashboard({ state, go, reset, sync, connectSync, disconnectSync, resolveChoice }) {
   const [confirmReset, setConfirmReset] = useState(false);
   const sets = useSets();
   const buyCost = state.buys.reduce((s, b) => s + (Number(b.cost) || 0), 0);
@@ -532,7 +565,7 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
             ))}</div>}
       </Panel>
       {state.rips.length > 0 && <Panel title="Rip P&L by set"><BarList data={ripBySet} tone="pl" /></Panel>}
-      <Panel title="Cloud sync"><SyncPanel sync={sync} connect={connectSync} disconnect={disconnectSync} /></Panel>
+      <Panel title="Cloud sync"><SyncPanel sync={sync} connect={connectSync} disconnect={disconnectSync} choose={resolveChoice} /></Panel>
       <div className="cl-reset">
         {!confirmReset
           ? <button className="cl-reset-btn" onClick={() => setConfirmReset(true)}>Reset all data</button>
@@ -542,7 +575,7 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
   );
 }
 
-function SyncPanel({ sync, connect, disconnect }) {
+function SyncPanel({ sync, connect, disconnect, choose }) {
   const [tok, setTok] = useState("");
   const [copied, setCopied] = useState(false);
   const shareLink = async () => {
@@ -556,6 +589,7 @@ function SyncPanel({ sync, connect, disconnect }) {
     on: "Synced — changes back up to your AWS account",
     error: "Sync hiccup — working locally, will retry on your next change",
     badtoken: "Token rejected — paste it again",
+    choose: "The cloud has a ledger and so does this device — pick which one wins",
   }[sync];
   return (
     <div className="cl-sync">
@@ -564,6 +598,12 @@ function SyncPanel({ sync, connect, disconnect }) {
         <div className="cl-sync-join">
           <input className="cl-in" type="password" placeholder="Sync token" value={tok} onChange={(e) => setTok(e.target.value)} />
           <button className="cl-sync-connect" disabled={!tok.trim()} onClick={() => connect(tok)}>Connect</button>
+        </div>
+      )}
+      {sync === "choose" && (
+        <div className="cl-sync-choose">
+          <button className="cl-sync-connect" onClick={() => choose(true)}>Use cloud copy — replace this device</button>
+          <button className="cl-sync-connect" onClick={() => choose(false)}>Upload this device's copy — replace cloud</button>
         </div>
       )}
       {sync === "on" && <button className="cl-link cl-sync-off" onClick={shareLink}>{copied ? "Link copied!" : "Send setup link to another device"}</button>}
@@ -1216,6 +1256,8 @@ function Fonts() {
     .cl-sync-connect{background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:9px;padding:0 16px;cursor:pointer;font-family:'Inter';font-size:13px;flex:none;}
     .cl-sync-connect:disabled{opacity:.5;cursor:default;}
     .cl-sync-off{align-self:flex-start;padding:0;}
+    .cl-sync-choose{display:flex;flex-direction:column;gap:8px;}
+    .cl-sync-choose .cl-sync-connect{padding:10px 14px;text-align:left;}
     .cl-lineitem{border:1px solid var(--line);border-radius:11px;padding:9px;display:flex;flex-direction:column;gap:8px;background:var(--surf);}
     .cl-line-r1{display:grid;grid-template-columns:64px 1fr;gap:8px;}
     .cl-line-r2{display:grid;grid-template-columns:1fr 112px 30px;gap:8px;align-items:center;}
