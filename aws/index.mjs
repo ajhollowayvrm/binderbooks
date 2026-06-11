@@ -36,6 +36,8 @@ export const handler = async (event) => {
   if (method === "GET") {
     const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: { id: ID } }));
     if (!r.Item) return res(404, { error: "empty" });
+    // conditional pull: client sends the stamp it has; identical -> tiny 204 instead of the blob
+    if (Number(event.queryStringParameters?.since) === r.Item.updatedAt) return { statusCode: 204 };
     return res(200, { updatedAt: r.Item.updatedAt, data: r.Item.data });
   }
 

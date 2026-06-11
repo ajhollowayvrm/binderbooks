@@ -25,13 +25,14 @@ const syncToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ""; } 
 const setSyncTokenLS = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} };
 const localStamp = () => { try { return Number(localStorage.getItem(STAMP_KEY)) || 0; } catch { return 0; } };
 const setLocalStamp = (t) => { try { localStorage.setItem(STAMP_KEY, String(t)); } catch {} };
-const syncFetch = async (method, body) => {
-  const r = await fetch(SYNC_URL, {
+const syncFetch = async (method, body, since) => {
+  const r = await fetch(since ? `${SYNC_URL}?since=${since}` : SYNC_URL, {
     method,
     headers: { "x-sync-token": syncToken(), ...(body ? { "content-type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (r.status === 404) return null;
+  if (r.status === 204) return { unchanged: true }; // server: you already have the latest
   const j = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
   return j;
@@ -54,6 +55,30 @@ async function fetchSets() {
   try { localStorage.setItem(SETS_KEY, JSON.stringify({ t: Date.now(), names })); } catch {}
   return names;
 }
+/* card-search cache: query -> slimmed results, 24h TTL, ~30 most recent
+   queries kept. Repeat searches are instant and rate-limit failures drop. */
+const QCACHE_KEY = "cardledger:qcache:v1";
+const QCACHE_TTL = 24 * 3600 * 1000;
+const qTerms = (q) => {
+  const tokens = q.replace(/[^\w\s-]/g, " ").trim().split(/\s+/).filter(Boolean);
+  return tokens.map((t) => `name:*${t}*`).join(" ") || `name:*${q}*`;
+};
+const qcacheRead = () => { try { return JSON.parse(localStorage.getItem(QCACHE_KEY)) || {}; } catch { return {}; } };
+const qcacheGet = (terms) => { const c = qcacheRead()[terms]; return c && Date.now() - c.t < QCACHE_TTL ? c.r : null; };
+const qcacheSet = (terms, results) => {
+  try {
+    const all = qcacheRead();
+    all[terms] = { t: Date.now(), r: results };
+    Object.keys(all).sort((a, b) => all[b].t - all[a].t).slice(30).forEach((k) => delete all[k]);
+    localStorage.setItem(QCACHE_KEY, JSON.stringify(all));
+  } catch {}
+};
+const slimCard = (c) => ({
+  id: c.id, name: c.name, number: c.number, rarity: c.rarity,
+  set: { name: c.set?.name }, images: { small: c.images?.small },
+  ...(c.tcgplayer ? { tcgplayer: { prices: c.tcgplayer.prices } } : {}),
+});
+
 function useSets() {
   const [sets, setSets] = useState(() => {
     try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); if (c && Date.now() - c.t < 7 * 864e5 && c.names?.length) return c.names; } catch {}
@@ -232,14 +257,14 @@ export default function App() {
     try { const r = await storage.get(KEY); if (r && r.value) local = migrate(JSON.parse(r.value)); } catch {}
     if (!syncToken()) { setState(local || seed()); return; }
     try {
-      const remote = await syncFetch("GET");
-      if (remote && remote.updatedAt > localStamp()) adoptRemote(remote);
+      const remote = await syncFetch("GET", null, localStamp());
+      if (remote && !remote.unchanged && remote.updatedAt > localStamp()) adoptRemote(remote);
       else {
         const cur = local || seed();
         remoteApply.current = true; // loading isn't editing — don't re-stamp
         setState(cur);
         const ts = localStamp() || Date.now();
-        if (!remote || ts > remote.updatedAt) {
+        if (!remote?.unchanged && (!remote || ts > remote.updatedAt)) {
           // cloud is behind us (a push never made it out) — heal it, same stamp
           setLocalStamp(ts);
           await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(cur) });
@@ -276,7 +301,7 @@ export default function App() {
       if (document.visibilityState === "hidden") { flushPush(true); return; } // iOS may kill us — push NOW
       if (pendingPush.current) { flushPush(); return; }
       (async () => {
-        try { const remote = await syncFetch("GET"); if (remote && remote.updatedAt > localStamp()) adoptRemote(remote); setSync("on"); } catch {}
+        try { const remote = await syncFetch("GET", null, localStamp()); if (remote && !remote.unchanged && remote.updatedAt > localStamp()) adoptRemote(remote); setSync("on"); } catch {}
       })();
     };
     const onHide = () => flushPush(true);
@@ -484,10 +509,8 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
   const run = async (q, attempt = 0) => {
     setError(false); setPending(false); setLoading(true); setOpen(true);
     try {
-      const clean = q.replace(/[^\w\s-]/g, " ").trim();
-      const tokens = clean.split(/\s+/).filter(Boolean);
-      const terms = tokens.map((t) => `name:*${t}*`).join(" ") || `name:*${q}*`;
-      const first = (tokens[0] || "").toLowerCase();
+      const terms = qTerms(q);
+      const first = (q.replace(/[^\w\s-]/g, " ").trim().split(/\s+/)[0] || "").toLowerCase();
       const r = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(terms)}&pageSize=24`, PTCG_OPTS);
       if (!r.ok) throw new Error(String(r.status));
       const data = await r.json();
@@ -496,8 +519,9 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
         const bv = b.name.toLowerCase().startsWith(first) ? 0 : 1;
         if (av !== bv) return av - bv;
         return (cardPrice(b) || 0) - (cardPrice(a) || 0);
-      });
-      setResults(list.slice(0, 14));
+      }).slice(0, 14).map(slimCard);
+      qcacheSet(terms, list);
+      setResults(list);
     } catch (e) {
       if (attempt < 1) { await new Promise((res) => setTimeout(res, 700)); return run(q, attempt + 1); }
       setResults([]); setError(true);
@@ -509,6 +533,8 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
     if (skip.current) { skip.current = false; setPending(false); return; }
     const q = value.trim();
     if (q.length < 2) { setResults([]); setOpen(false); setPending(false); setError(false); return; }
+    const cached = qcacheGet(qTerms(q));
+    if (cached) { setResults(cached); setError(false); setPending(false); setLoading(false); setOpen(true); return; }
     setPending(true);
     timer.current = setTimeout(() => run(q), 3000);
     return () => clearTimeout(timer.current);
