@@ -64,7 +64,7 @@ async function fetchSets() {
 }
 /* card-search cache: query -> slimmed results, 24h TTL, ~30 most recent
    queries kept. Repeat searches are instant and rate-limit failures drop. */
-const QCACHE_KEY = "cardledger:qcache:v1";
+const QCACHE_KEY = "cardledger:qcache:v2"; // v2: entries must carry fallback prices
 const QCACHE_TTL = 24 * 3600 * 1000;
 const cachedSets = () => { try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); return c?.names || null; } catch { return null; } };
 // words that describe a variant, not a card name — "ampharos full art" should
