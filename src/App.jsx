@@ -128,13 +128,13 @@ const setPricesPut = (set, p) => {
 };
 async function fillMissingPrices(list) {
   const missing = list.filter((c) => cardPrice(c) == null && c.set?.name && c.number);
-  if (!missing.length || !syncToken()) return list;
+  if (!missing.length) return list;
   const maps = {};
   await Promise.all([...new Set(missing.map((c) => c.set.name))].map(async (s) => {
     let m = setPricesGet(s);
     if (!m) {
       try {
-        const r = await fetch(`${SYNC_URL}prices?set=${encodeURIComponent(s)}`, { headers: { "x-sync-token": syncToken() } });
+        const r = await fetch(`${SYNC_URL}prices?set=${encodeURIComponent(s)}`);
         if (!r.ok) return;
         m = (await r.json()).prices || {};
         setPricesPut(s, m);

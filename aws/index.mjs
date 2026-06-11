@@ -76,14 +76,17 @@ export const handler = async (event) => {
   const method = event.requestContext?.http?.method;
   // CORS preflight must get a 2xx; API Gateway injects the CORS headers
   if (method === "OPTIONS") return { statusCode: 204 };
-  if (!authed(event)) return res(401, { error: "unauthorized" });
 
+  // public market data, deliberately outside the token wall — the app needs
+  // prices even on devices that haven't connected to sync
   if (method === "GET" && event.rawPath?.endsWith("/prices")) {
     const setName = event.queryStringParameters?.set;
     if (!setName) return res(400, { error: "set required" });
     try { const body = await setPrices(setName); return body ? res(200, body) : res(404, { error: "set not found" }); }
     catch (e) { console.error("prices route failed:", e); return res(502, { error: "price source unavailable" }); }
   }
+
+  if (!authed(event)) return res(401, { error: "unauthorized" });
 
   if (method === "GET") {
     const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: { id: ID } }));
