@@ -41,7 +41,36 @@ const syncFetch = async (method, body) => {
 const KEY = "cardledger:v1";
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+/* set list for the structured buy form — live from pokemontcg.io,
+   cached for a week so the dropdown opens instantly */
+const SETS_KEY = "cardledger:sets:v1";
+let setsPromise = null;
+async function fetchSets() {
+  const r = await fetch("https://api.pokemontcg.io/v2/sets?orderBy=-releaseDate&select=name,releaseDate&pageSize=250", PTCG_OPTS);
+  if (!r.ok) throw new Error(String(r.status));
+  const data = await r.json();
+  const names = [...new Set((data.data || []).map((s) => s.name))];
+  if (!names.length) throw new Error("empty");
+  try { localStorage.setItem(SETS_KEY, JSON.stringify({ t: Date.now(), names })); } catch {}
+  return names;
+}
+function useSets() {
+  const [sets, setSets] = useState(() => {
+    try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); if (c && Date.now() - c.t < 7 * 864e5 && c.names?.length) return c.names; } catch {}
+    return null;
+  });
+  useEffect(() => {
+    if (sets) return;
+    if (!setsPromise) setsPromise = fetchSets();
+    let live = true;
+    setsPromise.then((n) => live && setSets(n)).catch(() => { setsPromise = null; if (live) setSets([]); });
+    return () => { live = false; };
+  }, [sets]);
+  return sets; // null = loading, [] = unavailable, [...] = loaded
+}
+
 const SOURCES = ["Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "TCGplayer", "eBay", "PSA", "Other"];
+const PRODUCTS = ["Booster Pack", "Booster Bundle", "Booster Box", "Elite Trainer Box", "Collection Box", "Tin", "Blister", "Single Card", "Supplies", "Other"];
 const INV_SOURCES = ["Rip pull", "Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "eBay", "Other"];
 const CHANNELS = ["TCGplayer", "eBay", "LGS consignment", "In-person", "Other"];
 const BUY_CATS = ["Sealed", "Single", "Lot", "Grading", "Supplies"];
@@ -277,6 +306,12 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
   state.rips.filter((r) => !r.buyId).forEach((r) => { bySource[r.source || "Other"] = (bySource[r.source || "Other"] || 0) + (Number(r.cost) || 0); });
   const byChannel = {};
   state.sales.forEach((s) => { byChannel[s.channel || "Other"] = (byChannel[s.channel || "Other"] || 0) + saleNet(s); });
+  const bySet = {}, byProduct = {};
+  state.buys.forEach((b) => (b.lines || []).forEach((l) => {
+    const c = Number(l.cost) || 0;
+    if (l.set) bySet[l.set] = (bySet[l.set] || 0) + c;
+    if (l.product) byProduct[l.product] = (byProduct[l.product] || 0) + c;
+  }));
   const ripsRanked = [...state.rips].sort((a, b) => ripPL(b, state.buys) - ripPL(a, state.buys));
   const hasFees = state.sales.some((s) => s.fees || s.shipping || s.consign);
 
@@ -299,6 +334,8 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
             </div>}
       </Panel>
       <Panel title="Where the money went" action={<button className="cl-link" onClick={() => go("buys")}>Buys ▸</button>}><BarList data={bySource} tone="out" /></Panel>
+      {Object.keys(bySet).length > 0 && <Panel title="Spend by set"><BarList data={bySet} tone="out" /></Panel>}
+      {Object.keys(byProduct).length > 0 && <Panel title="Spend by product"><BarList data={byProduct} tone="out" /></Panel>}
       <Panel title="Where it came back" action={<button className="cl-link" onClick={() => go("sales")}>Sales ▸</button>}><BarList data={byChannel} tone="in" /></Panel>
       <Panel title="Rip scoreboard" action={<button className="cl-link" onClick={() => go("rips")}>Rips ▸</button>}>
         {ripsRanked.length === 0 ? <Empty>No rips logged. Open a pack on the Rips tab and log your hits.</Empty>
@@ -505,16 +542,69 @@ function Buys({ state, patch }) {
     </div>
   );
 }
+function LineRow({ line, sets, onChange, onRemove, removable }) {
+  // "other" switches the set dropdown to free text — for sets the API
+  // doesn't have yet, or when the API is unavailable
+  const [other, setOther] = useState(() => !!line.set && (sets ? !sets.includes(line.set) : true));
+  return (
+    <div className="cl-lineitem">
+      <div className="cl-line-r1">
+        <input className="cl-in" inputMode="numeric" placeholder="Qty" value={line.qty} onChange={(e) => onChange({ ...line, qty: e.target.value.replace(/[^0-9]/g, "") })} />
+        {other
+          ? <input className="cl-in" placeholder="Set name" value={line.set} onChange={(e) => onChange({ ...line, set: e.target.value })} />
+          : <select className="cl-in" value={line.set} onChange={(e) => { const v = e.target.value; if (v === "__other") { setOther(true); onChange({ ...line, set: "" }); } else onChange({ ...line, set: v }); }}>
+              <option value="" disabled>{sets === null ? "Loading sets…" : "Set…"}</option>
+              {(sets || []).map((s) => <option key={s} value={s}>{s}</option>)}
+              <option value="__other">Other / type it…</option>
+            </select>}
+      </div>
+      <div className={"cl-line-r2" + (removable ? "" : " nox")}>
+        <select className="cl-in" value={line.product} onChange={(e) => onChange({ ...line, product: e.target.value })}>{PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}</select>
+        <MoneyInput value={line.cost} onChange={(v) => onChange({ ...line, cost: v })} />
+        {removable && <button className="cl-x" onClick={onRemove}><X size={13} /></button>}
+      </div>
+    </div>
+  );
+}
 function BuyForm({ initial, onSave, onCancel }) {
+  const sets = useSets();
+  const blank = () => ({ id: uid(), qty: "1", set: "", product: "Booster Pack", cost: "" });
   const [f, setF] = useState(initial
-    ? { item: initial.item, category: initial.category, source: initial.source, cost: String(initial.cost), date: initial.date }
-    : { item: "", category: "Sealed", source: "Gamecraft", cost: "", date: today() });
+    ? { category: initial.category, source: initial.source, date: initial.date, item: initial.item || "", cost: numStr(initial.cost),
+        lines: initial.lines?.length ? initial.lines.map((l) => ({ ...l, qty: String(l.qty || 1), cost: numStr(l.cost) })) : null }
+    : { category: "Sealed", source: "Gamecraft", date: today(), item: "", cost: "", lines: [blank()] });
+  const setLine = (ln) => setF((p) => ({ ...p, lines: p.lines.map((l) => (l.id === ln.id ? ln : l)) }));
+  const total = f.lines ? f.lines.reduce((s, l) => s + (Number(l.cost) || 0), 0) : Number(f.cost) || 0;
+  const label = f.lines
+    ? f.lines.filter((l) => l.set || l.product).map((l) => `${Number(l.qty) || 1}× ${l.set} ${l.product}`.replace(/\s+/g, " ").trim()).join(" · ")
+    : f.item;
+  const valid = f.lines ? f.lines.every((l) => l.set && l.product && l.cost) : !!f.item && !!f.cost;
   return (
     <Form editing={!!initial}>
-      <Field label="Item"><input className="cl-in" placeholder="Prismatic ETB" value={f.item} onChange={(e) => setF({ ...f, item: e.target.value })} /></Field>
+      {f.lines ? (
+        <div className="cl-field">
+          <span>Products</span>
+          <div className="cl-stack sm">
+            {f.lines.map((l) => <LineRow key={l.id} line={l} sets={sets} onChange={setLine} removable={f.lines.length > 1} onRemove={() => setF((p) => ({ ...p, lines: p.lines.filter((x) => x.id !== l.id) }))} />)}
+            <button className="cl-addline" onClick={() => setF((p) => ({ ...p, lines: [...p.lines, blank()] }))}>+ Add another product</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <Field label="Item"><input className="cl-in" placeholder="Prismatic ETB" value={f.item} onChange={(e) => setF({ ...f, item: e.target.value })} /></Field>
+          <button className="cl-addline" onClick={() => setF({ ...f, lines: [blank()] })}>Switch to structured lines (qty · set · product)</button>
+        </>
+      )}
       <div className="cl-grid2"><Field label="Category"><Select opts={BUY_CATS} value={f.category} onChange={(v) => setF({ ...f, category: v })} /></Field><Field label="From"><Select opts={SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field></div>
-      <div className="cl-grid2"><Field label="Cost"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Date"><input className="cl-in" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field></div>
-      <Actions onCancel={onCancel} label={initial ? "Update buy" : "Save buy"} disabled={!f.item || !f.cost} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), ...f, cost: Number(f.cost) || 0 })} />
+      <div className="cl-grid2">
+        {f.lines
+          ? <Field label="Total (sum of lines)"><div className="cl-in cl-total-ro">{fmt(total)}</div></Field>
+          : <Field label="Cost"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field>}
+        <Field label="Date"><input className="cl-in" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
+      </div>
+      <Actions onCancel={onCancel} label={initial ? "Update buy" : "Save buy"} disabled={!valid || !total}
+        onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), item: label, category: f.category, source: f.source, date: f.date, cost: total,
+          ...(f.lines ? { lines: f.lines.map((l) => ({ id: l.id, qty: Number(l.qty) || 1, set: l.set, product: l.product, cost: Number(l.cost) || 0 })) } : {}) })} />
     </Form>
   );
 }
@@ -872,6 +962,13 @@ function Fonts() {
     .cl-sync-connect{background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:9px;padding:0 16px;cursor:pointer;font-family:'Inter';font-size:13px;flex:none;}
     .cl-sync-connect:disabled{opacity:.5;cursor:default;}
     .cl-sync-off{align-self:flex-start;padding:0;}
+    .cl-lineitem{border:1px solid var(--line);border-radius:11px;padding:9px;display:flex;flex-direction:column;gap:8px;background:var(--surf);}
+    .cl-line-r1{display:grid;grid-template-columns:64px 1fr;gap:8px;}
+    .cl-line-r2{display:grid;grid-template-columns:1fr 112px 30px;gap:8px;align-items:center;}
+    .cl-line-r2.nox{grid-template-columns:1fr 112px;}
+    .cl-addline{background:none;border:1px dashed var(--line);color:var(--mut);border-radius:10px;padding:9px;font-size:12.5px;cursor:pointer;font-family:'Inter';}
+    .cl-addline:hover{color:var(--ink);border-color:var(--mut);}
+    .cl-total-ro{display:flex;align-items:center;color:var(--out);font-variant-numeric:tabular-nums;}
     .cl-ac{position:relative;}
     .cl-ac-pop{position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:4px;background:var(--surf);border:1px solid var(--line);border-radius:10px;max-height:280px;overflow-y:auto;box-shadow:0 14px 34px rgba(0,0,0,.55);}
     .cl-ac-loading{padding:12px;text-align:center;color:var(--mut);font-size:12px;}
