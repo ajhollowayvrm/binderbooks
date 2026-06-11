@@ -569,9 +569,22 @@ function Rips({ state, patch }) {
   const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState(null);
   const addRip = (r) => { patch((s) => ({ rips: [{ id: uid(), hits: [], ...r }, ...s.rips], buys: r.buyId ? s.buys.map((b) => (b.id === r.buyId ? { ...b, ripped: true } : b)) : s.buys })); setAdding(false); };
-  const delRip = (id) => patch((s) => ({ rips: s.rips.filter((r) => r.id !== id) }));
-  const addHit = (ripId, hit) => patch((s) => ({ rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), { id: uid(), ...hit }] } : r)) }));
-  const delHit = (ripId, hitId) => patch((s) => ({ rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: r.hits.filter((h) => h.id !== hitId) } : r)) }));
+  const delRip = (id) => patch((s) => {
+    const hitIds = new Set((s.rips.find((r) => r.id === id)?.hits || []).map((h) => h.id));
+    return { rips: s.rips.filter((r) => r.id !== id), inventory: (s.inventory || []).filter((c) => !(hitIds.has(c.hitId) && c.status !== "Sold")) };
+  });
+  // a logged hit is a card you now hold — mirror it into inventory as a rip
+  // pull. Basis stays 0 because the rip already carries the cost.
+  const addHit = (ripId, hit) => patch((s) => {
+    const h = { id: uid(), ...hit };
+    const rip = s.rips.find((r) => r.id === ripId);
+    const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", grade: "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, value: Number(h.value) || 0, date: rip?.date || today() };
+    return { rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r)), inventory: [inv, ...(s.inventory || [])] };
+  });
+  const delHit = (ripId, hitId) => patch((s) => ({
+    rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: r.hits.filter((h) => h.id !== hitId) } : r)),
+    inventory: (s.inventory || []).filter((c) => !(c.hitId === hitId && c.status !== "Sold")),
+  }));
   const sorted = [...state.rips].sort(byDateDesc);
 
   return (
