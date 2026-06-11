@@ -702,7 +702,7 @@ function BuyForm({ initial, onSave, onCancel }) {
   const sets = useSets();
   const blank = () => ({ id: uid(), qty: "1", set: "", product: "Booster Pack", cost: "" });
   const [f, setF] = useState(initial
-    ? { category: initial.category, source: initial.source, date: initial.date, item: initial.item || "", cost: numStr(initial.cost), total: "",
+    ? { category: initial.category, source: initial.source, date: initial.date, item: initial.item || "", cost: numStr(initial.cost), total: numStr(initial.cost),
         lines: initial.lines?.length ? initial.lines.map((l) => ({ ...l, qty: String(l.qty || 1), cost: numStr(l.cost) })) : null }
     : { category: "Sealed", source: "Gamecraft", date: today(), item: "", cost: "", total: "", lines: [blank()] });
   const setLine = (ln) => setF((p) => ({ ...p, lines: p.lines.map((l) => (l.id === ln.id ? ln : l)) }));
