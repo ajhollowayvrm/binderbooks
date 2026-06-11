@@ -229,6 +229,28 @@ const ripSetOf = (r, buys, sets) => {
 };
 const saleNet = (s) => (Number(s.price) || 0) - (Number(s.fees) || 0) - (Number(s.shipping) || 0) - (Number(s.consign) || 0);
 const saleBasis = (s) => (s.cards || []).reduce((a, c) => a + (Number(c.basis) || 0), 0);
+// split one sale's net across sets: explicit card set, else the inventory
+// card it came from, else a set name in the card/order text. Net is weighted
+// by basis when tracked, evenly otherwise.
+const saleSetSplit = (s, inventory, sets) => {
+  const net = saleNet(s);
+  const cards = s.cards || [];
+  if (!cards.length) return { Untagged: net };
+  const totalBasis = cards.reduce((a, c) => a + (Number(c.basis) || 0), 0);
+  const shares = {};
+  cards.forEach((c) => {
+    const w = totalBasis > 0 ? (Number(c.basis) || 0) / totalBasis : 1 / cards.length;
+    let set = c.set;
+    if (!set && c.invId) set = (inventory || []).find((x) => x.id === c.invId)?.set;
+    if (!set && sets?.length) {
+      const text = `${c.name || ""} ${s.item || ""}`.toLowerCase();
+      set = sets.filter((nm) => text.includes(nm.toLowerCase())).sort((a, b) => b.length - a.length)[0];
+    }
+    set = set || "Untagged";
+    shares[set] = (shares[set] || 0) + net * w;
+  });
+  return shares;
+};
 const invBasis = (c) => (Number(c.cost) || 0) + (Number(c.gradingCost) || 0);
 const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "");
 const cardPrice = (c) => { const p = c.tcgplayer?.prices; if (!p) return null; const v = p.holofoil || p.normal || p.reverseHolofoil || p["1stEditionHolofoil"] || Object.values(p)[0]; return v?.market ?? v?.mid ?? null; };
@@ -398,6 +420,8 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
   const ripsRanked = [...state.rips].sort((a, b) => ripPL(b, state.buys) - ripPL(a, state.buys));
   const ripBySet = {};
   state.rips.forEach((r) => { const s = ripSetOf(r, state.buys, sets); ripBySet[s] = (ripBySet[s] || 0) + ripPL(r, state.buys); });
+  const salesBySet = {};
+  state.sales.forEach((s) => Object.entries(saleSetSplit(s, state.inventory, sets)).forEach(([k, v]) => { salesBySet[k] = (salesBySet[k] || 0) + v; }));
   const hasFees = state.sales.some((s) => s.fees || s.shipping || s.consign);
 
   return (
@@ -422,6 +446,7 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
       {Object.keys(bySet).length > 0 && <Panel title="Spend by set"><BarList data={bySet} tone="out" /></Panel>}
       {Object.keys(byProduct).length > 0 && <Panel title="Spend by product"><BarList data={byProduct} tone="out" /></Panel>}
       <Panel title="Where it came back" action={<button className="cl-link" onClick={() => go("sales")}>Sales ▸</button>}><BarList data={byChannel} tone="in" /></Panel>
+      {state.sales.length > 0 && <Panel title="Sales by set"><BarList data={salesBySet} tone="in" /></Panel>}
       <Panel title="Rip scoreboard" action={<button className="cl-link" onClick={() => go("rips")}>Rips ▸</button>}>
         {ripsRanked.length === 0 ? <Empty>No rips logged. Open a pack on the Rips tab and log your hits.</Empty>
           : <div className="cl-stack sm">{ripsRanked.slice(0, 5).map((r) => (
