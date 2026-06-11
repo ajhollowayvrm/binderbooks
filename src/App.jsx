@@ -209,6 +209,24 @@ const fmt = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-US"
 const ripValue = (r) => (r.hits || []).reduce((s, h) => s + (Number(h.value) || 0), 0);
 const ripCostOf = (r, buys) => (r.buyId ? (Number((buys || []).find((b) => b.id === r.buyId)?.cost) || 0) : (Number(r.cost) || 0));
 const ripPL = (r, buys) => ripValue(r) - ripCostOf(r, buys);
+const buyLineSet = (b) => { const s = [...new Set((b?.lines || []).map((l) => l.set).filter(Boolean))]; return s.length === 1 ? s[0] : ""; };
+// which set a rip belongs to: explicit field, else the linked buy's lines,
+// else a set name found in the product text, else the majority set of the hits
+const ripSetOf = (r, buys, sets) => {
+  if (r.set) return r.set;
+  const b = r.buyId ? (buys || []).find((x) => x.id === r.buyId) : null;
+  const fromLines = buyLineSet(b);
+  if (fromLines) return fromLines;
+  const text = `${r.product || ""} ${b?.item || ""}`.toLowerCase();
+  if (sets?.length) {
+    const m = sets.filter((s) => text.includes(s.toLowerCase())).sort((a, b2) => b2.length - a.length)[0];
+    if (m) return m;
+  }
+  const counts = {};
+  (r.hits || []).forEach((h) => { if (h.set) counts[h.set] = (counts[h.set] || 0) + 1; });
+  const top = Object.entries(counts).sort((a, b2) => b2[1] - a[1])[0];
+  return top ? top[0] : "Unknown";
+};
 const saleNet = (s) => (Number(s.price) || 0) - (Number(s.fees) || 0) - (Number(s.shipping) || 0) - (Number(s.consign) || 0);
 const saleBasis = (s) => (s.cards || []).reduce((a, c) => a + (Number(c.basis) || 0), 0);
 const invBasis = (c) => (Number(c.cost) || 0) + (Number(c.gradingCost) || 0);
@@ -357,6 +375,7 @@ export default function App() {
 /* ================================================================== */
 function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
   const [confirmReset, setConfirmReset] = useState(false);
+  const sets = useSets();
   const buyCost = state.buys.reduce((s, b) => s + (Number(b.cost) || 0), 0);
   const ripExtra = state.rips.filter((r) => !r.buyId).reduce((s, r) => s + (Number(r.cost) || 0), 0);
   const spent = buyCost + ripExtra;
@@ -377,6 +396,8 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
     if (l.product) byProduct[l.product] = (byProduct[l.product] || 0) + c;
   }));
   const ripsRanked = [...state.rips].sort((a, b) => ripPL(b, state.buys) - ripPL(a, state.buys));
+  const ripBySet = {};
+  state.rips.forEach((r) => { const s = ripSetOf(r, state.buys, sets); ripBySet[s] = (ripBySet[s] || 0) + ripPL(r, state.buys); });
   const hasFees = state.sales.some((s) => s.fees || s.shipping || s.consign);
 
   return (
@@ -407,6 +428,7 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync }) {
               <div key={r.id} className="cl-row"><div className="cl-row-main"><div className="cl-row-title">{r.product || "Rip"}</div><div className="cl-row-meta">{(r.hits || []).length} hits · cost {fmt(ripCostOf(r, state.buys))}</div></div><div className={"cl-money " + (ripPL(r, state.buys) >= 0 ? "pos" : "neg")}>{fmt(ripPL(r, state.buys))}</div></div>
             ))}</div>}
       </Panel>
+      {state.rips.length > 0 && <Panel title="Rip P&L by set"><BarList data={ripBySet} tone="pl" /></Panel>}
       <Panel title="Cloud sync"><SyncPanel sync={sync} connect={connectSync} disconnect={disconnectSync} /></Panel>
       <div className="cl-reset">
         {!confirmReset
@@ -480,20 +502,22 @@ function Rips({ state, patch }) {
   );
 }
 function RipForm({ buys, onSave, onCancel }) {
-  const [f, setF] = useState({ product: "", packs: "", cost: "", source: "Gamecraft", date: today(), buyId: "" });
+  const sets = useSets();
+  const [f, setF] = useState({ product: "", set: "", packs: "", cost: "", source: "Gamecraft", date: today(), buyId: "" });
   const opts = [...(buys || [])].sort((a, b) => (b.category === "Sealed") - (a.category === "Sealed"));
   const linkBuy = (id) => {
     const b = (buys || []).find((x) => x.id === id);
     if (!b) return setF({ ...f, buyId: "" });
-    setF({ ...f, buyId: id, cost: String(b.cost), source: b.source, product: f.product || b.item });
+    setF({ ...f, buyId: id, cost: String(b.cost), source: b.source, product: f.product || b.item, set: f.set || buyLineSet(b) });
   };
   return (
     <Form>
       <Field label="Product"><input className="cl-in" placeholder="Chaos Rising booster" value={f.product} onChange={(e) => setF({ ...f, product: e.target.value })} /></Field>
+      <Field label="Set (for analytics)"><SetPicker sets={sets} value={f.set} onChange={(v) => setF({ ...f, set: v })} allowEmpty /></Field>
       {(buys || []).length > 0 && <Field label="Ripped from a buy (optional — avoids double-counting cost)"><select className="cl-in" value={f.buyId} onChange={(e) => linkBuy(e.target.value)}><option value="">— not linked / enter new cost —</option>{opts.map((b) => <option key={b.id} value={b.id}>{b.item} · {b.source} · {fmt(Number(b.cost) || 0)}</option>)}</select></Field>}
       <div className="cl-grid2"><Field label="Packs"><input className="cl-in" inputMode="numeric" placeholder="5" value={f.packs} onChange={(e) => setF({ ...f, packs: e.target.value })} /></Field><Field label={f.buyId ? "Cost (from buy)" : "Total cost"}><MoneyInput value={f.cost} onChange={(v) => !f.buyId && setF({ ...f, cost: v })} /></Field></div>
       <div className="cl-grid2"><Field label="Bought from"><Select opts={SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field><Field label="Date"><input className="cl-in" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field></div>
-      <Actions onCancel={onCancel} label="Save rip" disabled={!f.product || (!f.buyId && !f.cost)} onSave={() => onSave({ product: f.product, packs: Number(f.packs) || 0, cost: f.buyId ? 0 : Number(f.cost) || 0, source: f.source, date: f.date, buyId: f.buyId || null })} />
+      <Actions onCancel={onCancel} label="Save rip" disabled={!f.product || (!f.buyId && !f.cost)} onSave={() => onSave({ product: f.product, set: f.set, packs: Number(f.packs) || 0, cost: f.buyId ? 0 : Number(f.cost) || 0, source: f.source, date: f.date, buyId: f.buyId || null })} />
     </Form>
   );
 }
@@ -607,21 +631,25 @@ function Buys({ state, patch }) {
     </div>
   );
 }
-function LineRow({ line, sets, onChange, onRemove, removable }) {
+function SetPicker({ sets, value, onChange, allowEmpty }) {
   // "other" switches the set dropdown to free text — for sets the API
   // doesn't have yet, or when the API is unavailable
-  const [other, setOther] = useState(() => !!line.set && (sets ? !sets.includes(line.set) : true));
+  const [other, setOther] = useState(() => !!value && (sets ? !sets.includes(value) : true));
+  if (other) return <input className="cl-in" placeholder="Set name" value={value} onChange={(e) => onChange(e.target.value)} />;
+  return (
+    <select className="cl-in" value={value} onChange={(e) => { const v = e.target.value; if (v === "__other") { setOther(true); onChange(""); } else onChange(v); }}>
+      <option value="" disabled={!allowEmpty}>{sets === null ? "Loading sets…" : allowEmpty ? "— optional —" : "Set…"}</option>
+      {(sets || []).map((s) => <option key={s} value={s}>{s}</option>)}
+      <option value="__other">Other / type it…</option>
+    </select>
+  );
+}
+function LineRow({ line, sets, onChange, onRemove, removable }) {
   return (
     <div className="cl-lineitem">
       <div className="cl-line-r1">
         <input className="cl-in" inputMode="numeric" placeholder="Qty" value={line.qty} onChange={(e) => onChange({ ...line, qty: e.target.value.replace(/[^0-9]/g, "") })} />
-        {other
-          ? <input className="cl-in" placeholder="Set name" value={line.set} onChange={(e) => onChange({ ...line, set: e.target.value })} />
-          : <select className="cl-in" value={line.set} onChange={(e) => { const v = e.target.value; if (v === "__other") { setOther(true); onChange({ ...line, set: "" }); } else onChange({ ...line, set: v }); }}>
-              <option value="" disabled>{sets === null ? "Loading sets…" : "Set…"}</option>
-              {(sets || []).map((s) => <option key={s} value={s}>{s}</option>)}
-              <option value="__other">Other / type it…</option>
-            </select>}
+        <SetPicker sets={sets} value={line.set} onChange={(v) => onChange({ ...line, set: v })} />
       </div>
       <div className={"cl-line-r2" + (removable ? "" : " nox")}>
         <select className="cl-in" value={line.product} onChange={(e) => onChange({ ...line, product: e.target.value })}>{PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}</select>
@@ -881,7 +909,8 @@ function BarList({ data, tone }) {
   const rows = Object.entries(data).filter(([, v]) => Math.abs(v) > 0.001).sort((a, b) => b[1] - a[1]);
   if (!rows.length) return <Empty>Nothing here yet.</Empty>;
   const max = Math.max(...rows.map(([, v]) => Math.abs(v)));
-  return <div className="cl-bars">{rows.map(([k, v]) => (<div key={k} className="cl-bar"><div className="cl-bar-top"><span>{k}</span><span className="cl-money">{fmt(v)}</span></div><div className="cl-bar-track"><div className={"cl-bar-fill " + tone} style={{ width: `${Math.max(4, (Math.abs(v) / max) * 100)}%` }} /></div></div>))}</div>;
+  const rowTone = (v) => (tone === "pl" ? (v >= 0 ? "in" : "out") : tone); // pl = profit/loss: green gains, orange losses
+  return <div className="cl-bars">{rows.map(([k, v]) => (<div key={k} className="cl-bar"><div className="cl-bar-top"><span>{k}</span><span className={"cl-money" + (tone === "pl" ? (v >= 0 ? " pos" : " neg") : "")}>{fmt(v)}</span></div><div className="cl-bar-track"><div className={"cl-bar-fill " + rowTone(v)} style={{ width: `${Math.max(4, (Math.abs(v) / max) * 100)}%` }} /></div></div>))}</div>;
 }
 function numStr(n) { return n ? String(n) : ""; }
 function today() { return new Date().toISOString().slice(0, 10); }
