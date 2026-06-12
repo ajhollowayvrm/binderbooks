@@ -336,6 +336,19 @@ const saleSetSplit = (s, inventory, sets) => {
   return shares;
 };
 const invBasis = (c) => (Number(c.cost) || 0) + (Number(c.gradingCost) || 0);
+// a card at the graders carries a value range — min/max of whichever PSA 10–6
+// estimates the user filled in. Everything else just counts its single value.
+const PSA_EST_GRADES = ["10", "9", "8", "7", "6"];
+const gradeRange = (c) => {
+  if (c.status !== "At grading") return null;
+  const vals = PSA_EST_GRADES.map((g) => Number(c.gradeEst?.[g]) || 0).filter((v) => v > 0);
+  return vals.length ? { lo: Math.min(...vals), hi: Math.max(...vals) } : null;
+};
+const invRange = (cards) => cards.reduce((a, c) => {
+  const r = gradeRange(c), v = Number(c.value) || 0;
+  return { lo: a.lo + (r ? r.lo : v), hi: a.hi + (r ? r.hi : v) };
+}, { lo: 0, hi: 0 });
+const fmtRange = (r) => (r.lo === r.hi ? fmt(r.lo) : `${fmt(r.lo)} – ${fmt(r.hi)}`);
 const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "");
 const cardPrice = (c) => { const p = c.tcgplayer?.prices; if (!p) return null; const v = p.holofoil || p.normal || p.reverseHolofoil || p["1stEditionHolofoil"] || Object.values(p)[0]; return v?.market ?? v?.mid ?? null; };
 
@@ -516,6 +529,10 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync, resolv
   const net = earned - spent;
   const kept = (state.inventory || []).filter((c) => c.status !== "Sold");
   const invVal = kept.reduce((s, c) => s + (Number(c.value) || 0), 0);
+  const invR = invRange(kept);
+  const hasRange = invR.lo !== invR.hi;
+  const netLo = earned + invR.lo - spent, netHi = earned + invR.hi - spent;
+  const gradingCount = kept.filter((c) => gradeRange(c)).length;
 
   const bySource = {};
   state.buys.forEach((b) => { bySource[b.source || "Other"] = (bySource[b.source || "Other"] || 0) + (Number(b.cost) || 0); });
@@ -549,9 +566,10 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync, resolv
           ? <Empty>No cards held yet. Add keepers on the Inventory tab or from Lookup.</Empty>
           : <div className="cl-inv-summary">
               <div><div className="cl-row-meta">Cards held</div><div className="cl-stat-num">{kept.length}</div></div>
-              <div><div className="cl-row-meta">Market value</div><div className="cl-stat-num" style={{ color: "var(--holo2)" }}>{fmt(invVal)}</div></div>
-              <div><div className="cl-row-meta">Net if liquidated</div><div className="cl-stat-num" style={{ color: (earned + invVal - spent) >= 0 ? "var(--pos)" : "var(--neg)" }}>{fmt(earned + invVal - spent)}</div></div>
+              <div><div className="cl-row-meta">Market value</div><div className="cl-stat-num" style={{ color: "var(--holo2)" }}>{hasRange ? <span className="cl-range">{fmtRange(invR)}</span> : fmt(invVal)}</div></div>
+              <div><div className="cl-row-meta">Net if liquidated</div><div className="cl-stat-num" style={{ color: netLo >= 0 ? "var(--pos)" : netHi < 0 ? "var(--neg)" : "var(--out)" }}>{hasRange ? <span className="cl-range">{fmtRange({ lo: netLo, hi: netHi })}</span> : fmt(netLo)}</div></div>
             </div>}
+        {hasRange && <div className="cl-note" style={{ marginTop: 10 }}>{gradingCount} card{gradingCount === 1 ? "" : "s"} at grading — depending on how the PSA grades land, you'd end up anywhere from {fmt(netLo)} to {fmt(netHi)} overall.</div>}
       </Panel>
       <Panel title="Where the money went" action={<button className="cl-link" onClick={() => go("buys")}>Buys ▸</button>}><BarList data={bySource} tone="out" /></Panel>
       {Object.keys(bySet).length > 0 && <Panel title="Spend by set"><BarList data={bySet} tone="out" /></Panel>}
@@ -968,13 +986,13 @@ function SaleForm({ initial, inventory, onSave, onCancel }) {
         <div className="cl-cardchips">
           {f.cards.length === 0 && <span className="cl-cardchips-empty">No cards attached yet</span>}
           {f.cards.map((c) => (
-            <span key={c.id} className="cl-cardchip">{c.invId && <span className="holo-dot" />}{c.name}{c.number ? ` ${c.number}` : ""}{c.basis ? ` \u00b7 ${fmt(Number(c.basis))}` : ""}<button className="cl-chip-x" onClick={() => rmCard(c.id)}><X size={11} /></button></span>
+            <span key={c.id} className="cl-cardchip">{c.invId && <span className="holo-dot" />}{c.name}{c.number ? ` ${c.number}` : ""}{c.basis ? ` · ${fmt(Number(c.basis))}` : ""}<button className="cl-chip-x" onClick={() => rmCard(c.id)}><X size={11} /></button></span>
           ))}
         </div>
       </Field>
-      {availInv.length > 0 && <Field label="Add a card you kept"><select className="cl-in" value="" onChange={(e) => { addInv(e.target.value); }}><option value="">\u2014 choose from inventory \u2014</option>{availInv.map((c) => <option key={c.id} value={c.id}>{c.name}{c.number ? " " + c.number : ""} \u00b7 basis {fmt(invBasis(c))}</option>)}</select></Field>}
+      {availInv.length > 0 && <Field label="Add a card you kept"><select className="cl-in" value="" onChange={(e) => { addInv(e.target.value); }}><option value="">— choose from inventory —</option>{availInv.map((c) => <option key={c.id} value={c.id}>{c.name}{c.number ? " " + c.number : ""} · basis {fmt(invBasis(c))}</option>)}</select></Field>}
       <div className="cl-typedadd">
-        <CardAutocomplete value={tname} onChange={(v) => { setTname(v); setTmeta(null); }} onSelect={pickTyped} placeholder="\u2026or search a card name" />
+        <CardAutocomplete value={tname} onChange={(v) => { setTname(v); setTmeta(null); }} onSelect={pickTyped} placeholder="…or search a card name" />
         <div className="cl-money-in cl-basisbox"><span>$</span><input className="cl-in bare" inputMode="decimal" placeholder="basis" value={tbasis} onChange={(e) => setTbasis(e.target.value.replace(/[^0-9.]/g, ""))} /></div>
         <button className="cl-add-card" onClick={addTyped}><Plus size={15} /></button>
       </div>
@@ -999,13 +1017,15 @@ function Inventory({ state, patch }) {
   const live = inv.filter((c) => c.status !== "Sold");
   const val = live.reduce((s, c) => s + (Number(c.value) || 0), 0);
   const basis = live.reduce((s, c) => s + invBasis(c), 0);
+  const range = invRange(live);
+  const hasRange = range.lo !== range.hi;
   const FILTERS = ["All", "Kept", "At grading", "Listed", "Sold"];
   const shown = (filter === "All" ? inv : inv.filter((c) => c.status === filter)).slice().sort(byDateDesc);
 
   return (
     <div className="cl-stack">
-      <Header title="Inventory" sub={`${live.length} held · ${fmt(val)} market`} onAdd={() => { setAdding(!adding); setEditId(null); }} addOpen={adding} />
-      {live.length > 0 && <div className="cl-grid2"><Stat label="Cost basis" value={fmt(basis)} tone="out" /><Stat label="Unrealized" value={fmt(val - basis)} tone={val - basis >= 0 ? "in" : "neg"} /></div>}
+      <Header title="Inventory" sub={`${live.length} held · ${hasRange ? fmtRange(range) : fmt(val)} market`} onAdd={() => { setAdding(!adding); setEditId(null); }} addOpen={adding} />
+      {live.length > 0 && <div className="cl-grid2"><Stat label="Cost basis" value={fmt(basis)} tone="out" /><Stat label="Unrealized" value={hasRange ? <span className="cl-range">{fmtRange({ lo: range.lo - basis, hi: range.hi - basis })}</span> : fmt(val - basis)} tone={range.lo - basis >= 0 ? "in" : range.hi - basis < 0 ? "neg" : "out"} /></div>}
       {adding && <InvForm onSave={add} onCancel={() => setAdding(false)} />}
       {inv.length > 0 && <div className="cl-pills">{FILTERS.map((x) => <button key={x} className={"cl-pill" + (filter === x ? " on" : "")} onClick={() => setFilter(x)}>{x}</button>)}</div>}
       {inv.length === 0 && !adding && <Empty>No cards yet. Add a keeper or a card you've sent for grading, or hit “+ Keep” from Lookup to pull one in with its market value.</Empty>}
@@ -1015,7 +1035,7 @@ function Inventory({ state, patch }) {
           : <div key={c.id} className={"cl-row" + (c.status === "Sold" ? " sold" : "")}>
               <span className="holo-dot" />
               <div className="cl-row-main"><div className="cl-row-title">{c.name}</div><div className="cl-row-meta"><span className={"cl-st " + stCls(c.status)}>{c.status}</span><span className="cl-chip">{c.grade}</span>{c.set ? `${c.set}${c.number ? " · " + c.number : ""} · ` : ""}{c.source}</div></div>
-              <div className="cl-card-num"><div className="cl-money" style={{ color: "var(--holo2)" }}>{fmt(Number(c.value) || 0)}</div>{invBasis(c) ? <div className="cl-row-meta">basis {fmt(invBasis(c))}</div> : null}</div>
+              <div className="cl-card-num"><div className="cl-money" style={{ color: "var(--holo2)" }}>{gradeRange(c) ? fmtRange(gradeRange(c)) : fmt(Number(c.value) || 0)}</div>{invBasis(c) ? <div className="cl-row-meta">basis {fmt(invBasis(c))}</div> : null}</div>
               <button className="cl-x" onClick={() => { setEditId(c.id); setAdding(false); }}><Pencil size={13} /></button>
               <button className="cl-x" onClick={() => del(c.id)}><Trash2 size={13} /></button>
             </div>)}
@@ -1024,17 +1044,19 @@ function Inventory({ state, patch }) {
   );
 }
 function InvForm({ initial, onSave, onCancel }) {
+  const estStr = (e) => Object.fromEntries(PSA_EST_GRADES.map((g) => [g, numStr(e?.[g])]));
   const [f, setF] = useState(initial
-    ? { name: initial.name, set: initial.set || "", number: initial.number || "", grade: initial.grade || "Raw", status: initial.status || "Kept", source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), value: numStr(initial.value), date: initial.date || today() }
-    : { name: "", set: "", number: "", grade: "Raw", status: "Kept", source: "Rip pull", cost: "", gradingCost: "", value: "", date: today() });
+    ? { name: initial.name, set: initial.set || "", number: initial.number || "", grade: initial.grade || "Raw", status: initial.status || "Kept", source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst), date: initial.date || today() }
+    : { name: "", set: "", number: "", grade: "Raw", status: "Kept", source: "Rip pull", cost: "", gradingCost: "", value: "", gradeEst: estStr(null), date: today() });
   return (
     <Form editing={!!initial}>
       <Field label="Card"><input className="cl-in" placeholder="Umbreon ex SIR" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
       <div className="cl-grid2"><Field label="Set"><input className="cl-in" placeholder="Prismatic Evolutions" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /></Field><Field label="Number"><input className="cl-in" placeholder="161/131" value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /></Field></div>
       <div className="cl-grid2"><Field label="Grade"><Select opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => setF({ ...f, status: v })} /></Field></div>
+      {f.status === "At grading" && <div className="cl-field"><span>If it grades — what you think it's worth at each PSA grade</span><div className="cl-gradeest">{PSA_EST_GRADES.map((g) => <div key={g} className="cl-gradeest-cell"><span className="cl-gradeest-g">PSA {g}</span><MoneyInput placeholder="—" value={f.gradeEst[g]} onChange={(v) => setF({ ...f, gradeEst: { ...f.gradeEst, [g]: v } })} /></div>)}</div></div>}
       <Field label="Source"><Select opts={INV_SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field>
       <div className="cl-grid3"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Grading cost"><MoneyInput value={f.gradingCost} onChange={(v) => setF({ ...f, gradingCost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} /></Field></div>
-      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, grade: f.grade, status: f.status, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, value: Number(f.value) || 0, date: f.date })} />
+      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, grade: f.grade, status: f.status, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(PSA_EST_GRADES.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
     </Form>
   );
 }
@@ -1152,6 +1174,13 @@ function Fonts() {
     .cl-stat.in .cl-stat-num{color:var(--pos);}.cl-stat.out .cl-stat-num{color:var(--out);}.cl-stat.neg .cl-stat-num{color:var(--neg);}
     .cl-inv-summary{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
     .cl-inv-summary .cl-stat-num{font-size:19px;}
+    .cl-range{font-size:15px;line-height:1.35;display:inline-block;}
+    .cl-inv-summary .cl-range{font-size:12.5px;}
+    .cl-gradeest{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;}
+    .cl-gradeest-cell{display:flex;flex-direction:column;gap:3px;min-width:0;}
+    .cl-gradeest-cell .cl-money-in{padding:0 8px;min-width:0;}
+    .cl-gradeest-cell .cl-in{min-width:0;padding:10px 4px;}
+    .cl-gradeest-g{font-size:9.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;}
     .cl-note{background:rgba(255,180,84,.08);border:1px solid rgba(255,180,84,.25);color:#ffd9a8;border-radius:12px;padding:11px 13px;font-size:12.5px;line-height:1.45;}
     .cl-panel{background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:14px 14px 16px;}
     .cl-panel-head{display:flex;justify-content:space-between;align-items:center;font-family:'Space Grotesk';font-weight:600;font-size:14px;margin-bottom:12px;}
@@ -1277,6 +1306,6 @@ function Fonts() {
     .cl-ac-price{font-family:'Space Grotesk';font-weight:600;color:var(--pos);font-size:13px;font-variant-numeric:tabular-nums;flex:none;}
     .cl-ac-retry{width:100%;background:none;border:none;color:#ffce9e;cursor:pointer;font-family:'Inter';}
     .cl-ac-hint{font-size:10.5px;color:var(--mut);margin-top:4px;padding-left:2px;font-style:italic;}
-    @media (max-width:420px){.cl-grid3{grid-template-columns:1fr;}.cl-hero-num{font-size:40px;}.cl-inv-summary .cl-stat-num{font-size:16px;}}
+    @media (max-width:420px){.cl-grid3{grid-template-columns:1fr;}.cl-hero-num{font-size:40px;}.cl-inv-summary .cl-stat-num{font-size:16px;}.cl-inv-summary .cl-range{font-size:11px;}.cl-gradeest{grid-template-columns:repeat(3,1fr);}}
   `}</style>);
 }
