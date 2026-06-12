@@ -155,6 +155,36 @@ async function fillMissingPrices(list) {
   });
 }
 
+/* PSA comps for the grading-estimate fields: eBay sold averages per grade,
+   proxied through the Lambda (see /graded in aws/index.mjs) so the
+   pokemonpricetracker.com key stays server-side. */
+const GRADED_KEY = "cardledger:graded:v1";
+async function fetchGradedComps(name, set, number) {
+  const key = `${name}|${set}|${number}`.toLowerCase();
+  try {
+    const c = (JSON.parse(localStorage.getItem(GRADED_KEY)) || {})[key];
+    if (c && Date.now() - c.t < 24 * 3600 * 1000) return c.r;
+  } catch {}
+  const qs = new URLSearchParams({ name });
+  if (set) qs.set("set", set);
+  if (number) qs.set("number", number);
+  const r = await fetch(`${SYNC_URL}graded?${qs}`);
+  if (!r.ok) {
+    const err = new Error("graded fetch failed");
+    err.status = r.status;
+    throw err;
+  }
+  const body = await r.json();
+  try {
+    const all = JSON.parse(localStorage.getItem(GRADED_KEY)) || {};
+    all[key] = { t: Date.now(), r: body };
+    const keys = Object.keys(all);
+    if (keys.length > 30) keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - 30).forEach((k) => delete all[k]);
+    localStorage.setItem(GRADED_KEY, JSON.stringify(all));
+  } catch {}
+  return body;
+}
+
 function useSets() {
   const [sets, setSets] = useState(() => {
     try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); if (c && Date.now() - c.t < 7 * 864e5 && c.names?.length) return c.names; } catch {}
@@ -1048,12 +1078,31 @@ function InvForm({ initial, onSave, onCancel }) {
   const [f, setF] = useState(initial
     ? { name: initial.name, set: initial.set || "", number: initial.number || "", grade: initial.grade || "Raw", status: initial.status || "Kept", source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst), date: initial.date || today() }
     : { name: "", set: "", number: "", grade: "Raw", status: "Kept", source: "Rip pull", cost: "", gradingCost: "", value: "", gradeEst: estStr(null), date: today() });
+  const [comps, setComps] = useState("");
+  const pullComps = async () => {
+    setComps("loading");
+    try {
+      const r = await fetchGradedComps(f.name, f.set, f.number);
+      const got = PSA_EST_GRADES.filter((g) => Number(r.grades?.[g]) > 0);
+      setF((s) => ({ ...s, gradeEst: { ...s.gradeEst, ...Object.fromEntries(got.map((g) => [g, String(r.grades[g])])) } }));
+      const label = r.number && !String(r.card).includes(r.number) ? `${r.card} ${r.number}` : r.card;
+      setComps(`PSA ${got.join(" / ")} filled from eBay solds (${got.map((g) => r.sales?.[g] || "–").join(" / ")} sales) — ${label}.`);
+    } catch (e) {
+      setComps(e.status === 501 ? "Not set up yet — the sync Lambda needs a pokemonpricetracker.com API key (see aws/deploy.ps1)."
+        : e.status === 404 ? "No recent graded sales found for this card — fill the values in manually."
+        : "Comps unavailable right now — fill the values in manually.");
+    }
+  };
   return (
     <Form editing={!!initial}>
       <Field label="Card"><input className="cl-in" placeholder="Umbreon ex SIR" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
       <div className="cl-grid2"><Field label="Set"><input className="cl-in" placeholder="Prismatic Evolutions" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /></Field><Field label="Number"><input className="cl-in" placeholder="161/131" value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /></Field></div>
       <div className="cl-grid2"><Field label="Grade"><Select opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => setF({ ...f, status: v })} /></Field></div>
-      {f.status === "At grading" && <div className="cl-field"><span>If it grades — what you think it's worth at each PSA grade</span><div className="cl-gradeest">{PSA_EST_GRADES.map((g) => <div key={g} className="cl-gradeest-cell"><span className="cl-gradeest-g">PSA {g}</span><MoneyInput placeholder="—" value={f.gradeEst[g]} onChange={(v) => setF({ ...f, gradeEst: { ...f.gradeEst, [g]: v } })} /></div>)}</div></div>}
+      {f.status === "At grading" && <div className="cl-field">
+        <div className="cl-gradeest-head"><span>If it grades — what you think it's worth at each PSA grade</span><button className="cl-link" disabled={!f.name || comps === "loading"} onClick={pullComps}>{comps === "loading" ? "Pulling…" : "Pull eBay comps"}</button></div>
+        <div className="cl-gradeest">{PSA_EST_GRADES.map((g) => <div key={g} className="cl-gradeest-cell"><span className="cl-gradeest-g">PSA {g}</span><MoneyInput placeholder="—" value={f.gradeEst[g]} onChange={(v) => setF({ ...f, gradeEst: { ...f.gradeEst, [g]: v } })} /></div>)}</div>
+        {comps && comps !== "loading" && <div className="cl-gradeest-note">{comps}</div>}
+      </div>}
       <Field label="Source"><Select opts={INV_SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field>
       <div className="cl-grid3"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Grading cost"><MoneyInput value={f.gradingCost} onChange={(v) => setF({ ...f, gradingCost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} /></Field></div>
       <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, grade: f.grade, status: f.status, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(PSA_EST_GRADES.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
@@ -1181,6 +1230,9 @@ function Fonts() {
     .cl-gradeest-cell .cl-money-in{padding:0 8px;min-width:0;}
     .cl-gradeest-cell .cl-in{min-width:0;padding:10px 4px;}
     .cl-gradeest-g{font-size:9.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;}
+    .cl-gradeest-head{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+    .cl-gradeest-note{font-size:11px;color:var(--mut);line-height:1.4;}
+    .cl-link:disabled{opacity:.45;cursor:default;}
     .cl-note{background:rgba(255,180,84,.08);border:1px solid rgba(255,180,84,.25);color:#ffd9a8;border-radius:12px;padding:11px 13px;font-size:12.5px;line-height:1.45;}
     .cl-panel{background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:14px 14px 16px;}
     .cl-panel-head{display:flex;justify-content:space-between;align-items:center;font-family:'Space Grotesk';font-weight:600;font-size:14px;margin-bottom:12px;}
