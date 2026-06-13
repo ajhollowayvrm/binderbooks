@@ -1088,7 +1088,6 @@ function InvForm({ initial, onSave, onCancel }) {
     ? { name: initial.name, set: initial.set || "", number: initial.number || "", grade: initial.grade || "Raw", status: initial.status || "Kept", source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst), date: initial.date || today() }
     : { name: "", set: "", number: "", grade: "Raw", status: "Kept", source: "Rip pull", cost: "", gradingCost: "", value: "", gradeEst: estStr(null), date: today() });
   const [comps, setComps] = useState("");
-  const estEmpty = PSA_EST_GRADES.every((g) => !Number(f.gradeEst[g]));
   const pullComps = async () => {
     if (comps === "loading") return;
     setComps("loading");
@@ -1105,18 +1104,13 @@ function InvForm({ initial, onSave, onCancel }) {
         : "Comps unavailable right now — fill the values in manually.");
     }
   };
-  // comps arrive on their own: when a card is opened already at grading with
-  // nothing filled in, when it's flipped to "At grading", or on leaving the
-  // number field. Only the number field gets the blur trigger — pulling on
-  // name blur fires mid-entry with no set/number and matches the wrong card.
-  // The button stays as a manual refresh.
-  useEffect(() => { if (f.status === "At grading" && f.name && estEmpty) pullComps(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const autoPull = (status = f.status) => { if (status === "At grading" && f.name && estEmpty && comps === "") pullComps(); };
+  // comps are pulled only on the "Pull eBay comps" button below — auto-pull
+  // burned through pokemonpricetracker.com's daily credit budget too fast.
   return (
     <Form editing={!!initial}>
       <Field label="Card"><input className="cl-in" placeholder="Umbreon ex SIR" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-      <div className="cl-grid2"><Field label="Set"><input className="cl-in" placeholder="Prismatic Evolutions" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /></Field><Field label="Number"><input className="cl-in" placeholder="161/131" value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} onBlur={() => autoPull()} /></Field></div>
-      <div className="cl-grid2"><Field label="Grade"><Select opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => { setF({ ...f, status: v }); autoPull(v); }} /></Field></div>
+      <div className="cl-grid2"><Field label="Set"><input className="cl-in" placeholder="Prismatic Evolutions" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /></Field><Field label="Number"><input className="cl-in" placeholder="161/131" value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /></Field></div>
+      <div className="cl-grid2"><Field label="Grade"><Select opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => setF({ ...f, status: v })} /></Field></div>
       {f.status === "At grading" && <div className="cl-field">
         <div className="cl-gradeest-head"><span>If it grades — what you think it's worth at each PSA grade</span><button className="cl-link" disabled={!f.name || comps === "loading"} onClick={pullComps}>{comps === "loading" ? "Pulling…" : "Pull eBay comps"}</button></div>
         <div className="cl-gradeest">{PSA_EST_GRADES.map((g) => <div key={g} className="cl-gradeest-cell"><span className="cl-gradeest-g">PSA {g}</span><MoneyInput placeholder="—" value={f.gradeEst[g]} onChange={(v) => setF({ ...f, gradeEst: { ...f.gradeEst, [g]: v } })} /></div>)}</div>
