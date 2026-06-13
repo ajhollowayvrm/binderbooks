@@ -89,9 +89,11 @@ async function gradedPrices(name, number, set) {
     u.searchParams.set("search", name);
     if (withSet && set) u.searchParams.set("set", set);
     u.searchParams.set("includeEbay", "true");
-    u.searchParams.set("limit", "5");
+    // each returned card costs 2 credits with eBay data and the free tier is
+    // 100/day — limit 3 keeps a lookup at 6 credits (~16 fresh cards a day)
+    u.searchParams.set("limit", "3");
     const r = await fetch(u, { headers: { authorization: `Bearer ${process.env.PPT_KEY}` } });
-    if (!r.ok) throw new Error(`ppt HTTP ${r.status}`);
+    if (!r.ok) { const e = new Error(`ppt HTTP ${r.status}`); e.status = r.status; throw e; }
     const data = await r.json();
     return data.cards || data.data || (Array.isArray(data) ? data : []);
   };
@@ -147,7 +149,11 @@ export const handler = async (event) => {
     try {
       const body = await gradedPrices(name, number || "", set || "");
       return body && Object.keys(body.grades).length ? res(200, body) : res(404, { error: "no graded comps" });
-    } catch (e) { console.error("graded route failed:", e); return res(502, { error: "graded price source unavailable" }); }
+    } catch (e) {
+      console.error("graded route failed:", e);
+      if (e.status === 429) return res(429, { error: "daily comps budget used" });
+      return res(502, { error: "graded price source unavailable" });
+    }
   }
 
   if (!authed(event)) return res(401, { error: "unauthorized" });

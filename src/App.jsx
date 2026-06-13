@@ -161,27 +161,36 @@ async function fillMissingPrices(list) {
 const GRADED_KEY = "cardledger:graded:v1";
 async function fetchGradedComps(name, set, number) {
   const key = `${name}|${set}|${number}`.toLowerCase();
-  try {
-    const c = (JSON.parse(localStorage.getItem(GRADED_KEY)) || {})[key];
-    if (c && Date.now() - c.t < 24 * 3600 * 1000) return c.r;
-  } catch {}
+  const writeCache = (r) => {
+    try {
+      const all = JSON.parse(localStorage.getItem(GRADED_KEY)) || {};
+      all[key] = { t: Date.now(), r };
+      const keys = Object.keys(all);
+      if (keys.length > 30) keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - 30).forEach((k) => delete all[k]);
+      localStorage.setItem(GRADED_KEY, JSON.stringify(all));
+    } catch {}
+  };
+  let cached;
+  try { cached = (JSON.parse(localStorage.getItem(GRADED_KEY)) || {})[key]; } catch {}
+  if (cached && Date.now() - cached.t < 24 * 3600 * 1000) {
+    if (cached.r?._empty) { const e = new Error("no graded comps"); e.status = 404; throw e; }
+    return cached.r;
+  }
   const qs = new URLSearchParams({ name });
   if (set) qs.set("set", set);
   if (number) qs.set("number", number);
   const r = await fetch(`${SYNC_URL}graded?${qs}`);
   if (!r.ok) {
+    // remember "no comps for this card" so auto-pull doesn't re-spend the daily
+    // PPT budget on it every time the form reopens; transient failures (429
+    // budget exhausted, 5xx) stay uncached so they retry later
+    if (r.status === 404) writeCache({ _empty: true });
     const err = new Error("graded fetch failed");
     err.status = r.status;
     throw err;
   }
   const body = await r.json();
-  try {
-    const all = JSON.parse(localStorage.getItem(GRADED_KEY)) || {};
-    all[key] = { t: Date.now(), r: body };
-    const keys = Object.keys(all);
-    if (keys.length > 30) keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - 30).forEach((k) => delete all[k]);
-    localStorage.setItem(GRADED_KEY, JSON.stringify(all));
-  } catch {}
+  writeCache(body);
   return body;
 }
 
@@ -1091,6 +1100,7 @@ function InvForm({ initial, onSave, onCancel }) {
       setComps(`PSA ${got.join(" / ")} filled from eBay solds (${got.map((g) => r.sales?.[g] || "–").join(" / ")} sales) — ${label}.`);
     } catch (e) {
       setComps(e.status === 501 ? "Not set up yet — the sync Lambda needs a pokemonpricetracker.com API key (see aws/deploy.ps1)."
+        : e.status === 429 ? "Daily eBay-comps budget is used up — try again tomorrow, or fill the values in manually."
         : e.status === 404 ? "No recent graded sales found for this card — fill the values in manually."
         : "Comps unavailable right now — fill the values in manually.");
     }
