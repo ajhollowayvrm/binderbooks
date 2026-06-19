@@ -3,6 +3,7 @@ import Papa from "papaparse";
 import {
   LayoutDashboard, PackageOpen, ShoppingCart, Tags, Search, Archive,
   Plus, Trash2, Pencil, ChevronDown, ChevronRight, Sparkles, Upload, X,
+  CalendarRange, ChevronLeft,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -530,9 +531,10 @@ export default function App() {
   if (!state) return <div className="cl-root"><Fonts /><div className="cl-center">Loading your ledger…</div></div>;
 
   const TABS = [
-    ["dash", "Overview", LayoutDashboard], ["rips", "Rips", PackageOpen],
-    ["buys", "Buys", ShoppingCart], ["sales", "Sales", Tags],
-    ["inv", "Inventory", Archive], ["look", "Lookup", Search],
+    ["dash", "Overview", LayoutDashboard], ["month", "Monthly", CalendarRange],
+    ["rips", "Rips", PackageOpen], ["buys", "Buys", ShoppingCart],
+    ["sales", "Sales", Tags], ["inv", "Inventory", Archive],
+    ["look", "Lookup", Search],
   ];
 
   return (
@@ -547,6 +549,7 @@ export default function App() {
       </nav>
       <main className="cl-main">
         {tab === "dash" && <Dashboard state={state} go={setTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} resolveChoice={resolveChoice} />}
+        {tab === "month" && <Monthly state={state} />}
         {tab === "rips" && <Rips state={state} patch={patch} />}
         {tab === "buys" && <Buys state={state} patch={patch} />}
         {tab === "sales" && <Sales state={state} patch={patch} />}
@@ -628,6 +631,93 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync, resolv
           ? <button className="cl-reset-btn" onClick={() => setConfirmReset(true)}>Reset all data</button>
           : <div className="cl-reset-confirm"><span>Wipes everything and reloads the starter data.</span><div className="cl-reset-actions"><button className="cl-cancel" onClick={() => setConfirmReset(false)}>Cancel</button><button className="cl-reset-go" onClick={() => { reset(); setConfirmReset(false); }}>Reset</button></div></div>}
       </div>
+    </div>
+  );
+}
+
+/* ================================================================== */
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const monthKey = (d) => (d || "").slice(0, 7); // "YYYY-MM"
+const monthLabel = (k) => { const [y, m] = (k || "").split("-"); return MONTH_NAMES[(+m || 1) - 1] + " " + y; };
+
+// Monthly cash-flow P&L: money out = buys + standalone rip costs dated in the
+// month; money in = sale nets dated in the month. Same model as the Overview,
+// just sliced by calendar month so you can see how a single month is doing.
+function Monthly({ state }) {
+  const sets = useSets();
+  const thisMonth = monthKey(today());
+
+  // every month that has any activity, plus the current month so "this month
+  // so far" always shows even before the first transaction lands.
+  const months = (() => {
+    const set = new Set([thisMonth]);
+    state.buys.forEach((b) => b.date && set.add(monthKey(b.date)));
+    state.sales.forEach((s) => s.date && set.add(monthKey(s.date)));
+    state.rips.forEach((r) => r.date && set.add(monthKey(r.date)));
+    return [...set].sort().reverse(); // newest first
+  })();
+
+  const [sel, setSel] = useState(thisMonth);
+  const cur = months.includes(sel) ? sel : months[0];
+  const idx = months.indexOf(cur);
+
+  // net (in − out) for any month — used for the headline and the trend rail
+  const netOf = (k) => {
+    const out = state.buys.filter((b) => monthKey(b.date) === k).reduce((a, b) => a + (Number(b.cost) || 0), 0)
+      + state.rips.filter((r) => !r.buyId && monthKey(r.date) === k).reduce((a, r) => a + (Number(r.cost) || 0), 0);
+    const inn = state.sales.filter((s) => monthKey(s.date) === k).reduce((a, s) => a + saleNet(s), 0);
+    return inn - out;
+  };
+
+  const buys = state.buys.filter((b) => monthKey(b.date) === cur);
+  const sales = state.sales.filter((s) => monthKey(s.date) === cur);
+  const rips = state.rips.filter((r) => monthKey(r.date) === cur);
+  const buyCost = buys.reduce((a, b) => a + (Number(b.cost) || 0), 0);
+  const ripExtra = rips.filter((r) => !r.buyId).reduce((a, r) => a + (Number(r.cost) || 0), 0);
+  const spent = buyCost + ripExtra;
+  const earned = sales.reduce((a, s) => a + saleNet(s), 0);
+  const net = earned - spent;
+  const isNow = cur === thisMonth;
+
+  const bySource = {};
+  buys.forEach((b) => { bySource[b.source || "Other"] = (bySource[b.source || "Other"] || 0) + (Number(b.cost) || 0); });
+  rips.filter((r) => !r.buyId).forEach((r) => { bySource[r.source || "Other"] = (bySource[r.source || "Other"] || 0) + (Number(r.cost) || 0); });
+  const byChannel = {};
+  sales.forEach((s) => { byChannel[s.channel || "Other"] = (byChannel[s.channel || "Other"] || 0) + saleNet(s); });
+  const ripBySet = {};
+  rips.forEach((r) => { const s = ripSetOf(r, state.buys, sets); ripBySet[s] = (ripBySet[s] || 0) + ripPL(r, state.buys); });
+  const empty = !buys.length && !sales.length && !rips.length;
+
+  return (
+    <div className="cl-stack">
+      <div className="cl-monthnav">
+        <button className="cl-monthnav-btn" disabled={idx >= months.length - 1} onClick={() => setSel(months[idx + 1])} aria-label="Previous month"><ChevronLeft size={18} /></button>
+        <select className="cl-in" value={cur} onChange={(e) => setSel(e.target.value)}>{months.map((k) => <option key={k} value={k}>{monthLabel(k)}{k === thisMonth ? " · so far" : ""}</option>)}</select>
+        <button className="cl-monthnav-btn" disabled={idx <= 0} onClick={() => setSel(months[idx - 1])} aria-label="Next month"><ChevronRight size={18} /></button>
+      </div>
+      <section className="cl-hero">
+        <div className="cl-hero-label">{monthLabel(cur)}{isNow ? " · so far" : ""}</div>
+        <div className={"cl-hero-num holo-text" + (net < 0 ? " neg" : "")}>{fmt(net)}</div>
+        <div className="cl-hero-sub">{empty ? "no activity logged this month" : (net < 0 ? "in the red this month" : "in the green this month") + " · realized"}</div>
+      </section>
+      <div className="cl-grid2"><Stat label="Spent" value={fmt(spent)} tone="out" /><Stat label="Earned (net)" value={fmt(earned)} tone="in" /></div>
+      <div className="cl-inv-summary">
+        <div><div className="cl-row-meta">Buys</div><div className="cl-stat-num">{buys.length}</div></div>
+        <div><div className="cl-row-meta">Sales</div><div className="cl-stat-num">{sales.length}</div></div>
+        <div><div className="cl-row-meta">Rips</div><div className="cl-stat-num">{rips.length}</div></div>
+      </div>
+      {Object.keys(bySource).length > 0 && <Panel title="Where the money went"><BarList data={bySource} tone="out" /></Panel>}
+      {sales.length > 0 && <Panel title="Where it came back"><BarList data={byChannel} tone="in" /></Panel>}
+      {rips.length > 0 && <Panel title="Rip P&L by set"><BarList data={ripBySet} tone="pl" /></Panel>}
+      <Panel title="Month by month">
+        {months.length === 0 ? <Empty>Nothing logged yet.</Empty>
+          : <div className="cl-stack sm">{months.map((k) => { const n = netOf(k); return (
+              <button key={k} className={"cl-month-row" + (k === cur ? " on" : "")} onClick={() => setSel(k)}>
+                <span className="cl-row-title">{monthLabel(k)}{k === thisMonth ? " · so far" : ""}</span>
+                <span className={"cl-money " + (n >= 0 ? "pos" : "neg")}>{fmt(n)}</span>
+              </button>
+            ); })}</div>}
+      </Panel>
     </div>
   );
 }
@@ -1247,6 +1337,15 @@ function Fonts() {
     .cl-gradeest-note{font-size:11px;color:var(--mut);line-height:1.4;}
     .cl-link:disabled{opacity:.45;cursor:default;}
     .cl-note{background:rgba(255,180,84,.08);border:1px solid rgba(255,180,84,.25);color:#ffd9a8;border-radius:12px;padding:11px 13px;font-size:12.5px;line-height:1.45;}
+    .cl-monthnav{display:flex;align-items:center;gap:8px;}
+    .cl-monthnav .cl-in{flex:1;text-align:center;font-family:'Space Grotesk';font-weight:600;}
+    .cl-monthnav-btn{flex:none;display:flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:12px;background:var(--surf);border:1px solid var(--line);color:var(--ink);cursor:pointer;}
+    .cl-monthnav-btn:hover:not(:disabled){border-color:var(--holo2);}
+    .cl-monthnav-btn:disabled{opacity:.35;cursor:default;}
+    .cl-month-row{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;background:var(--surf2);border:1px solid var(--line);border-radius:12px;padding:11px 13px;cursor:pointer;font-family:'Inter';color:var(--ink);}
+    .cl-month-row:hover{border-color:var(--line);background:#222834;}
+    .cl-month-row.on{border-color:var(--holo2);}
+    .cl-month-row .cl-row-title{font-size:13.5px;}
     .cl-panel{background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:14px 14px 16px;}
     .cl-panel-head{display:flex;justify-content:space-between;align-items:center;font-family:'Space Grotesk';font-weight:600;font-size:14px;margin-bottom:12px;}
     .cl-link{background:none;border:none;color:var(--mut);font-size:12px;cursor:pointer;font-family:'Inter';}
