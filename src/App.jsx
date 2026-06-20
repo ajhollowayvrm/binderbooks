@@ -1106,7 +1106,7 @@ function Sales({ state, patch }) {
     }
     const lineSum = order.cards.reduce((a, l) => a + (Number(l.price) || 0) * Math.max(1, Math.round(Number(l.qty) || 1)), 0);
     add({
-      item: order.orderNumber ? "TCGP " + String(order.orderNumber).split("-").pop() : "",
+      item: order.orderNumber ? String(order.orderNumber) : "",
       cards, channel: "TCGplayer",
       price: Number(order.price) || lineSum,
       fees: Number(order.fees) || 0,
