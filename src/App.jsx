@@ -1045,10 +1045,27 @@ function BuyForm({ initial, onSave, onCancel }) {
 }
 
 /* ================================================================== */
+/* TCGPlayer order import: the bookmarklet on an order-details page copies a
+   normalized JSON blob; we parse it into a sale with real per-card lines and
+   reconcile against kept inventory so matched cards flip to Sold. */
+const normKey = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+function matchInvCard(line, avail, used) {
+  const ln = normKey(line.name), lnum = normKey(line.number);
+  if (!ln) return null;
+  return avail.find((c) => !used.has(c.id) && normKey(c.name) === ln && (!lnum || !normKey(c.number) || normKey(c.number) === lnum)) || null;
+}
+function parseTcgpOrder(text) {
+  let o; try { o = JSON.parse(String(text).trim()); } catch { return { error: "That isn't valid JSON — copy the order again with the bookmarklet." }; }
+  if (!o || o.source !== "tcgplayer-order" || !Array.isArray(o.cards) || !o.cards.length) return { error: "Not a TCGP order blob. Click the bookmarklet on an order-details page first." };
+  return { order: o };
+}
+
 function Sales({ state, patch }) {
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState(null);
   const [msg, setMsg] = useState("");
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
   const fileRef = useRef();
   const soldIds = (x) => (x.cards || []).map((c) => c.invId).filter(Boolean);
   const markSold = (inv, ids) => (ids.length ? inv.map((c) => (ids.includes(c.id) ? { ...c, status: "Sold" } : c)) : inv);
@@ -1073,10 +1090,49 @@ function Sales({ state, patch }) {
     }, error: () => setMsg("Couldn't read that file.") });
   };
 
+  const importOrder = () => {
+    const { order, error } = parseTcgpOrder(pasteText);
+    if (error) { setMsg(error); return; }
+    const avail = (state.inventory || []).filter((c) => c.status !== "Sold");
+    const used = new Set();
+    const cards = [];
+    for (const line of order.cards) {
+      const qty = Math.max(1, Math.round(Number(line.qty) || 1));
+      for (let i = 0; i < qty; i++) {
+        const m = matchInvCard(line, avail, used);
+        if (m) { used.add(m.id); cards.push({ id: uid(), invId: m.id, name: m.name, set: m.set, number: m.number, basis: invBasis(m) }); }
+        else cards.push({ id: uid(), name: line.name || "Card", set: line.set || "", number: line.number || "", basis: 0 });
+      }
+    }
+    const lineSum = order.cards.reduce((a, l) => a + (Number(l.price) || 0) * Math.max(1, Math.round(Number(l.qty) || 1)), 0);
+    add({
+      item: order.orderNumber ? "TCGP " + String(order.orderNumber).split("-").pop() : "",
+      cards, channel: "TCGplayer",
+      price: Number(order.price) || lineSum,
+      fees: Number(order.fees) || 0,
+      shipping: Number(order.shipping) || 0,
+      consign: 0,
+      date: cleanDate(order.date),
+    });
+    setMsg(`Imported TCGP order · ${cards.length} card${cards.length === 1 ? "" : "s"}${used.size ? `, ${used.size} matched to inventory` : ""}.`);
+    setPasteText(""); setPasteOpen(false);
+  };
+
   return (
     <div className="cl-stack">
       <Header title="Sales" sub={`Money in · ${fmt(earned)} net`} onAdd={() => { setAdding(!adding); setEditId(null); }} addOpen={adding} />
-      <div className="cl-import"><button className="cl-import-btn" onClick={() => fileRef.current?.click()}><Upload size={14} /> Import CSV (TCGplayer / eBay export)</button><input ref={fileRef} type="file" accept=".csv" hidden onChange={onFile} />{msg && <div className="cl-import-msg">{msg}</div>}</div>
+      <div className="cl-import">
+        <button className="cl-import-btn" onClick={() => fileRef.current?.click()}><Upload size={14} /> Import CSV (TCGplayer / eBay export)</button>
+        <input ref={fileRef} type="file" accept=".csv" hidden onChange={onFile} />
+        <button className="cl-import-btn" onClick={() => { setPasteOpen(!pasteOpen); setMsg(""); }} style={{ marginTop: 8 }}><Upload size={14} /> Paste TCGP order (from bookmarklet)</button>
+        {pasteOpen && (
+          <div style={{ marginTop: 8 }}>
+            <textarea className="cl-in" rows={4} placeholder="Click the bookmarklet on a TCGplayer order-details page, then paste here…" value={pasteText} onChange={(e) => setPasteText(e.target.value)} style={{ width: "100%", resize: "vertical", fontFamily: "ui-monospace,monospace", fontSize: 12 }} />
+            <div style={{ marginTop: 6 }}><button className="cl-add-card" onClick={importOrder} disabled={!pasteText.trim()}>Import order</button></div>
+          </div>
+        )}
+        {msg && <div className="cl-import-msg">{msg}</div>}
+      </div>
       {adding && <SaleForm inventory={state.inventory} onSave={add} onCancel={() => setAdding(false)} />}
       {state.sales.length === 0 && !adding && <Empty>No sales yet.</Empty>}
       <div className="cl-stack sm">
