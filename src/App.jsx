@@ -353,6 +353,15 @@ const ripSetOf = (r, buys, sets) => {
 };
 const saleNet = (s) => (Number(s.price) || 0) - (Number(s.fees) || 0) - (Number(s.shipping) || 0) - (Number(s.consign) || 0);
 const saleBasis = (s) => (s.cards || []).reduce((a, c) => a + (Number(c.basis) || 0), 0);
+// Dedup signature for a sale. Orders key off the TCGplayer order suffix (matches whether
+// the ref was imported as "TCGP 5236F" or the full id "62955D06-88B131-5236F"); rows with no
+// order # fall back to a channel/date/price/title signature so CSV reuploads stay idempotent.
+const orderKey = (item) => String(item || "").replace(/^tcgp\s+/i, "").trim().split("-").pop().toLowerCase();
+const saleSig = (s) => {
+  const k = orderKey(s.item);
+  if (k) return "o:" + k;
+  return "e:" + [s.channel || "", s.date || "", Number(s.price) || 0, (s.cards || [])[0]?.name || ""].join("|").toLowerCase();
+};
 // split one sale's net across sets: explicit card set, else the inventory
 // card it came from, else a set name in the card/order text. Net is weighted
 // by basis when tracked, evenly otherwise.
@@ -1066,6 +1075,8 @@ function Sales({ state, patch }) {
   const [msg, setMsg] = useState("");
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
+  const [q, setQ] = useState("");
+  const [bare, setBare] = useState(false);
   const fileRef = useRef();
   const soldIds = (x) => (x.cards || []).map((c) => c.invId).filter(Boolean);
   const markSold = (inv, ids) => (ids.length ? inv.map((c) => (ids.includes(c.id) ? { ...c, status: "Sold" } : c)) : inv);
@@ -1073,18 +1084,29 @@ function Sales({ state, patch }) {
   const upd = (x) => { patch((s) => ({ sales: s.sales.map((y) => (y.id === x.id ? { ...y, ...x, seed: false } : y)), inventory: markSold(s.inventory, soldIds(x)) })); setEditId(null); };
   const del = (id) => patch((s) => ({ sales: s.sales.filter((x) => x.id !== id) }));
   const earned = state.sales.reduce((s, x) => s + saleNet(x), 0);
-  const sorted = [...state.sales].sort(byDateDesc);
+  const blob = (x) => [x.item, x.channel, x.date, (x.cards || []).map((c) => `${c.name} ${c.set || ""} ${c.number || ""}`).join(" "), x.price, saleNet(x)].join(" ").toLowerCase();
+  const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const noCards = (x) => !(x.cards || []).length;
+  const bareCount = state.sales.filter(noCards).length;
+  const sorted = [...state.sales].sort(byDateDesc).filter((x) => (!bare || noCards(x)) && terms.every((t) => blob(x).includes(t)));
 
   const onFile = (e) => {
     const file = e.target.files?.[0]; if (!file) return;
     Papa.parse(file, { header: true, skipEmptyLines: true, complete: (res) => {
+      const seen = new Set(state.sales.map(saleSig).filter(Boolean));
+      let skipped = 0;
       const mapped = res.data.map((r) => {
         const total = parseFloat(r["Total Amt"] ?? r["Total"] ?? r["Item Subtotal"] ?? 0);
         if (!total) return null;
         const title = r["Item Title"] || "";
-        return { id: uid(), item: r["Order #"] ? "TCGP " + String(r["Order #"]).split("-").pop() : "", cards: title ? [{ id: uid(), name: title, basis: 0 }] : [], channel: r["Order #"] ? "TCGplayer" : "eBay", price: total, fees: 0, shipping: 0, consign: 0, date: cleanDate(r["Order Date"] || r["Sale Date"] || "") };
+        const sale = { id: uid(), item: r["Order #"] ? "TCGP " + String(r["Order #"]).split("-").pop() : "", cards: title ? [{ id: uid(), name: title, basis: 0 }] : [], channel: r["Order #"] ? "TCGplayer" : "eBay", price: total, fees: 0, shipping: 0, consign: 0, date: cleanDate(r["Order Date"] || r["Sale Date"] || "") };
+        const sig = saleSig(sale);
+        if (sig && seen.has(sig)) { skipped++; return null; }
+        if (sig) seen.add(sig);
+        return sale;
       }).filter(Boolean);
-      if (mapped.length) { patch((s) => ({ sales: [...mapped, ...s.sales] })); setMsg(`Imported ${mapped.length} orders.`); }
+      if (mapped.length) { patch((s) => ({ sales: [...mapped, ...s.sales] })); setMsg(`Imported ${mapped.length} new order${mapped.length === 1 ? "" : "s"}${skipped ? `, skipped ${skipped} already in your sales` : ""}.`); }
+      else if (skipped) setMsg(`Nothing new — all ${skipped} order${skipped === 1 ? "" : "s"} are already in your sales.`);
       else setMsg("No rows with a total amount found — check the export format.");
       if (fileRef.current) fileRef.current.value = "";
     }, error: () => setMsg("Couldn't read that file.") });
@@ -1135,6 +1157,16 @@ function Sales({ state, patch }) {
       </div>
       {adding && <SaleForm inventory={state.inventory} onSave={add} onCancel={() => setAdding(false)} />}
       {state.sales.length === 0 && !adding && <Empty>No sales yet.</Empty>}
+      {state.sales.length > 0 && (
+        <div className="cl-salesearch">
+          <Search size={15} className="cl-salesearch-ic" />
+          <input className="cl-in bare" placeholder="Search order #, card, channel, date, amount…" value={q} onChange={(e) => setQ(e.target.value)} />
+          {q && <button className="cl-salesearch-x" onClick={() => setQ("")}><X size={14} /></button>}
+        </div>
+      )}
+      {bareCount > 0 && <div className="cl-pills"><button className={"cl-pill" + (bare ? " on" : "")} onClick={() => setBare(!bare)}>Needs cards ({bareCount})</button></div>}
+      {(q || bare) && <div className="cl-import-msg">Showing {sorted.length} of {state.sales.length} sales</div>}
+      {state.sales.length > 0 && sorted.length === 0 && <Empty>{bare ? "Every sale has card lines attached — nothing left to enrich." : `No sales match “${q}”.`}</Empty>}
       <div className="cl-stack sm">
         {sorted.map((x) => editId === x.id
           ? <SaleForm key={x.id} initial={x} inventory={state.inventory} onSave={upd} onCancel={() => setEditId(null)} />
@@ -1468,6 +1500,11 @@ function Fonts() {
     .cl-empty{background:var(--surf);border:1px dashed var(--line);border-radius:12px;padding:18px;text-align:center;font-size:12.5px;color:var(--mut);line-height:1.5;}
     .cl-search{display:flex;gap:8px;}
     .cl-search-btn{background:var(--surf2);border:1px solid var(--line);color:var(--ink);border-radius:10px;width:42px;display:grid;place-items:center;cursor:pointer;flex:none;}
+    .cl-salesearch{display:flex;align-items:center;gap:6px;background:#10141b;border:1px solid var(--line);border-radius:9px;padding:0 9px;}
+    .cl-salesearch:focus-within{border-color:#a78bfa;}
+    .cl-salesearch-ic{color:var(--mut);flex:none;}
+    .cl-salesearch .cl-in.bare{flex:1;padding:10px 0;}
+    .cl-salesearch-x{background:none;border:none;color:var(--mut);cursor:pointer;display:grid;place-items:center;padding:4px;flex:none;}
     .cl-cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
     .cl-lk{background:var(--surf);border:1px solid var(--line);border-radius:13px;overflow:hidden;display:flex;flex-direction:column;}
     .cl-lk-img{width:100%;aspect-ratio:3/4;object-fit:contain;background:#0c0f15;padding:8px;}
