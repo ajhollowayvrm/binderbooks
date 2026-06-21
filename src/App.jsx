@@ -356,7 +356,12 @@ const saleBasis = (s) => (s.cards || []).reduce((a, c) => a + (Number(c.basis) |
 // Dedup signature for a sale. Orders key off the TCGplayer order suffix (matches whether
 // the ref was imported as "TCGP 5236F" or the full id "62955D06-88B131-5236F"); rows with no
 // order # fall back to a channel/date/price/title signature so CSV reuploads stay idempotent.
-const orderKey = (item) => String(item || "").replace(/^tcgp\s+/i, "").trim().split("-").pop().toLowerCase();
+// Some imports append a buyer name with an em-dash ("TCGP 5236F — Lee", sometimes mojibake'd
+// to "â€”"); strip that off first so both spellings of the same order collapse to one key.
+const orderKey = (item) => {
+  const ref = String(item || "").replace(/^tcgp\s+/i, "").trim().split(/\s+(?:[-–—]|â€”)\s+/)[0].trim();
+  return ref.split("-").pop().trim().toLowerCase();
+};
 const saleSig = (s) => {
   const k = orderKey(s.item);
   if (k) return "o:" + k;
@@ -1099,7 +1104,7 @@ function Sales({ state, patch }) {
   const mergeDupes = () => {
     const groups = new Map();
     state.sales.forEach((x) => { const k = saleSig(x); const g = groups.get(k); g ? g.push(x) : groups.set(k, [x]); });
-    const score = (x) => (x.cards?.length || 0) * 100 + ((Number(x.fees) || 0) > 0 ? 4 : 0) + ((Number(x.shipping) || 0) > 0 ? 2 : 0) + (x.item ? 1 : 0);
+    const score = (x) => (x.cards?.length || 0) * 1000 + ((Number(x.fees) || 0) > 0 ? 40 : 0) + ((Number(x.shipping) || 0) > 0 ? 20 : 0) + Math.min(String(x.item || "").length, 99);
     const dropIds = new Set();
     for (const g of groups.values()) {
       if (g.length < 2) continue;
