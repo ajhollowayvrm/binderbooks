@@ -1076,7 +1076,7 @@ function Sales({ state, patch }) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [q, setQ] = useState("");
-  const [bare, setBare] = useState(false);
+  const [view, setView] = useState("all"); // all | bare | dups
   const fileRef = useRef();
   const soldIds = (x) => (x.cards || []).map((c) => c.invId).filter(Boolean);
   const markSold = (inv, ids) => (ids.length ? inv.map((c) => (ids.includes(c.id) ? { ...c, status: "Sold" } : c)) : inv);
@@ -1088,7 +1088,30 @@ function Sales({ state, patch }) {
   const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const noCards = (x) => !(x.cards || []).length;
   const bareCount = state.sales.filter(noCards).length;
-  const sorted = [...state.sales].sort(byDateDesc).filter((x) => (!bare || noCards(x)) && terms.every((t) => blob(x).includes(t)));
+  const sigCounts = new Map();
+  state.sales.forEach((x) => { const k = saleSig(x); sigCounts.set(k, (sigCounts.get(k) || 0) + 1); });
+  const isDup = (x) => sigCounts.get(saleSig(x)) > 1;
+  const dupExtra = [...sigCounts.values()].reduce((a, c) => a + (c - 1), 0);
+  const sorted = [...state.sales]
+    .filter((x) => (view !== "bare" || noCards(x)) && (view !== "dups" || isDup(x)) && terms.every((t) => blob(x).includes(t)))
+    .sort(view === "dups" ? (a, b) => saleSig(a).localeCompare(saleSig(b)) || byDateDesc(a, b) : byDateDesc);
+
+  const mergeDupes = () => {
+    const groups = new Map();
+    state.sales.forEach((x) => { const k = saleSig(x); const g = groups.get(k); g ? g.push(x) : groups.set(k, [x]); });
+    const score = (x) => (x.cards?.length || 0) * 100 + ((Number(x.fees) || 0) > 0 ? 4 : 0) + ((Number(x.shipping) || 0) > 0 ? 2 : 0) + (x.item ? 1 : 0);
+    const dropIds = new Set();
+    for (const g of groups.values()) {
+      if (g.length < 2) continue;
+      const best = g.reduce((a, b) => (score(b) > score(a) ? b : a));
+      g.forEach((x) => { if (x.id !== best.id) dropIds.add(x.id); });
+    }
+    if (!dropIds.size) { setMsg("No duplicate orders found."); return; }
+    if (typeof window !== "undefined" && !window.confirm(`Remove ${dropIds.size} duplicate sale${dropIds.size === 1 ? "" : "s"}, keeping the most complete copy of each order?`)) return;
+    patch((s) => ({ sales: s.sales.filter((x) => !dropIds.has(x.id)) }));
+    setView("all");
+    setMsg(`Removed ${dropIds.size} duplicate sale${dropIds.size === 1 ? "" : "s"}.`);
+  };
 
   const onFile = (e) => {
     const file = e.target.files?.[0]; if (!file) return;
@@ -1164,9 +1187,15 @@ function Sales({ state, patch }) {
           {q && <button className="cl-salesearch-x" onClick={() => setQ("")}><X size={14} /></button>}
         </div>
       )}
-      {bareCount > 0 && <div className="cl-pills"><button className={"cl-pill" + (bare ? " on" : "")} onClick={() => setBare(!bare)}>Needs cards ({bareCount})</button></div>}
-      {(q || bare) && <div className="cl-import-msg">Showing {sorted.length} of {state.sales.length} sales</div>}
-      {state.sales.length > 0 && sorted.length === 0 && <Empty>{bare ? "Every sale has card lines attached — nothing left to enrich." : `No sales match “${q}”.`}</Empty>}
+      {(bareCount > 0 || dupExtra > 0) && (
+        <div className="cl-pills">
+          {bareCount > 0 && <button className={"cl-pill" + (view === "bare" ? " on" : "")} onClick={() => setView(view === "bare" ? "all" : "bare")}>Needs cards ({bareCount})</button>}
+          {dupExtra > 0 && <button className={"cl-pill" + (view === "dups" ? " on" : "")} onClick={() => setView(view === "dups" ? "all" : "dups")}>Duplicates ({dupExtra})</button>}
+        </div>
+      )}
+      {view === "dups" && dupExtra > 0 && <button className="cl-import-btn" onClick={mergeDupes}><Trash2 size={14} /> Merge {dupExtra} duplicate{dupExtra === 1 ? "" : "s"} — keep the most complete copy of each</button>}
+      {(q || view !== "all") && <div className="cl-import-msg">Showing {sorted.length} of {state.sales.length} sales</div>}
+      {state.sales.length > 0 && sorted.length === 0 && <Empty>{view === "bare" ? "Every sale has card lines attached — nothing left to enrich." : view === "dups" ? "No duplicate orders found." : `No sales match “${q}”.`}</Empty>}
       <div className="cl-stack sm">
         {sorted.map((x) => editId === x.id
           ? <SaleForm key={x.id} initial={x} inventory={state.inventory} onSave={upd} onCancel={() => setEditId(null)} />
