@@ -367,6 +367,13 @@ const saleSig = (s) => {
   if (k) return "o:" + k;
   return "e:" + [s.channel || "", s.date || "", Number(s.price) || 0, (s.cards || [])[0]?.name || ""].join("|").toLowerCase();
 };
+// Re-point an existing sale ref at the full order number, carrying over any buyer name
+// the old ref had ("TCGP 3998E — Lee" / "TCGP 3998E · Lee" -> "62955D06-…-3998E — Lee").
+const refBuyer = (item) => {
+  const parts = String(item || "").replace(/^tcgp\s+/i, "").split(/\s+(?:[·\-–—]|â€”)\s+/);
+  return parts.length > 1 ? parts.slice(1).join(" — ").trim() : "";
+};
+const mergeRef = (oldItem, fullNo) => { const b = refBuyer(oldItem); return b ? `${fullNo} — ${b}` : fullNo; };
 // split one sale's net across sets: explicit card set, else the inventory
 // card it came from, else a set name in the card/order text. Net is weighted
 // by basis when tracked, evenly otherwise.
@@ -1121,20 +1128,37 @@ function Sales({ state, patch }) {
   const onFile = (e) => {
     const file = e.target.files?.[0]; if (!file) return;
     Papa.parse(file, { header: true, skipEmptyLines: true, complete: (res) => {
-      const seen = new Set(state.sales.map(saleSig).filter(Boolean));
+      const bySig = new Map();
+      state.sales.forEach((x) => { const k = saleSig(x); if (k && !bySig.has(k)) bySig.set(k, x); });
+      const added = [], usedSig = new Set();
+      const upgrades = new Map(); // existing sale id -> patched fields
       let skipped = 0;
-      const mapped = res.data.map((r) => {
+      for (const r of res.data) {
         const total = parseFloat(r["Total Amt"] ?? r["Total"] ?? r["Item Subtotal"] ?? 0);
-        if (!total) return null;
+        if (!total) continue;
         const title = r["Item Title"] || "";
-        const sale = { id: uid(), item: r["Order #"] ? "TCGP " + String(r["Order #"]).split("-").pop() : "", cards: title ? [{ id: uid(), name: title, basis: 0 }] : [], channel: r["Order #"] ? "TCGplayer" : "eBay", price: total, fees: 0, shipping: 0, consign: 0, date: cleanDate(r["Order Date"] || r["Sale Date"] || "") };
+        const orderNo = r["Order #"] ? String(r["Order #"]).trim() : "";
+        const sale = { id: uid(), item: orderNo, cards: title ? [{ id: uid(), name: title, basis: 0 }] : [], channel: orderNo ? "TCGplayer" : "eBay", price: total, fees: 0, shipping: 0, consign: 0, date: cleanDate(r["Order Date"] || r["Sale Date"] || "") };
         const sig = saleSig(sale);
-        if (sig && seen.has(sig)) { skipped++; return null; }
-        if (sig) seen.add(sig);
-        return sale;
-      }).filter(Boolean);
-      if (mapped.length) { patch((s) => ({ sales: [...mapped, ...s.sales] })); setMsg(`Imported ${mapped.length} new order${mapped.length === 1 ? "" : "s"}${skipped ? `, skipped ${skipped} already in your sales` : ""}.`); }
-      else if (skipped) setMsg(`Nothing new — all ${skipped} order${skipped === 1 ? "" : "s"} are already in your sales.`);
+        const match = sig ? bySig.get(sig) : null;
+        if (match) {
+          // existing order: adopt the full order number (keep buyer name) and drop the starter tag
+          const fields = {};
+          if (orderNo) { const ni = mergeRef(match.item, orderNo); if (ni !== match.item) fields.item = ni; }
+          if (match.seed) fields.seed = false;
+          if (Object.keys(fields).length && !upgrades.has(match.id)) upgrades.set(match.id, fields);
+          else skipped++;
+        } else if (sig && !usedSig.has(sig)) { usedSig.add(sig); added.push(sale); }
+        else skipped++;
+      }
+      if (added.length || upgrades.size) {
+        patch((s) => ({ sales: [...added, ...s.sales.map((x) => (upgrades.has(x.id) ? { ...x, ...upgrades.get(x.id) } : x))] }));
+        const parts = [];
+        if (added.length) parts.push(`${added.length} new`);
+        if (upgrades.size) parts.push(`${upgrades.size} given full order numbers`);
+        if (skipped) parts.push(`${skipped} already current`);
+        setMsg("Import: " + parts.join(", ") + ".");
+      } else if (skipped) setMsg(`Nothing to update — all ${skipped} order${skipped === 1 ? "" : "s"} are already current.`);
       else setMsg("No rows with a total amount found — check the export format.");
       if (fileRef.current) fileRef.current.value = "";
     }, error: () => setMsg("Couldn't read that file.") });
@@ -1206,7 +1230,7 @@ function Sales({ state, patch }) {
           ? <SaleForm key={x.id} initial={x} inventory={state.inventory} onSave={upd} onCancel={() => setEditId(null)} />
           : (() => { const net = saleNet(x); const ded = (Number(x.fees) || 0) + (Number(x.shipping) || 0) + (Number(x.consign) || 0); const cards = x.cards || []; const title = cards.length ? cards[0].name + (cards.length > 1 ? ` +${cards.length - 1}` : "") : (x.item || "Sale"); const basis = saleBasis(x); const ref = cards.length && x.item ? ` · ${x.item}` : ""; return (
               <div key={x.id} className="cl-row">
-                <div className="cl-row-main"><div className="cl-row-title">{title}{x.seed && <span className="cl-seed">starter</span>}</div><div className="cl-row-meta"><span className="cl-chip">{x.channel}</span> {x.date}{ref}{ded > 0 && ` · −${ded.toFixed(2)} fees`}</div></div>
+                <div className="cl-row-main"><div className="cl-row-title">{title}</div><div className="cl-row-meta"><span className="cl-chip">{x.channel}</span> {x.date}{ref}{ded > 0 && ` · −${ded.toFixed(2)} fees`}</div></div>
                 <div className="cl-card-num"><div className="cl-money in">{fmt(net)}</div>{basis > 0 ? <div className="cl-row-meta">profit {fmt(net - basis)}</div> : null}</div>
                 <button className="cl-x" onClick={() => { setEditId(x.id); setAdding(false); }}><Pencil size={13} /></button>
                 <button className="cl-x" onClick={() => del(x.id)}><Trash2 size={13} /></button>
