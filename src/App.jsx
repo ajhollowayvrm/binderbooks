@@ -1434,7 +1434,23 @@ function BarList({ data, tone }) {
 }
 function numStr(n) { return n ? String(n) : ""; }
 function today() { return new Date().toISOString().slice(0, 10); }
-function cleanDate(s) { const d = new Date(String(s).replace(/^[A-Za-z]+,\s*/, "")); return isNaN(d) ? today() : d.toISOString().slice(0, 10); }
+// Normalise a date string to YYYY-MM-DD. We parse the formats TCGplayer/eBay
+// actually emit by hand instead of leaning on new Date(): the CSV export's
+// "Tuesday, 09 June 2026" (day-first) only parses in V8, so Firefox/Safari were
+// silently falling back to today() for every imported order. Building the string
+// from calendar parts also avoids the UTC round-trip shifting the day.
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const ymd = (y, m, d) => `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+function cleanDate(s) {
+  const str = String(s).replace(/^[A-Za-z]+,\s*/, "").trim(); // drop leading weekday
+  let m;
+  if ((m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) return ymd(+m[1], +m[2], +m[3]); // ISO
+  if ((m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/))) return ymd(+m[3], +m[1], +m[2]); // M/D/YYYY (bookmarklet)
+  if ((m = str.match(/^(\d{1,2})\s+([A-Za-z]+)\.?\s+(\d{4})/)) && MONTHS[m[2].slice(0, 3).toLowerCase()]) return ymd(+m[3], MONTHS[m[2].slice(0, 3).toLowerCase()], +m[1]); // DD Month YYYY (CSV)
+  if ((m = str.match(/^([A-Za-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})/)) && MONTHS[m[1].slice(0, 3).toLowerCase()]) return ymd(+m[3], MONTHS[m[1].slice(0, 3).toLowerCase()], +m[2]); // Month DD, YYYY
+  const d = new Date(str);
+  return isNaN(d) ? today() : ymd(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
 
 function Fonts() {
   return (<style>{`
