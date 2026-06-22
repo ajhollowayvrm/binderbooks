@@ -1142,9 +1142,17 @@ function Sales({ state, patch }) {
         const sig = saleSig(sale);
         const match = sig ? bySig.get(sig) : null;
         if (match) {
-          // existing order: adopt the full order number (keep buyer name) and drop the starter tag
+          // existing order: the upload wins — overwrite with its values (price, date,
+          // channel, full order number) and drop the starter tag. We keep the existing
+          // id (so references survive) and don't touch fees/shipping/consign or card
+          // lines the user entered by hand, since the CSV doesn't carry those.
           const fields = {};
-          if (orderNo) { const ni = mergeRef(match.item, orderNo); if (ni !== match.item) fields.item = ni; }
+          const setIf = (k, v) => { if (v !== undefined && match[k] !== v) fields[k] = v; };
+          if (orderNo) setIf("item", mergeRef(match.item, orderNo));
+          setIf("date", sale.date);
+          setIf("price", sale.price);
+          setIf("channel", sale.channel);
+          if (sale.cards.length && !(match.cards || []).length) fields.cards = sale.cards;
           if (match.seed) fields.seed = false;
           if (Object.keys(fields).length && !upgrades.has(match.id)) upgrades.set(match.id, fields);
           else skipped++;
@@ -1155,7 +1163,7 @@ function Sales({ state, patch }) {
         patch((s) => ({ sales: [...added, ...s.sales.map((x) => (upgrades.has(x.id) ? { ...x, ...upgrades.get(x.id) } : x))] }));
         const parts = [];
         if (added.length) parts.push(`${added.length} new`);
-        if (upgrades.size) parts.push(`${upgrades.size} given full order numbers`);
+        if (upgrades.size) parts.push(`${upgrades.size} updated`);
         if (skipped) parts.push(`${skipped} already current`);
         setMsg("Import: " + parts.join(", ") + ".");
       } else if (skipped) setMsg(`Nothing to update — all ${skipped} order${skipped === 1 ? "" : "s"} are already current.`);
