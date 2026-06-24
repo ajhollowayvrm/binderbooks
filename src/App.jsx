@@ -338,6 +338,7 @@ const buyLineSet = (b) => { const s = [...new Set((b?.lines || []).map((l) => l.
 // else a set name found in the product text, else the majority set of the hits
 const ripSetOf = (r, buys, sets) => {
   if (r.set) return r.set;
+  if (r.setPacks && r.setPacks.length) { const sp = [...r.setPacks].sort((a, b) => (Number(b.packs) || 0) - (Number(a.packs) || 0))[0]; if (sp?.set) return sp.set; }
   const b = r.buyId ? (buys || []).find((x) => x.id === r.buyId) : null;
   const fromLines = buyLineSet(b);
   if (fromLines) return fromLines;
@@ -350,6 +351,30 @@ const ripSetOf = (r, buys, sets) => {
   (r.hits || []).forEach((h) => { if (h.set) counts[h.set] = (counts[h.set] || 0) + 1; });
   const top = Object.entries(counts).sort((a, b2) => b2[1] - a[1])[0];
   return top ? top[0] : "Unknown";
+};
+// a rip can span several sets (a mixed box: 6 Perfect Order + 2 Phantasmal Flames).
+// setPacks holds the per-set pack counts; older rips fall back to their single set.
+const ripSetPacks = (r) => (r.setPacks && r.setPacks.length ? r.setPacks : (r.set ? [{ set: r.set, packs: Number(r.packs) || 0 }] : []));
+// per-set P&L for a rip. Value is bucketed by each hit's own set; the box cost is
+// split across sets weighted by that pulled value (the user's pick), so the set you
+// hit big in carries more of the cost. Before any value is logged we fall back to
+// splitting cost by pack count, then to the rip's single resolved set. The pieces
+// always sum back to ripPL.
+const ripSetSplit = (r, buys, sets) => {
+  const cost = ripCostOf(r, buys);
+  const valBySet = {};
+  (r.hits || []).forEach((h) => { const s = h.set || ripSetOf(r, buys, sets); valBySet[s] = (valBySet[s] || 0) + (Number(h.value) || 0); });
+  const totalVal = Object.values(valBySet).reduce((a, b) => a + b, 0);
+  const out = {};
+  if (totalVal > 0) {
+    Object.entries(valBySet).forEach(([s, v]) => { out[s] = v - cost * (v / totalVal); });
+  } else {
+    const packs = ripSetPacks(r);
+    const tot = packs.reduce((a, p) => a + (Number(p.packs) || 0), 0);
+    if (tot > 0) packs.forEach((p) => { out[p.set] = (out[p.set] || 0) - cost * ((Number(p.packs) || 0) / tot); });
+    else out[ripSetOf(r, buys, sets)] = -cost;
+  }
+  return out;
 };
 const saleNet = (s) => (Number(s.price) || 0) - (Number(s.fees) || 0) - (Number(s.shipping) || 0) - (Number(s.consign) || 0);
 const saleBasis = (s) => (s.cards || []).reduce((a, c) => a + (Number(c.basis) || 0), 0);
@@ -610,7 +635,7 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync, resolv
   }));
   const ripsRanked = [...state.rips].sort((a, b) => ripPL(b, state.buys) - ripPL(a, state.buys));
   const ripBySet = {};
-  state.rips.forEach((r) => { const s = ripSetOf(r, state.buys, sets); ripBySet[s] = (ripBySet[s] || 0) + ripPL(r, state.buys); });
+  state.rips.forEach((r) => Object.entries(ripSetSplit(r, state.buys, sets)).forEach(([k, v]) => { ripBySet[k] = (ripBySet[k] || 0) + v; }));
   const salesBySet = {};
   state.sales.forEach((s) => Object.entries(saleSetSplit(s, state.inventory, sets)).forEach(([k, v]) => { salesBySet[k] = (salesBySet[k] || 0) + v; }));
   const hasFees = state.sales.some((s) => s.fees || s.shipping || s.consign);
@@ -706,7 +731,7 @@ function Monthly({ state }) {
   const byChannel = {};
   sales.forEach((s) => { byChannel[s.channel || "Other"] = (byChannel[s.channel || "Other"] || 0) + saleNet(s); });
   const ripBySet = {};
-  rips.forEach((r) => { const s = ripSetOf(r, state.buys, sets); ripBySet[s] = (ripBySet[s] || 0) + ripPL(r, state.buys); });
+  rips.forEach((r) => Object.entries(ripSetSplit(r, state.buys, sets)).forEach(([k, v]) => { ripBySet[k] = (ripBySet[k] || 0) + v; }));
   const empty = !buys.length && !sales.length && !rips.length;
 
   return (
@@ -804,10 +829,13 @@ function Rips({ state, patch }) {
       <div className="cl-stack">
         {sorted.map((r) => {
           const pl = ripPL(r, state.buys); const isOpen = open === r.id;
+          const packLabel = r.setPacks && r.setPacks.length
+            ? r.setPacks.map((p) => `${p.packs || "?"} ${p.set || "?"}`).join(" + ")
+            : (r.packs ? `${r.packs} packs` : "");
           return (
             <div key={r.id} className="cl-card">
               <button className="cl-card-head" onClick={() => setOpen(isOpen ? null : r.id)}>
-                <div className="cl-row-main"><div className="cl-row-title">{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />} {r.product || "Rip"}</div><div className="cl-row-meta">{r.packs ? `${r.packs} packs · ` : ""}{r.source || "—"} · {(r.hits || []).length} hits · {r.date}</div></div>
+                <div className="cl-row-main"><div className="cl-row-title">{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />} {r.product || "Rip"}</div><div className="cl-row-meta">{packLabel ? `${packLabel} · ` : ""}{r.source || "—"} · {(r.hits || []).length} hits · {r.date}</div></div>
                 <div className="cl-card-num"><div className={"cl-money " + (pl >= 0 ? "pos" : "neg")}>{fmt(pl)}</div><div className="cl-row-meta">{r.buyId ? "from buy" : "cost"} {fmt(ripCostOf(r, state.buys))}</div></div>
               </button>
               {isOpen && <div className="cl-card-body">
@@ -827,21 +855,48 @@ function Rips({ state, patch }) {
 }
 function RipForm({ buys, onSave, onCancel }) {
   const sets = useSets();
-  const [f, setF] = useState({ product: "", set: "", packs: "", cost: "", source: "Gamecraft", date: today(), buyId: "" });
+  const [f, setF] = useState({ product: "", cost: "", source: "Gamecraft", date: today(), buyId: "" });
+  const [lines, setLines] = useState([{ set: "", packs: "" }]);
   const opts = [...(buys || [])].sort((a, b) => (b.category === "Sealed") - (a.category === "Sealed"));
+  const setLine = (i, k, v) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
+  const addLine = () => setLines((ls) => [...ls, { set: "", packs: "" }]);
+  const delLine = (i) => setLines((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : ls));
   const linkBuy = (id) => {
     const b = (buys || []).find((x) => x.id === id);
     if (!b) return setF({ ...f, buyId: "" });
-    setF({ ...f, buyId: id, cost: String(b.cost), source: b.source, product: f.product || b.item, set: f.set || buyLineSet(b) });
+    setF({ ...f, buyId: id, cost: String(b.cost), source: b.source, product: f.product || b.item });
+    const bs = buyLineSet(b);
+    if (bs) setLines((ls) => (ls[0] && !ls[0].set ? [{ ...ls[0], set: bs }, ...ls.slice(1)] : ls));
+  };
+  const save = () => {
+    const clean = lines.map((l) => ({ set: l.set, packs: Number(l.packs) || 0 })).filter((l) => l.set || l.packs);
+    const totalPacks = clean.reduce((a, l) => a + l.packs, 0);
+    const primary = [...clean].sort((a, b) => b.packs - a.packs)[0];
+    onSave({
+      product: f.product, set: primary ? primary.set : "", packs: totalPacks,
+      setPacks: clean.length > 1 ? clean : undefined,
+      cost: f.buyId ? 0 : Number(f.cost) || 0, source: f.source, date: f.date, buyId: f.buyId || null,
+    });
   };
   return (
     <Form>
-      <Field label="Product"><input className="cl-in" placeholder="Chaos Rising booster" value={f.product} onChange={(e) => setF({ ...f, product: e.target.value })} /></Field>
-      <Field label="Set (for analytics)"><SetPicker sets={sets} value={f.set} onChange={(v) => setF({ ...f, set: v })} allowEmpty /></Field>
+      <Field label="Product"><input className="cl-in" placeholder="Mega Zygarde EX Box" value={f.product} onChange={(e) => setF({ ...f, product: e.target.value })} /></Field>
+      <Field label="Sets in this rip (add a row per set — packs split the cost by what you pull)">
+        <div className="cl-stack sm">
+          {lines.map((l, i) => (
+            <div key={i} className="cl-setline">
+              <SetPicker sets={sets} value={l.set} onChange={(v) => setLine(i, "set", v)} allowEmpty />
+              <input className="cl-in cl-setline-packs" inputMode="numeric" placeholder="Packs" value={l.packs} onChange={(e) => setLine(i, "packs", e.target.value)} />
+              {lines.length > 1 && <button className="cl-x" onClick={() => delLine(i)}><X size={13} /></button>}
+            </div>
+          ))}
+          <button className="cl-add-hit" onClick={addLine}><Plus size={14} /> Add another set</button>
+        </div>
+      </Field>
       {(buys || []).length > 0 && <Field label="Ripped from a buy (optional — avoids double-counting cost)"><select className="cl-in" value={f.buyId} onChange={(e) => linkBuy(e.target.value)}><option value="">— not linked / enter new cost —</option>{opts.map((b) => <option key={b.id} value={b.id}>{b.item} · {b.source} · {fmt(Number(b.cost) || 0)}</option>)}</select></Field>}
-      <div className="cl-grid2"><Field label="Packs"><input className="cl-in" inputMode="numeric" placeholder="5" value={f.packs} onChange={(e) => setF({ ...f, packs: e.target.value })} /></Field><Field label={f.buyId ? "Cost (from buy)" : "Total cost"}><MoneyInput value={f.cost} onChange={(v) => !f.buyId && setF({ ...f, cost: v })} /></Field></div>
-      <div className="cl-grid2"><Field label="Bought from"><Select opts={SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field><Field label="Date"><input className="cl-in" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field></div>
-      <Actions onCancel={onCancel} label="Save rip" disabled={!f.product || (!f.buyId && !f.cost)} onSave={() => onSave({ product: f.product, set: f.set, packs: Number(f.packs) || 0, cost: f.buyId ? 0 : Number(f.cost) || 0, source: f.source, date: f.date, buyId: f.buyId || null })} />
+      <div className="cl-grid2"><Field label={f.buyId ? "Cost (from buy)" : "Total cost"}><MoneyInput value={f.cost} onChange={(v) => !f.buyId && setF({ ...f, cost: v })} /></Field><Field label="Date"><input className="cl-in" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field></div>
+      <Field label="Bought from"><Select opts={SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field>
+      <Actions onCancel={onCancel} label="Save rip" disabled={!f.product || (!f.buyId && !f.cost)} onSave={save} />
     </Form>
   );
 }
@@ -1490,6 +1545,9 @@ function Fonts() {
     .cl-hero-sub{font-size:12.5px;color:var(--mut);}
     .cl-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
     .cl-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
+    .cl-setline{display:flex;gap:8px;align-items:center;}
+    .cl-setline>:first-child{flex:1;min-width:0;}
+    .cl-setline-packs{width:78px;flex:none;}
     .cl-stat{background:var(--surf);border:1px solid var(--line);border-radius:14px;padding:14px;}
     .cl-stat-label{font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em;}
     .cl-stat-num{font-family:'Space Grotesk';font-weight:600;font-size:24px;margin-top:4px;font-variant-numeric:tabular-nums;letter-spacing:-.02em;}
