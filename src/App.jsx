@@ -122,7 +122,7 @@ const slimCard = (c) => ({
    Nov 2025, so cards missing a price get TCGplayer market values from the
    tcgcsv.com dump, proxied through our Lambda (see aws/index.mjs). */
 const SETPRICE_KEY = "cardledger:setprices:v1";
-const normNum = (s) => String(s).split("/")[0].trim().replace(/^0+(?=\w)/, "").toUpperCase();
+const normNum = (s) => String(s || "").split("/")[0].trim().replace(/^0+(?=\w)/, "").toUpperCase();
 const setPricesGet = (set) => { try { const c = (JSON.parse(localStorage.getItem(SETPRICE_KEY)) || {})[set]; return c && Date.now() - c.t < 24 * 3600 * 1000 ? c.p : null; } catch { return null; } };
 const setPricesPut = (set, p) => {
   try {
@@ -1125,10 +1125,14 @@ function BuyForm({ initial, onSave, onCancel }) {
    normalized JSON blob; we parse it into a sale with real per-card lines and
    reconcile against kept inventory so matched cards flip to Sold. */
 const normKey = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+// Match a TCGP order line to a kept inventory card by name + collector number.
+// Numbers go through normNum so the TCGP title's "095/086" (number / set total)
+// lines up with the bare API number ("95") inventory stores — otherwise nothing
+// flips to Sold. A missing number on either side falls back to a name-only match.
 function matchInvCard(line, avail, used) {
-  const ln = normKey(line.name), lnum = normKey(line.number);
+  const ln = normKey(line.name), lnum = normNum(line.number);
   if (!ln) return null;
-  return avail.find((c) => !used.has(c.id) && normKey(c.name) === ln && (!lnum || !normKey(c.number) || normKey(c.number) === lnum)) || null;
+  return avail.find((c) => !used.has(c.id) && normKey(c.name) === ln && (!lnum || !normNum(c.number) || normNum(c.number) === lnum)) || null;
 }
 function parseTcgpOrder(text) {
   let o; try { o = JSON.parse(String(text).trim()); } catch { return { error: "That isn't valid JSON — copy the order again with the bookmarklet." }; }
