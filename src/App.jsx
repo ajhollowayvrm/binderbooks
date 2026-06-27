@@ -437,6 +437,29 @@ const invRange = (cards) => cards.reduce((a, c) => {
 const fmtRange = (r) => (r.lo === r.hi ? fmt(r.lo) : `${fmt(r.lo)} – ${fmt(r.hi)}`);
 const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "");
 const cardPrice = (c) => { const p = c.tcgplayer?.prices; if (!p) return null; const v = p.holofoil || p.normal || p.reverseHolofoil || p["1stEditionHolofoil"] || Object.values(p)[0]; return v?.market ?? v?.mid ?? null; };
+// Look up one stored card on pokemontcg.io to backfill a market price — used by
+// Inventory's "refresh prices" for cards typed in before they were listed. We only
+// trust a match we can pin down (name + number, or name + set); a bare name is too
+// ambiguous to auto-pick, so we skip it rather than risk grabbing the wrong card.
+async function lookupCardPrice(card) {
+  if (!card.name) return null;
+  const esc = (s) => String(s || "").replace(/["\\]/g, "");
+  const name = `name:"${esc(card.name)}"`;
+  const fetchList = async (q) => {
+    const r = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q)}&pageSize=24`, PTCG_OPTS);
+    if (!r.ok) throw new Error(String(r.status));
+    return fillMissingPrices(((await r.json()).data || []).map(slimCard));
+  };
+  try {
+    if (card.number) {
+      let list = await fetchList(card.set ? `${name} number:"${esc(card.number)}" set.name:"${esc(card.set)}"` : `${name} number:"${esc(card.number)}"`);
+      if (!list.length && card.set) list = await fetchList(`${name} number:"${esc(card.number)}"`);
+      return list.filter((c) => normNum(c.number) === normNum(card.number)).find((c) => cardPrice(c) != null) || null;
+    }
+    if (card.set) return (await fetchList(`${name} set.name:"${esc(card.set)}"`)).find((c) => cardPrice(c) != null) || null;
+  } catch { return null; }
+  return null; // no number and no set — too ambiguous to match safely
+}
 
 /* ================================================================== */
 export default function App() {
@@ -811,8 +834,13 @@ function Rips({ state, patch }) {
   const [open, setOpen] = useState(null);
   const addRip = (r) => { patch((s) => ({ rips: [{ id: uid(), hits: [], ...r }, ...s.rips], buys: r.buyId ? s.buys.map((b) => (b.id === r.buyId ? { ...b, ripped: true } : b)) : s.buys })); setAdding(false); };
   const delRip = (id) => patch((s) => {
-    const hitIds = new Set((s.rips.find((r) => r.id === id)?.hits || []).map((h) => h.id));
-    return { rips: s.rips.filter((r) => r.id !== id), inventory: (s.inventory || []).filter((c) => !(hitIds.has(c.hitId) && c.status !== "Sold")) };
+    const rip = s.rips.find((r) => r.id === id);
+    const hitIds = new Set((rip?.hits || []).map((h) => h.id));
+    return {
+      rips: s.rips.filter((r) => r.id !== id),
+      inventory: (s.inventory || []).filter((c) => !(hitIds.has(c.hitId) && c.status !== "Sold")),
+      buys: rip?.buyId ? s.buys.map((b) => (b.id === rip.buyId ? { ...b, ripped: false } : b)) : s.buys,
+    };
   });
   const addHit = (ripId, hit) => patch((s) => addHitToState(s, ripId, hit));
   const delHit = (ripId, hitId) => patch((s) => ({
@@ -857,8 +885,9 @@ function RipForm({ buys, rippedBuyIds, onSave, onCancel }) {
   const sets = useSets();
   const [f, setF] = useState({ product: "", cost: "", source: "Gamecraft", date: today(), buyId: "" });
   const [lines, setLines] = useState([{ set: "", packs: "" }]);
-  // hide buys already linked to a rip — each buy can only be the source of one rip
-  const opts = (buys || []).filter((b) => !rippedBuyIds?.has(b.id)).sort((a, b) => (b.category === "Sealed") - (a.category === "Sealed"));
+  // hide buys already ripped — linked to a rip, or flagged ripped by hand on the
+  // buy itself. Newest first, sealed breaking ties so rippable boxes surface.
+  const opts = (buys || []).filter((b) => !(b.ripped || rippedBuyIds?.has(b.id))).sort((a, b) => byDateDesc(a, b) || ((b.category === "Sealed") - (a.category === "Sealed")));
   const setLine = (i, k, v) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
   const addLine = () => setLines((ls) => [...ls, { set: "", packs: "" }]);
   const delLine = (i) => setLines((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : ls));
@@ -1006,6 +1035,7 @@ function Buys({ state, patch }) {
   const add = (b) => { patch((s) => ({ buys: [{ id: uid(), ...b }, ...s.buys] })); setAdding(false); };
   const upd = (b) => { patch((s) => ({ buys: s.buys.map((x) => (x.id === b.id ? { ...x, ...b, seed: false } : x)) })); setEditId(null); };
   const del = (id) => patch((s) => ({ buys: s.buys.filter((b) => b.id !== id) }));
+  const toggleRipped = (id) => patch((s) => ({ buys: s.buys.map((b) => (b.id === id ? { ...b, ripped: !b.ripped } : b)) }));
   const total = state.buys.reduce((s, b) => s + (Number(b.cost) || 0), 0);
   const sorted = [...state.buys].sort(byDateDesc);
 
@@ -1020,6 +1050,7 @@ function Buys({ state, patch }) {
           : <div key={b.id} className="cl-row">
               <div className="cl-row-main"><div className="cl-row-title">{b.item}{b.seed && <span className="cl-seed">starter</span>}</div><div className="cl-row-meta"><span className="cl-chip">{b.category}</span>{b.ripped && <span className="cl-st grading">ripped</span>} {b.source} · {b.date}</div></div>
               <div className="cl-money out">{fmt(Number(b.cost) || 0)}</div>
+              <button className={"cl-x" + (b.ripped ? " on" : "")} title={b.ripped ? "Marked ripped — click to unmark" : "Mark as ripped"} onClick={() => toggleRipped(b.id)}><PackageOpen size={13} /></button>
               <button className="cl-x" onClick={() => { setEditId(b.id); setAdding(false); }}><Pencil size={13} /></button>
               <button className="cl-x" onClick={() => del(b.id)}><Trash2 size={13} /></button>
             </div>)}
@@ -1355,6 +1386,7 @@ function Inventory({ state, patch }) {
   const [editId, setEditId] = useState(null);
   const [filter, setFilter] = useState("All");
   const [syncMsg, setSyncMsg] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const add = (c) => { patch((s) => ({ inventory: [{ id: uid(), ...c }, ...(s.inventory || [])] })); setAdding(false); };
   const upd = (c) => { patch((s) => ({ inventory: s.inventory.map((x) => (x.id === c.id ? { ...x, ...c } : x)) })); setEditId(null); };
   const del = (id) => patch((s) => ({ inventory: s.inventory.filter((c) => c.id !== id) }));
@@ -1388,6 +1420,27 @@ function Inventory({ state, patch }) {
     }));
     setSyncMsg(`Marked ${sellIds.size} card${sellIds.size === 1 ? "" : "s"} as Sold.`);
   };
+  // Backfill market prices for held cards that don't have one yet — the new cards
+  // you typed in before pokemontcg.io listed them. Only touches cards with no value
+  // (your manual prices are left alone) and only ones we can pin down by number/set.
+  const refreshPrices = async () => {
+    const cands = inv.filter((c) => c.status !== "Sold" && !(Number(c.value) > 0) && c.name && (c.number || c.set));
+    if (!cands.length) { setSyncMsg("Nothing to refresh — every held card without a price is too vague to match (add a set or number)."); return; }
+    setRefreshing(true);
+    setSyncMsg(`Checking ${cands.length} card${cands.length === 1 ? "" : "s"} on pokemontcg.io…`);
+    const updates = {};
+    for (const c of cands) {
+      const m = await lookupCardPrice(c);
+      const price = m ? cardPrice(m) : null;
+      if (m && price != null) updates[c.id] = { value: price, ...(c.set ? {} : { set: m.set?.name || "" }), ...(c.number ? {} : { number: m.number || "" }) };
+    }
+    const found = Object.keys(updates).length;
+    if (found) patch((s) => ({ inventory: (s.inventory || []).map((c) => (updates[c.id] ? { ...c, ...updates[c.id] } : c)) }));
+    setRefreshing(false);
+    setSyncMsg(found
+      ? `Filled in market price for ${found} card${found === 1 ? "" : "s"}${found < cands.length ? `; ${cands.length - found} still not listed` : ""}.`
+      : `None of those ${cands.length} card${cands.length === 1 ? "" : "s"} are in the database yet — check back later.`);
+  };
   const live = inv.filter((c) => c.status !== "Sold");
   const val = live.reduce((s, c) => s + (Number(c.value) || 0), 0);
   const basis = live.reduce((s, c) => s + invBasis(c), 0);
@@ -1400,8 +1453,9 @@ function Inventory({ state, patch }) {
     <div className="cl-stack">
       <Header title="Inventory" sub={`${live.length} held · ${hasRange ? fmtRange(range) : fmt(val)} market`} onAdd={() => { setAdding(!adding); setEditId(null); }} addOpen={adding} />
       {live.length > 0 && <div className="cl-grid2"><Stat label="Cost basis" value={fmt(basis)} tone="out" /><Stat label="Unrealized" value={hasRange ? <span className="cl-range">{fmtRange({ lo: range.lo - basis, hi: range.hi - basis })}</span> : fmt(val - basis)} tone={range.lo - basis >= 0 ? "in" : range.hi - basis < 0 ? "neg" : "out"} /></div>}
-      {inv.length > 0 && (state.sales || []).length > 0 && <div className="cl-import">
-        <button className="cl-import-btn" onClick={reconcileSold}><RefreshCw size={14} /> Check against sales — mark anything already sold</button>
+      {inv.length > 0 && <div className="cl-import">
+        <button className="cl-import-btn" onClick={refreshPrices} disabled={refreshing}><RefreshCw size={14} /> {refreshing ? "Refreshing prices…" : "Refresh prices — find cards newly listed on pokemontcg.io"}</button>
+        {(state.sales || []).length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={reconcileSold}><RefreshCw size={14} /> Check against sales — mark anything already sold</button>}
         {syncMsg && <div className="cl-import-msg">{syncMsg}</div>}
       </div>}
       {adding && <InvForm onSave={add} onCancel={() => setAdding(false)} />}
@@ -1640,6 +1694,7 @@ function Fonts() {
     .cl-seed{background:rgba(167,139,250,.15);color:#c4b5fd;border-radius:5px;padding:1px 6px;font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;margin-left:6px;}
     .cl-x{background:none;border:none;color:var(--mut);cursor:pointer;padding:4px;flex:none;border-radius:6px;}
     .cl-x:hover{color:var(--ink);background:#222834;}
+    .cl-x.on{color:var(--holo2);}
     .cl-card{background:var(--surf);border:1px solid var(--line);border-radius:14px;}
     .cl-card-head{width:100%;display:flex;align-items:center;gap:10px;padding:13px 13px;background:none;border:none;color:inherit;cursor:pointer;text-align:left;font-family:'Inter';}
     .cl-card-num{text-align:right;}
@@ -1676,6 +1731,7 @@ function Fonts() {
     .cl-net-preview{font-size:13px;color:var(--mut);display:flex;justify-content:space-between;align-items:center;gap:10px;}
     .cl-import{background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px;}
     .cl-import-btn{display:flex;align-items:center;gap:8px;background:none;border:none;color:#c4b5fd;font-size:13px;cursor:pointer;font-family:'Inter';}
+    .cl-import-btn:disabled{opacity:.6;cursor:default;}
     .cl-import-msg{font-size:12px;color:var(--mut);margin-top:7px;}
     .cl-empty{background:var(--surf);border:1px dashed var(--line);border-radius:12px;padding:18px;text-align:center;font-size:12.5px;color:var(--mut);line-height:1.5;}
     .cl-search{display:flex;gap:8px;}
