@@ -1423,29 +1423,46 @@ function Inventory({ state, patch }) {
   // Pull current market prices from pokemontcg.io for every held card we can pin
   // down (name + number, or name + set) — refreshing existing prices too, since they
   // go stale, not just filling blanks. Cards with only a name are skipped (too vague
-  // to match safely). Also backfills a missing set/number from the match.
+  // to match safely). Also backfills a missing set/number from the match. Cards that
+  // use graded estimates (at grading, or already comped) additionally re-pull their
+  // eBay PSA comps — but those draw a limited daily budget, so we stop once it's gone.
   const refreshPrices = async () => {
     const cands = inv.filter((c) => c.status !== "Sold" && c.name && (c.number || c.set));
     if (!cands.length) { setSyncMsg("Nothing to refresh — held cards need a set or number to match against the database."); return; }
     setRefreshing(true);
     setSyncMsg(`Checking ${cands.length} card${cands.length === 1 ? "" : "s"} on pokemontcg.io…`);
+    const hasEst = (c) => PSA_EST_GRADES.some((g) => Number(c.gradeEst?.[g]) > 0);
     const updates = {};
-    let changed = 0;
+    let priced = 0, changed = 0, graded = 0, gradedNote = "";
     for (const c of cands) {
       const m = await lookupCardPrice(c);
       const price = m ? cardPrice(m) : null;
       if (m && price != null) {
-        updates[c.id] = { value: price, ...(c.set ? {} : { set: m.set?.name || "" }), ...(c.number ? {} : { number: m.number || "" }) };
+        updates[c.id] = { ...(updates[c.id] || {}), value: price, ...(c.set ? {} : { set: m.set?.name || "" }), ...(c.number ? {} : { number: m.number || "" }) };
+        priced++;
         if (price !== (Number(c.value) || 0)) changed++;
       }
+      if (!gradedNote && (c.status === "At grading" || hasEst(c))) {
+        try {
+          const r = await fetchGradedComps(c.name, c.set, c.number);
+          const got = PSA_EST_GRADES.filter((g) => Number(r.grades?.[g]) > 0);
+          if (got.length) {
+            updates[c.id] = { ...(updates[c.id] || {}), gradeEst: { ...(c.gradeEst || {}), ...Object.fromEntries(got.map((g) => [g, Number(r.grades[g])])) } };
+            graded++;
+          }
+        } catch (e) {
+          if (e.status === 429) gradedNote = " · eBay PSA budget used up, try the rest tomorrow";
+          else if (e.status === 501) gradedNote = " · eBay PSA comps aren't set up";
+          // 404 / transient: just skip graded comps for this card
+        }
+      }
     }
-    const found = Object.keys(updates).length;
-    if (found) patch((s) => ({ inventory: (s.inventory || []).map((c) => (updates[c.id] ? { ...c, ...updates[c.id] } : c)) }));
+    if (Object.keys(updates).length) patch((s) => ({ inventory: (s.inventory || []).map((c) => (updates[c.id] ? { ...c, ...updates[c.id] } : c)) }));
     setRefreshing(false);
-    const missed = cands.length - found;
-    setSyncMsg(found
-      ? `Refreshed ${found} card${found === 1 ? "" : "s"} (${changed} price${changed === 1 ? "" : "s"} changed)${missed ? `; ${missed} not in the database yet` : ""}.`
-      : `None of those ${cands.length} card${cands.length === 1 ? "" : "s"} are in the database yet — check back later.`);
+    const missed = cands.length - priced;
+    setSyncMsg(priced || graded
+      ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the database yet` : ""}${gradedNote}.`
+      : `None of those ${cands.length} card${cands.length === 1 ? "" : "s"} are in the database yet — check back later${gradedNote}.`);
   };
   const live = inv.filter((c) => c.status !== "Sold");
   const val = live.reduce((s, c) => s + (Number(c.value) || 0), 0);
