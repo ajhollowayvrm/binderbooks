@@ -824,7 +824,7 @@ function Rips({ state, patch }) {
   return (
     <div className="cl-stack">
       <Header title="Rips" sub="Cost of the packs vs. value of what you pulled" onAdd={() => setAdding(!adding)} addOpen={adding} />
-      {adding && <RipForm buys={state.buys} onSave={addRip} onCancel={() => setAdding(false)} />}
+      {adding && <RipForm buys={state.buys} rippedBuyIds={new Set(state.rips.map((r) => r.buyId).filter(Boolean))} onSave={addRip} onCancel={() => setAdding(false)} />}
       {state.rips.length === 0 && !adding && <Empty>Nothing ripped yet. Log a rip — say 5 packs of Chaos Rising — then drop in each hit and watch the P&amp;L land.</Empty>}
       <div className="cl-stack">
         {sorted.map((r) => {
@@ -853,11 +853,12 @@ function Rips({ state, patch }) {
     </div>
   );
 }
-function RipForm({ buys, onSave, onCancel }) {
+function RipForm({ buys, rippedBuyIds, onSave, onCancel }) {
   const sets = useSets();
   const [f, setF] = useState({ product: "", cost: "", source: "Gamecraft", date: today(), buyId: "" });
   const [lines, setLines] = useState([{ set: "", packs: "" }]);
-  const opts = [...(buys || [])].sort((a, b) => (b.category === "Sealed") - (a.category === "Sealed"));
+  // hide buys already linked to a rip — each buy can only be the source of one rip
+  const opts = (buys || []).filter((b) => !rippedBuyIds?.has(b.id)).sort((a, b) => (b.category === "Sealed") - (a.category === "Sealed"));
   const setLine = (i, k, v) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
   const addLine = () => setLines((ls) => [...ls, { set: "", packs: "" }]);
   const delLine = (i) => setLines((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : ls));
@@ -893,7 +894,7 @@ function RipForm({ buys, onSave, onCancel }) {
           <button className="cl-add-hit" onClick={addLine}><Plus size={14} /> Add another set</button>
         </div>
       </Field>
-      {(buys || []).length > 0 && <Field label="Ripped from a buy (optional — avoids double-counting cost)"><select className="cl-in" value={f.buyId} onChange={(e) => linkBuy(e.target.value)}><option value="">— not linked / enter new cost —</option>{opts.map((b) => <option key={b.id} value={b.id}>{b.item} · {b.source} · {fmt(Number(b.cost) || 0)}</option>)}</select></Field>}
+      {opts.length > 0 && <Field label="Ripped from a buy (optional — avoids double-counting cost)"><select className="cl-in" value={f.buyId} onChange={(e) => linkBuy(e.target.value)}><option value="">— not linked / enter new cost —</option>{opts.map((b) => <option key={b.id} value={b.id}>{b.item} · {b.source} · {fmt(Number(b.cost) || 0)}</option>)}</select></Field>}
       <div className="cl-grid2"><Field label={f.buyId ? "Cost (from buy)" : "Total cost"}><MoneyInput value={f.cost} onChange={(v) => !f.buyId && setF({ ...f, cost: v })} /></Field><Field label="Date"><input className="cl-in" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field></div>
       <Field label="Bought from"><Select opts={SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field>
       <Actions onCancel={onCancel} label="Save rip" disabled={!f.product || (!f.buyId && !f.cost)} onSave={save} />
