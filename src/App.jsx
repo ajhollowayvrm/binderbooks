@@ -1420,25 +1420,31 @@ function Inventory({ state, patch }) {
     }));
     setSyncMsg(`Marked ${sellIds.size} card${sellIds.size === 1 ? "" : "s"} as Sold.`);
   };
-  // Backfill market prices for held cards that don't have one yet — the new cards
-  // you typed in before pokemontcg.io listed them. Only touches cards with no value
-  // (your manual prices are left alone) and only ones we can pin down by number/set.
+  // Pull current market prices from pokemontcg.io for every held card we can pin
+  // down (name + number, or name + set) — refreshing existing prices too, since they
+  // go stale, not just filling blanks. Cards with only a name are skipped (too vague
+  // to match safely). Also backfills a missing set/number from the match.
   const refreshPrices = async () => {
-    const cands = inv.filter((c) => c.status !== "Sold" && !(Number(c.value) > 0) && c.name && (c.number || c.set));
-    if (!cands.length) { setSyncMsg("Nothing to refresh — every held card without a price is too vague to match (add a set or number)."); return; }
+    const cands = inv.filter((c) => c.status !== "Sold" && c.name && (c.number || c.set));
+    if (!cands.length) { setSyncMsg("Nothing to refresh — held cards need a set or number to match against the database."); return; }
     setRefreshing(true);
     setSyncMsg(`Checking ${cands.length} card${cands.length === 1 ? "" : "s"} on pokemontcg.io…`);
     const updates = {};
+    let changed = 0;
     for (const c of cands) {
       const m = await lookupCardPrice(c);
       const price = m ? cardPrice(m) : null;
-      if (m && price != null) updates[c.id] = { value: price, ...(c.set ? {} : { set: m.set?.name || "" }), ...(c.number ? {} : { number: m.number || "" }) };
+      if (m && price != null) {
+        updates[c.id] = { value: price, ...(c.set ? {} : { set: m.set?.name || "" }), ...(c.number ? {} : { number: m.number || "" }) };
+        if (price !== (Number(c.value) || 0)) changed++;
+      }
     }
     const found = Object.keys(updates).length;
     if (found) patch((s) => ({ inventory: (s.inventory || []).map((c) => (updates[c.id] ? { ...c, ...updates[c.id] } : c)) }));
     setRefreshing(false);
+    const missed = cands.length - found;
     setSyncMsg(found
-      ? `Filled in market price for ${found} card${found === 1 ? "" : "s"}${found < cands.length ? `; ${cands.length - found} still not listed` : ""}.`
+      ? `Refreshed ${found} card${found === 1 ? "" : "s"} (${changed} price${changed === 1 ? "" : "s"} changed)${missed ? `; ${missed} not in the database yet` : ""}.`
       : `None of those ${cands.length} card${cands.length === 1 ? "" : "s"} are in the database yet — check back later.`);
   };
   const live = inv.filter((c) => c.status !== "Sold");
@@ -1454,7 +1460,7 @@ function Inventory({ state, patch }) {
       <Header title="Inventory" sub={`${live.length} held · ${hasRange ? fmtRange(range) : fmt(val)} market`} onAdd={() => { setAdding(!adding); setEditId(null); }} addOpen={adding} />
       {live.length > 0 && <div className="cl-grid2"><Stat label="Cost basis" value={fmt(basis)} tone="out" /><Stat label="Unrealized" value={hasRange ? <span className="cl-range">{fmtRange({ lo: range.lo - basis, hi: range.hi - basis })}</span> : fmt(val - basis)} tone={range.lo - basis >= 0 ? "in" : range.hi - basis < 0 ? "neg" : "out"} /></div>}
       {inv.length > 0 && <div className="cl-import">
-        <button className="cl-import-btn" onClick={refreshPrices} disabled={refreshing}><RefreshCw size={14} /> {refreshing ? "Refreshing prices…" : "Refresh prices — find cards newly listed on pokemontcg.io"}</button>
+        <button className="cl-import-btn" onClick={refreshPrices} disabled={refreshing}><RefreshCw size={14} /> {refreshing ? "Refreshing prices…" : "Refresh market prices from pokemontcg.io"}</button>
         {(state.sales || []).length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={reconcileSold}><RefreshCw size={14} /> Check against sales — mark anything already sold</button>}
         {syncMsg && <div className="cl-import-msg">{syncMsg}</div>}
       </div>}
