@@ -3,7 +3,7 @@ import Papa from "papaparse";
 import {
   LayoutDashboard, PackageOpen, ShoppingCart, Tags, Search, Archive,
   Plus, Trash2, Pencil, ChevronDown, ChevronRight, Sparkles, Upload, X,
-  CalendarRange, ChevronLeft,
+  CalendarRange, ChevronLeft, RefreshCw,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -1353,9 +1353,40 @@ function Inventory({ state, patch }) {
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState(null);
   const [filter, setFilter] = useState("All");
+  const [syncMsg, setSyncMsg] = useState("");
   const add = (c) => { patch((s) => ({ inventory: [{ id: uid(), ...c }, ...(s.inventory || [])] })); setAdding(false); };
   const upd = (c) => { patch((s) => ({ inventory: s.inventory.map((x) => (x.id === c.id ? { ...x, ...c } : x)) })); setEditId(null); };
   const del = (id) => patch((s) => ({ inventory: s.inventory.filter((c) => c.id !== id) }));
+  // Reconcile against sales: find cards still showing as held that actually sold —
+  // either a sale line is already linked to them (invId), or an unlinked sale line
+  // matches one by name + number. Each sale line claims at most one card, so a
+  // second copy you still own stays put. Flip the matches to Sold and back-link the
+  // sale line (and its basis) so the books read as if the sale had matched cleanly.
+  const reconcileSold = () => {
+    const sales = state.sales || [];
+    const linked = new Set();
+    sales.forEach((x) => (x.cards || []).forEach((c) => c.invId && linked.add(c.invId)));
+    const pool = inv.filter((c) => c.status !== "Sold" && !linked.has(c.id));
+    const used = new Set();
+    const claimByLine = new Map();
+    sales.forEach((x) => (x.cards || []).forEach((line) => {
+      if (line.invId) return;
+      const m = matchInvCard(line, pool, used);
+      if (m) { used.add(m.id); claimByLine.set(line.id, m); }
+    }));
+    const directLive = inv.filter((c) => c.status !== "Sold" && linked.has(c.id)).map((c) => c.id);
+    const sellIds = new Set([...directLive, ...[...claimByLine.values()].map((c) => c.id)]);
+    if (!sellIds.size) { setSyncMsg("In sync — nothing that's sold is still showing as held."); return; }
+    if (typeof window !== "undefined" && !window.confirm(`Mark ${sellIds.size} card${sellIds.size === 1 ? "" : "s"} as Sold? They appear in a recorded sale but still show as held.`)) return;
+    patch((s) => ({
+      inventory: (s.inventory || []).map((c) => (sellIds.has(c.id) ? { ...c, status: "Sold" } : c)),
+      sales: (s.sales || []).map((x) => ({ ...x, cards: (x.cards || []).map((line) => {
+        const m = claimByLine.get(line.id);
+        return m ? { ...line, invId: m.id, basis: Number(line.basis) || invBasis(m), set: line.set || m.set, number: line.number || m.number } : line;
+      }) })),
+    }));
+    setSyncMsg(`Marked ${sellIds.size} card${sellIds.size === 1 ? "" : "s"} as Sold.`);
+  };
   const live = inv.filter((c) => c.status !== "Sold");
   const val = live.reduce((s, c) => s + (Number(c.value) || 0), 0);
   const basis = live.reduce((s, c) => s + invBasis(c), 0);
@@ -1368,6 +1399,10 @@ function Inventory({ state, patch }) {
     <div className="cl-stack">
       <Header title="Inventory" sub={`${live.length} held · ${hasRange ? fmtRange(range) : fmt(val)} market`} onAdd={() => { setAdding(!adding); setEditId(null); }} addOpen={adding} />
       {live.length > 0 && <div className="cl-grid2"><Stat label="Cost basis" value={fmt(basis)} tone="out" /><Stat label="Unrealized" value={hasRange ? <span className="cl-range">{fmtRange({ lo: range.lo - basis, hi: range.hi - basis })}</span> : fmt(val - basis)} tone={range.lo - basis >= 0 ? "in" : range.hi - basis < 0 ? "neg" : "out"} /></div>}
+      {inv.length > 0 && (state.sales || []).length > 0 && <div className="cl-import">
+        <button className="cl-import-btn" onClick={reconcileSold}><RefreshCw size={14} /> Check against sales — mark anything already sold</button>
+        {syncMsg && <div className="cl-import-msg">{syncMsg}</div>}
+      </div>}
       {adding && <InvForm onSave={add} onCancel={() => setAdding(false)} />}
       {inv.length > 0 && <div className="cl-pills">{FILTERS.map((x) => <button key={x} className={"cl-pill" + (filter === x ? " on" : "")} onClick={() => setFilter(x)}>{x}</button>)}</div>}
       {inv.length === 0 && !adding && <Empty>No cards yet. Add a keeper or a card you've sent for grading, or hit “+ Keep” from Lookup to pull one in with its market value.</Empty>}
