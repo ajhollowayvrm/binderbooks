@@ -895,8 +895,15 @@ function RipForm({ buys, rippedBuyIds, onSave, onCancel }) {
     const b = (buys || []).find((x) => x.id === id);
     if (!b) return setF({ ...f, buyId: "" });
     setF({ ...f, buyId: id, cost: String(b.cost), source: b.source, product: f.product || b.item });
-    const bs = buyLineSet(b);
-    if (bs) setLines((ls) => (ls[0] && !ls[0].set ? [{ ...ls[0], set: bs }, ...ls.slice(1)] : ls));
+    // seed the per-set pack rows from the buy's product lines (a Mega Zygarde box
+    // entered as 6× Perfect Order + 2× Phantasmal becomes those two rip rows),
+    // merging duplicate sets by quantity; fall back to the buy's single set.
+    const packsBySet = {};
+    (b.lines || []).forEach((l) => { if (l.set) packsBySet[l.set] = (packsBySet[l.set] || 0) + (Number(l.qty) || 0); });
+    const seed = Object.keys(packsBySet).length
+      ? Object.entries(packsBySet).map(([set, packs]) => ({ set, packs: packs ? String(packs) : "" }))
+      : (buyLineSet(b) ? [{ set: buyLineSet(b), packs: "" }] : null);
+    if (seed) setLines((ls) => (ls.length === 1 && !ls[0].set && !ls[0].packs ? seed : ls));
   };
   const save = () => {
     const clean = lines.map((l) => ({ set: l.set, packs: Number(l.packs) || 0 })).filter((l) => l.set || l.packs);
