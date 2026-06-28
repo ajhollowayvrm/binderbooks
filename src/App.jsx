@@ -894,7 +894,7 @@ function RipForm({ buys, rippedBuyIds, onSave, onCancel }) {
   const linkBuy = (id) => {
     const b = (buys || []).find((x) => x.id === id);
     if (!b) return setF({ ...f, buyId: "" });
-    setF({ ...f, buyId: id, cost: String(b.cost), source: b.source, product: f.product || b.item });
+    setF({ ...f, buyId: id, cost: String(b.cost), source: b.source, product: f.product || b.name || b.item });
     // seed the per-set pack rows from the buy's product lines (a Mega Zygarde box
     // entered as 6× Perfect Order + 2× Phantasmal becomes those two rip rows),
     // merging duplicate sets by quantity; fall back to the buy's single set.
@@ -930,7 +930,7 @@ function RipForm({ buys, rippedBuyIds, onSave, onCancel }) {
           <button className="cl-add-hit" onClick={addLine}><Plus size={14} /> Add another set</button>
         </div>
       </Field>
-      {opts.length > 0 && <Field label="Ripped from a buy (optional — avoids double-counting cost)"><select className="cl-in" value={f.buyId} onChange={(e) => linkBuy(e.target.value)}><option value="">— not linked / enter new cost —</option>{opts.map((b) => <option key={b.id} value={b.id}>{b.item} · {b.source} · {fmt(Number(b.cost) || 0)}</option>)}</select></Field>}
+      {opts.length > 0 && <Field label="Ripped from a buy (optional — avoids double-counting cost)"><select className="cl-in" value={f.buyId} onChange={(e) => linkBuy(e.target.value)}><option value="">— not linked / enter new cost —</option>{opts.map((b) => <option key={b.id} value={b.id}>{b.name || b.item} · {b.source} · {fmt(Number(b.cost) || 0)}</option>)}</select></Field>}
       <div className="cl-grid2"><Field label={f.buyId ? "Cost (from buy)" : "Total cost"}><MoneyInput value={f.cost} onChange={(v) => !f.buyId && setF({ ...f, cost: v })} /></Field><Field label="Date"><input className="cl-in" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field></div>
       <Field label="Bought from"><Select opts={SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field>
       <Actions onCancel={onCancel} label="Save rip" disabled={!f.product || (!f.buyId && !f.cost)} onSave={save} />
@@ -1055,7 +1055,7 @@ function Buys({ state, patch }) {
         {sorted.map((b) => editId === b.id
           ? <BuyForm key={b.id} initial={b} onSave={upd} onCancel={() => setEditId(null)} />
           : <div key={b.id} className="cl-row">
-              <div className="cl-row-main"><div className="cl-row-title">{b.item}{b.seed && <span className="cl-seed">starter</span>}</div><div className="cl-row-meta"><span className="cl-chip">{b.category}</span>{b.ripped && <span className="cl-st grading">ripped</span>} {b.source} · {b.date}</div></div>
+              <div className="cl-row-main"><div className="cl-row-title">{b.name || b.item}{b.seed && <span className="cl-seed">starter</span>}</div><div className="cl-row-meta"><span className="cl-chip">{b.category}</span>{b.ripped && <span className="cl-st grading">ripped</span>} {b.source} · {b.date}{b.name && b.item && b.name !== b.item ? ` · ${b.item}` : ""}</div></div>
               <div className="cl-money out">{fmt(Number(b.cost) || 0)}</div>
               <button className={"cl-x" + (b.ripped ? " on" : "")} title={b.ripped ? "Marked ripped — click to unmark" : "Mark as ripped"} onClick={() => toggleRipped(b.id)}><PackageOpen size={13} /></button>
               <button className="cl-x" onClick={() => { setEditId(b.id); setAdding(false); }}><Pencil size={13} /></button>
@@ -1097,9 +1097,9 @@ function BuyForm({ initial, onSave, onCancel }) {
   const sets = useSets();
   const blank = () => ({ id: uid(), qty: "1", set: "", product: "Booster Pack", cost: "" });
   const [f, setF] = useState(initial
-    ? { category: initial.category, source: initial.source, date: initial.date, item: initial.item || "", cost: numStr(initial.cost), total: numStr(initial.cost),
+    ? { category: initial.category, source: initial.source, date: initial.date, item: initial.item || "", name: initial.name || "", cost: numStr(initial.cost), total: numStr(initial.cost),
         lines: initial.lines?.length ? initial.lines.map((l) => ({ ...l, qty: String(l.qty || 1), cost: numStr(l.cost) })) : null }
-    : { category: "Sealed", source: "Gamecraft", date: today(), item: "", cost: "", total: "", lines: [blank()] });
+    : { category: "Sealed", source: "Gamecraft", date: today(), item: "", name: "", cost: "", total: "", lines: [blank()] });
   const setLine = (ln) => setF((p) => ({ ...p, lines: p.lines.map((l) => (l.id === ln.id ? ln : l)) }));
   const anyBlank = !!f.lines && f.lines.some((l) => !l.cost);
   const sumExplicit = f.lines ? f.lines.reduce((s, l) => s + (Number(l.cost) || 0), 0) : 0;
@@ -1130,13 +1130,16 @@ function BuyForm({ initial, onSave, onCancel }) {
   return (
     <Form editing={!!initial}>
       {f.lines ? (
-        <div className="cl-field">
-          <span>Products</span>
-          <div className="cl-stack sm">
-            {f.lines.map((l) => <LineRow key={l.id} line={l} sets={sets} onChange={setLine} removable={f.lines.length > 1} onRemove={() => setF((p) => ({ ...p, lines: p.lines.filter((x) => x.id !== l.id) }))} />)}
-            <button className="cl-addline" onClick={() => setF((p) => ({ ...p, lines: [...p.lines, blank()] }))}>+ Add another product</button>
+        <>
+          <Field label="Sealed product (optional — names the box itself)"><input className="cl-in" placeholder="Mega Zygarde EX Premium Collection" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+          <div className="cl-field">
+            <span>{f.name ? "What's inside" : "Products"}</span>
+            <div className="cl-stack sm">
+              {f.lines.map((l) => <LineRow key={l.id} line={l} sets={sets} onChange={setLine} removable={f.lines.length > 1} onRemove={() => setF((p) => ({ ...p, lines: p.lines.filter((x) => x.id !== l.id) }))} />)}
+              <button className="cl-addline" onClick={() => setF((p) => ({ ...p, lines: [...p.lines, blank()] }))}>+ Add another product</button>
+            </div>
           </div>
-        </div>
+        </>
       ) : (
         <>
           <Field label="Item"><input className="cl-in" placeholder="Prismatic ETB" value={f.item} onChange={(e) => setF({ ...f, item: e.target.value })} /></Field>
@@ -1153,7 +1156,7 @@ function BuyForm({ initial, onSave, onCancel }) {
         <Field label="Date"><input className="cl-in" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
       </div>
       <Actions onCancel={onCancel} label={initial ? "Update buy" : "Save buy"} disabled={!valid || !total}
-        onSave={() => { const costs = f.lines ? lineCosts() : null; onSave({ ...(initial ? { id: initial.id } : {}), item: label, category: f.category, source: f.source, date: f.date, cost: total,
+        onSave={() => { const costs = f.lines ? lineCosts() : null; onSave({ ...(initial ? { id: initial.id } : {}), item: label, name: (f.name || "").trim(), category: f.category, source: f.source, date: f.date, cost: total,
           ...(f.lines ? { lines: f.lines.map((l, i) => ({ id: l.id, qty: Number(l.qty) || 1, set: l.set, product: l.product, cost: costs[i] })) } : {}) }); }} />
     </Form>
   );
