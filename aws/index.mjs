@@ -124,9 +124,19 @@ async function setCatalog(setName) {
    tier is 100 credits/day and a 5-card lookup with eBay data costs 10, so
    results are cached hard). Returns { card, set, number, market, grades }
    where grades is { "10": avg, "9": avg, ... } for whatever grades have
-   recorded sales. */
+   recorded sales, plus the card-detail extras the app's card modal shows:
+   byGrade (every company+grade bucket, e.g. "cgc9_5"), raw (ungraded solds),
+   window (the date range the sales cover), image and url (TCGplayer CDN). */
 const GRADED_TTL = 24 * 3600 * 1000;
 const gradedCache = new Map();
+// slim one salesByGrade bucket down to what the app renders; smartMarketPrice
+// is their recency-filtered figure — raw averages skew low/stale
+const slimBucket = (e) => {
+  const v = e?.smartMarketPrice?.price ?? e?.marketPrice7Day ?? e?.averagePrice ?? e?.medianPrice;
+  if (!(Number(v) > 0)) return null;
+  const r2 = (n) => (Number(n) > 0 ? Math.round(Number(n) * 100) / 100 : null);
+  return { price: r2(v), count: Number(e.count) || 0, median: r2(e.medianPrice), min: r2(e.minPrice), max: r2(e.maxPrice), trend: e.marketTrend || null };
+};
 async function gradedPrices(name, number, set) {
   const key = `${name}|${number}|${set}`.toLowerCase();
   const hit = gradedCache.get(key);
@@ -162,6 +172,13 @@ async function gradedPrices(name, number, set) {
       if (Number(e.count) > 0) sales[g] = Number(e.count);
     }
   }
+  const sbg = match.ebay?.salesByGrade || {};
+  const byGrade = {};
+  for (const [k, v] of Object.entries(sbg)) {
+    if (k === "ungraded") continue;
+    const b = slimBucket(v);
+    if (b) byGrade[k] = b;
+  }
   const body = {
     card: match.name,
     number: match.number ?? match.cardNumber ?? null,
@@ -169,6 +186,12 @@ async function gradedPrices(name, number, set) {
     market: match.prices?.market ?? null,
     grades,
     sales,
+    byGrade,
+    raw: slimBucket(sbg.ungraded),
+    window: { from: match.ebay?.dateRangeStart || null, to: match.ebay?.dateRangeEnd || null },
+    image: match.imageCdnUrl400 || match.imageCdnUrl200 || match.imageUrl || null,
+    url: match.tcgPlayerUrl || null,
+    rarity: match.rarity || null,
   };
   gradedCache.set(key, { t: Date.now(), body });
   return body;
@@ -203,7 +226,10 @@ export const handler = async (event) => {
     if (!name) return res(400, { error: "name required" });
     try {
       const body = await gradedPrices(name, number || "", set || "");
-      return body && Object.keys(body.grades).length ? res(200, body) : res(404, { error: "no graded comps" });
+      // any sales signal counts — a card with only CGC/TAG or raw solds is
+      // still worth returning even when no PSA grade has data
+      const hasData = body && (Object.keys(body.grades).length || Object.keys(body.byGrade).length || body.raw);
+      return hasData ? res(200, body) : res(404, { error: "no graded comps" });
     } catch (e) {
       console.error("graded route failed:", e);
       if (e.status === 429) return res(429, { error: "daily comps budget used" });

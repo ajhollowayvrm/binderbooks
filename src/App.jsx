@@ -3,7 +3,7 @@ import Papa from "papaparse";
 import {
   LayoutDashboard, PackageOpen, ShoppingCart, Tags, Search, Archive,
   Plus, Trash2, Pencil, ChevronDown, ChevronRight, Sparkles, Upload, X,
-  CalendarRange, ChevronLeft, RefreshCw,
+  CalendarRange, ChevronLeft, RefreshCw, ExternalLink,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -133,7 +133,7 @@ const qcacheSet = (terms, results) => {
 };
 const slimCard = (c) => ({
   id: c.id, name: c.name, number: c.number, rarity: c.rarity,
-  set: { name: c.set?.name }, images: { small: c.images?.small },
+  set: { name: c.set?.name }, images: { small: c.images?.small, large: c.images?.large },
   ...(c.tcgplayer ? { tcgplayer: { prices: c.tcgplayer.prices } } : {}),
 });
 
@@ -183,7 +183,8 @@ async function fillMissingPrices(list) {
 /* PSA comps for the grading-estimate fields: eBay sold averages per grade,
    proxied through the Lambda (see /graded in aws/index.mjs) so the
    pokemonpricetracker.com key stays server-side. */
-const GRADED_KEY = "cardledger:graded:v1";
+const GRADED_KEY = "cardledger:graded:v2"; // v2: entries carry byGrade/raw/image for the card modal
+try { localStorage.removeItem("cardledger:graded:v1"); } catch {}
 async function fetchGradedComps(name, set, number) {
   const key = `${name}|${set}|${number}`.toLowerCase();
   const writeCache = (r) => {
@@ -461,12 +462,12 @@ const invRange = (cards) => cards.reduce((a, c) => {
 const fmtRange = (r) => (r.lo === r.hi ? fmt(r.lo) : `${fmt(r.lo)} – ${fmt(r.hi)}`);
 const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "");
 const cardPrice = (c) => { const p = c.tcgplayer?.prices; if (!p) return null; const v = p.holofoil || p.normal || p.reverseHolofoil || p["1stEditionHolofoil"] || Object.values(p)[0]; return v?.market ?? v?.mid ?? null; };
-// Look up one stored card on pokemontcg.io to backfill a market price — used by
-// Inventory's "refresh prices" for cards typed in before they were listed. We only
-// trust a match we can pin down (name + number, or name + set); a bare name is too
-// ambiguous to auto-pick, so we skip it rather than risk grabbing the wrong card.
-async function lookupCardPrice(card) {
-  if (!card.name) return null;
+// Look up one stored card on pokemontcg.io — used by Inventory's "refresh
+// prices" and the card modal. We only trust a match we can pin down (name +
+// number, or name + set); a bare name is too ambiguous to auto-pick, so we
+// skip it rather than risk grabbing the wrong card.
+async function lookupCardCandidates(card) {
+  if (!card.name) return [];
   const esc = (s) => String(s || "").replace(/["\\]/g, "");
   const name = `name:"${esc(card.name)}"`;
   const fetchList = async (q) => {
@@ -477,11 +478,20 @@ async function lookupCardPrice(card) {
     if (card.number) {
       let list = await fetchList(card.set ? `${name} number:"${esc(card.number)}" set.name:"${esc(card.set)}"` : `${name} number:"${esc(card.number)}"`);
       if (!list.length && card.set) list = await fetchList(`${name} number:"${esc(card.number)}"`);
-      return list.filter((c) => normNum(c.number) === normNum(card.number)).find((c) => cardPrice(c) != null) || null;
+      return list.filter((c) => normNum(c.number) === normNum(card.number));
     }
-    if (card.set) return (await fetchList(`${name} set.name:"${esc(card.set)}"`)).find((c) => cardPrice(c) != null) || null;
-  } catch { return null; }
-  return null; // no number and no set — too ambiguous to match safely
+    if (card.set) return await fetchList(`${name} set.name:"${esc(card.set)}"`);
+  } catch { return []; }
+  return []; // no number and no set — too ambiguous to match safely
+}
+async function lookupCardPrice(card) {
+  return (await lookupCardCandidates(card)).find((c) => cardPrice(c) != null) || null;
+}
+// the modal also wants a match with no price (for the image and set info):
+// prefer priced-with-image, then any image, then whatever matched
+async function lookupCardMatch(card) {
+  const list = await lookupCardCandidates(card);
+  return list.find((c) => cardPrice(c) != null && c.images?.small) || list.find((c) => c.images?.small) || list[0] || null;
 }
 
 /* ================================================================== */
@@ -1519,6 +1529,7 @@ function Inventory({ state, patch }) {
   const inv = state.inventory || [];
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState(null);
+  const [viewId, setViewId] = useState(null);
   const [filter, setFilter] = useState("All");
   const [syncMsg, setSyncMsg] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -1671,6 +1682,7 @@ function Inventory({ state, patch }) {
   const hasRange = range.lo !== range.hi;
   const FILTERS = ["All", "Kept", "At grading", "Listed", "Sold"];
   const shown = (filter === "All" ? inv : inv.filter((c) => c.status === filter)).slice().sort(byDateDesc);
+  const viewCard = viewId ? inv.find((c) => c.id === viewId) : null;
 
   return (
     <div className="cl-stack">
@@ -1711,14 +1723,17 @@ function Inventory({ state, patch }) {
       <div className="cl-stack sm">
         {shown.map((c) => editId === c.id
           ? <InvForm key={c.id} initial={c} onSave={upd} onCancel={() => setEditId(null)} />
-          : <div key={c.id} className={"cl-row" + (c.status === "Sold" ? " sold" : "")}>
+          : <div key={c.id} className={"cl-row click" + (c.status === "Sold" ? " sold" : "")} onClick={() => setViewId(c.id)}>
               <span className="holo-dot" />
               <div className="cl-row-main"><div className="cl-row-title">{c.name}</div><div className="cl-row-meta"><span className={"cl-st " + stCls(c.status)}>{c.status}</span><span className="cl-chip">{c.grade}</span>{c.set ? `${c.set}${c.number ? " · " + c.number : ""} · ` : ""}{c.source}</div></div>
               <div className="cl-card-num"><div className="cl-money" style={{ color: "var(--holo2)" }}>{gradeRange(c) ? fmtRange(gradeRange(c)) : fmt(Number(c.value) || 0)}</div>{invBasis(c) ? <div className="cl-row-meta">basis {fmt(invBasis(c))}</div> : null}</div>
-              <button className="cl-x" onClick={() => { setEditId(c.id); setAdding(false); }}><Pencil size={13} /></button>
-              <button className="cl-x" onClick={() => del(c.id)}><Trash2 size={13} /></button>
+              <button className="cl-x" onClick={(e) => { e.stopPropagation(); setEditId(c.id); setAdding(false); }}><Pencil size={13} /></button>
+              <button className="cl-x" onClick={(e) => { e.stopPropagation(); del(c.id); }}><Trash2 size={13} /></button>
             </div>)}
       </div>
+      {viewCard && <CardModal card={viewCard} onClose={() => setViewId(null)}
+        onEdit={() => { setViewId(null); setEditId(viewCard.id); setAdding(false); }}
+        onValue={(v) => upd({ id: viewCard.id, value: v })} />}
     </div>
   );
 }
@@ -1760,6 +1775,156 @@ function InvForm({ initial, onSave, onCancel }) {
       <div className="cl-grid3"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Grading cost"><MoneyInput value={f.gradingCost} onChange={(v) => setF({ ...f, gradingCost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} /></Field></div>
       <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, grade: f.grade, status: f.status, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(PSA_EST_GRADES.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
     </Form>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Card detail modal — opened by tapping an inventory row. Pulls three
+   sources in parallel: the TCGplayer set dump for a live market price,
+   pokemontcg.io for the card image/details, and the Lambda's /graded route
+   for recent eBay solds (raw + slabbed). The graded pull spends the daily
+   PPT credit budget (~6 per fresh card, cached 24h client & server) — fine
+   here because opening a card is a deliberate one-card action, unlike the
+   form auto-pull that was removed for draining the budget. */
+const CM_COMPANIES = [["psa", "PSA"], ["cgc", "CGC"], ["tag", "TAG"]];
+const CM_GRADES = ["10", "9.5", "9", "8"];
+const cmKey = (co, g) => co + g.replace(".", "_");
+const cmTrend = (t) => (t === "up" ? <span className="cl-cm-tr up">▲</span> : t === "down" ? <span className="cl-cm-tr down">▼</span> : null);
+// PPT writes numbers like "SVP 176" where the ledger has "176" (or "161/131");
+// compare just the tail token so equal cards don't warn
+const numTail = (x) => normNum(String(x || "").trim().split(/\s+/).pop());
+const cmErrMsg = (s) => (s === 501 ? "eBay comps aren't set up on the sync Lambda."
+  : s === 429 ? "Daily eBay-comps budget is used up — sold data comes back tomorrow."
+  : s === 404 ? "No recent eBay solds found for this card."
+  : "eBay sold data is unavailable right now.");
+function CardModal({ card, onClose, onEdit, onValue }) {
+  const [match, setMatch] = useState(null);   // pokemontcg.io match (image, rarity, fallback price)
+  const [live, setLive] = useState(null);     // TCGplayer market from the set dump
+  const [comps, setComps] = useState({ state: "loading" }); // /graded body
+  useEffect(() => {
+    let ok = true;
+    setMatch(null); setLive(null); setComps({ state: "loading" });
+    (async () => {
+      if (card.set && card.number) {
+        const m = await fetchSetPrices(card.set);
+        const v = m?.[normNum(card.number)];
+        if (ok && v != null) setLive(v);
+      }
+      const hit = await lookupCardMatch(card);
+      if (!ok || !hit) return;
+      setMatch(hit);
+      setLive((p) => (p != null ? p : cardPrice(hit)));
+    })();
+    (async () => {
+      try { const r = await fetchGradedComps(card.name, card.set, card.number); if (ok) setComps({ state: "ok", data: r }); }
+      catch (e) { if (ok) setComps({ state: "err", status: e.status || 0 }); }
+    })();
+    return () => { ok = false; };
+  }, [card.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
+  }, [onClose]);
+
+  const data = comps.data;
+  const img = match?.images?.large || match?.images?.small || data?.image || null;
+  const market = live != null ? live : data?.market ?? null;
+  const value = Number(card.value) || 0;
+  const basis = invBasis(card);
+  const unreal = value - basis;
+  const rarity = match?.rarity || data?.rarity || "";
+  const held = card.date ? Math.max(0, Math.round((Date.now() - new Date(card.date + "T12:00:00").getTime()) / 864e5)) : null;
+  const shownKeys = new Set(CM_COMPANIES.flatMap(([co]) => CM_GRADES.map((g) => cmKey(co, g))));
+  const extras = Object.entries(data?.byGrade || {})
+    .flatMap(([k, b]) => {
+      if (shownKeys.has(k)) return [];
+      const m = k.match(/^([a-z]+)([\d_]+)$/);
+      return m ? [{ label: `${m[1].toUpperCase()} ${m[2].replace("_", ".")}`, ...b }] : [];
+    })
+    .sort((a, b) => b.price - a.price);
+  const anyGraded = Object.keys(data?.byGrade || {}).length > 0;
+  const mismatch = data && card.number && data.number && numTail(data.number) !== numTail(card.number);
+  const ests = PSA_EST_GRADES.filter((g) => Number(card.gradeEst?.[g]) > 0);
+  const tcgpUrl = data?.url || `https://www.tcgplayer.com/search/pokemon/product?q=${encodeURIComponent(`${card.name} ${card.number || ""}`.trim())}`;
+  const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(`pokemon ${card.name} ${card.number || ""}`.trim())}&LH_Sold=1&LH_Complete=1`;
+  const rawMeta = data?.raw ? [
+    `${data.raw.count} sale${data.raw.count === 1 ? "" : "s"}`,
+    data.raw.median != null ? `median ${fmt(data.raw.median)}` : null,
+    data.raw.min != null && data.raw.max != null ? `${fmt(data.raw.min)} – ${fmt(data.raw.max)}` : null,
+  ].filter(Boolean).join(" · ") : "";
+
+  return (
+    <div className="cl-modal-ov" onClick={onClose}>
+      <div className="cl-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <button className="cl-x cl-cm-close" onClick={onClose}><X size={16} /></button>
+        <div className="cl-cm-top">
+          {img
+            ? <img className="cl-cm-img" src={img} alt={card.name} />
+            : <div className="cl-cm-img ph">{match || comps.state !== "loading" ? "no image found" : "loading…"}</div>}
+          <div className="cl-cm-head">
+            <div className="cl-cm-name">{card.name}</div>
+            <div className="cl-row-meta">{card.set || match?.set?.name || data?.set || "set unknown"}{(card.number || match?.number || data?.number) ? ` · ${card.number || match?.number || data?.number}` : ""}{rarity ? ` · ${rarity}` : ""}</div>
+            <div className="cl-row-meta"><span className={"cl-st " + stCls(card.status)}>{card.status}</span><span className="cl-chip">{card.grade}</span></div>
+            <div className="cl-cm-mkt">
+              <div className="cl-cm-mkt-num">{market != null ? fmt(market) : "—"}</div>
+              <div className="cl-cm-mkt-lab">TCGplayer market{market == null ? " — no data" : ""}</div>
+            </div>
+            {market != null && Math.abs(market - value) > 0.005 && card.status !== "Sold" &&
+              <button className="cl-mini cl-cm-apply" onClick={() => onValue(Math.round(market * 100) / 100)}>Set ledger value to {fmt(market)}</button>}
+          </div>
+        </div>
+
+        <div className="cl-cm-stats">
+          <div className="cl-cm-stat"><span>Ledger value</span><b>{fmt(value)}</b></div>
+          <div className="cl-cm-stat"><span>Cost basis</span><b>{fmt(basis)}</b></div>
+          <div className="cl-cm-stat"><span>Unrealized</span><b className={unreal >= 0 ? "pos" : "neg"}>{fmt(unreal)}</b></div>
+        </div>
+
+        <div className="cl-cm-sec">Recent eBay solds — raw</div>
+        {comps.state === "loading" && <div className="cl-cm-note">Pulling eBay sold data…</div>}
+        {comps.state === "err" && <div className="cl-cm-note">{cmErrMsg(comps.status)}</div>}
+        {comps.state === "ok" && (data.raw
+          ? <div className="cl-cm-raw"><span className="cl-cm-raw-price">{fmt(data.raw.price)}{cmTrend(data.raw.trend)}</span><span className="cl-row-meta">{rawMeta}</span></div>
+          : <div className="cl-cm-note">No recent raw solds recorded.</div>)}
+
+        {comps.state === "ok" && <>
+          <div className="cl-cm-sec">Graded eBay solds</div>
+          {anyGraded ? <>
+            <div className="cl-cm-grid">
+              <span />
+              {CM_COMPANIES.map(([co, label]) => <span key={co} className="cl-cm-co">{label}</span>)}
+              {CM_GRADES.map((g) => (
+                <React.Fragment key={g}>
+                  <span className="cl-cm-g">{g}</span>
+                  {CM_COMPANIES.map(([co]) => {
+                    const b = data.byGrade?.[cmKey(co, g)];
+                    return (
+                      <span key={co} className="cl-cm-cell">
+                        {b ? <><span className="cl-money">{fmt(b.price)}{cmTrend(b.trend)}</span><span className="cl-cm-cnt">{b.count} sold</span></> : <span className="cl-cm-none">—</span>}
+                      </span>);
+                  })}
+                </React.Fragment>
+              ))}
+            </div>
+            {extras.length > 0 && <div className="cl-cm-extra">{extras.map((x) => <span key={x.label} className="cl-chip">{x.label} {fmt(x.price)} · {x.count} sold</span>)}</div>}
+          </> : <div className="cl-cm-note">No graded sales recorded for this card.</div>}
+          {mismatch && <div className="cl-cm-note warn">Sold data matched “{data.card} · {data.number}” — double-check it's the same card.</div>}
+          {data.window?.from && <div className="cl-cm-foot">Sold data {String(data.window.from).slice(0, 10)} → {String(data.window.to).slice(0, 10)} · pokemonpricetracker.com</div>}
+        </>}
+        {ests.length > 0 && <div className="cl-cm-foot">Your PSA estimates: {ests.map((g) => `${g} → ${fmt(Number(card.gradeEst[g]))}`).join(" · ")}</div>}
+
+        <div className="cl-cm-sec">Details</div>
+        <div className="cl-cm-meta">{card.source}{card.date ? ` · added ${card.date}` : ""}{held != null ? ` · held ${held} day${held === 1 ? "" : "s"}` : ""}{Number(card.gradingCost) > 0 ? ` · grading ${fmt(Number(card.gradingCost))}` : ""}</div>
+        <div className="cl-cm-links">
+          <a className="cl-mini" href={tcgpUrl} target="_blank" rel="noreferrer"><ExternalLink size={12} /> TCGplayer</a>
+          <a className="cl-mini" href={ebayUrl} target="_blank" rel="noreferrer"><ExternalLink size={12} /> eBay solds</a>
+          <button className="cl-mini" onClick={onEdit}><Pencil size={12} /> Edit card</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1975,6 +2140,8 @@ function Fonts() {
     .cl-bar-fill.in{background:linear-gradient(90deg,#3fd68c,#2bbf9a);}
     .cl-row{display:flex;align-items:center;gap:9px;background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px 12px;}
     .cl-row.sold{opacity:.55;}
+    .cl-row.click{cursor:pointer;}
+    .cl-row.click:hover{border-color:#3d465c;}
     .cl-row-main{flex:1;min-width:0;}
     .cl-row-title{font-size:13.5px;font-weight:500;display:flex;align-items:center;gap:7px;}
     .cl-row-meta{font-size:11.5px;color:var(--mut);margin-top:3px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
@@ -2105,6 +2272,44 @@ function Fonts() {
     .cl-ac-price{font-family:'Space Grotesk';font-weight:600;color:var(--pos);font-size:13px;font-variant-numeric:tabular-nums;flex:none;}
     .cl-ac-retry{width:100%;background:none;border:none;color:#ffce9e;cursor:pointer;font-family:'Inter';}
     .cl-ac-hint{font-size:10.5px;color:var(--mut);margin-top:4px;padding-left:2px;font-style:italic;}
-    @media (max-width:420px){.cl-grid3{grid-template-columns:1fr;}.cl-hero-num{font-size:40px;}.cl-inv-summary .cl-stat-num{font-size:16px;}.cl-inv-summary .cl-range{font-size:11px;}.cl-gradeest{grid-template-columns:repeat(3,1fr);}}
+    .cl-modal-ov{position:fixed;inset:0;z-index:60;background:rgba(6,8,13,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px;}
+    .cl-modal{background:var(--surf);border:1px solid var(--line);border-radius:18px;width:100%;max-width:540px;max-height:min(88vh,780px);overflow-y:auto;padding:16px;position:relative;animation:cmIn .18s ease-out;}
+    @keyframes cmIn{from{transform:translateY(16px);opacity:.5;}to{transform:none;opacity:1;}}
+    @media (prefers-reduced-motion:reduce){.cl-modal{animation:none;}}
+    .cl-cm-close{position:absolute;top:10px;right:10px;background:var(--surf2);}
+    .cl-cm-top{display:flex;gap:14px;}
+    .cl-cm-img{width:158px;flex:none;align-self:flex-start;border-radius:12px;background:#0c0f15;}
+    .cl-cm-img.ph{aspect-ratio:3/4;display:grid;place-items:center;color:var(--mut);font-size:11px;border:1px dashed var(--line);}
+    .cl-cm-head{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;padding-right:26px;}
+    .cl-cm-name{font-family:'Space Grotesk';font-weight:700;font-size:17px;letter-spacing:-.01em;line-height:1.2;}
+    .cl-cm-mkt-num{font-family:'Space Grotesk';font-weight:700;font-size:27px;color:var(--pos);font-variant-numeric:tabular-nums;letter-spacing:-.02em;}
+    .cl-cm-mkt-lab{font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em;margin-top:1px;}
+    .cl-cm-apply{flex:0 0 auto;align-self:flex-start;}
+    .cl-cm-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:12px;}
+    .cl-cm-stat{background:var(--surf2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:2px;}
+    .cl-cm-stat span{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em;}
+    .cl-cm-stat b{font-family:'Space Grotesk';font-size:14.5px;font-variant-numeric:tabular-nums;}
+    .cl-cm-stat b.pos{color:var(--pos);}.cl-cm-stat b.neg{color:var(--neg);}
+    .cl-cm-sec{font-family:'Space Grotesk';font-weight:600;font-size:13.5px;margin:16px 0 8px;}
+    .cl-cm-note{font-size:12px;color:var(--mut);line-height:1.45;}
+    .cl-cm-note.warn{color:#ffce9e;margin-top:8px;}
+    .cl-cm-raw{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}
+    .cl-cm-raw-price{font-family:'Space Grotesk';font-weight:700;font-size:19px;color:var(--pos);font-variant-numeric:tabular-nums;}
+    .cl-cm-raw .cl-row-meta{margin-top:0;}
+    .cl-cm-grid{display:grid;grid-template-columns:34px repeat(3,1fr);gap:6px;align-items:stretch;}
+    .cl-cm-co{font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em;text-align:center;align-self:end;padding-bottom:2px;}
+    .cl-cm-g{font-size:11.5px;color:var(--mut);display:flex;align-items:center;justify-content:center;font-family:'Space Grotesk';font-weight:600;}
+    .cl-cm-cell{background:var(--surf2);border:1px solid var(--line);border-radius:9px;padding:7px 4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:44px;}
+    .cl-cm-cell .cl-money{font-size:12.5px;}
+    .cl-cm-cnt{font-size:9.5px;color:var(--mut);}
+    .cl-cm-none{color:#3a4356;}
+    .cl-cm-tr{font-size:9px;margin-left:3px;}
+    .cl-cm-tr.up{color:var(--pos);}.cl-cm-tr.down{color:var(--neg);}
+    .cl-cm-extra{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+    .cl-cm-foot{font-size:10.5px;color:var(--mut);margin-top:8px;}
+    .cl-cm-meta{font-size:12px;color:var(--mut);line-height:1.5;}
+    .cl-cm-links{display:flex;gap:6px;margin-top:10px;}
+    .cl-cm-links .cl-mini{display:flex;align-items:center;justify-content:center;gap:5px;text-decoration:none;}
+    @media (max-width:420px){.cl-grid3{grid-template-columns:1fr;}.cl-hero-num{font-size:40px;}.cl-inv-summary .cl-stat-num{font-size:16px;}.cl-inv-summary .cl-range{font-size:11px;}.cl-gradeest{grid-template-columns:repeat(3,1fr);}.cl-cm-img{width:116px;}.cl-cm-mkt-num{font-size:22px;}}
   `}</style>);
 }
