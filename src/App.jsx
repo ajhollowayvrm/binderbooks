@@ -1428,6 +1428,9 @@ const TCGP_REQ_COLS = ["TCGplayer Id", "Set Name", "Product Name", "Number", "Co
 const TCGP_SET_ALIASES = [
   [/scarlet.*violet.*(black star|promo)/, "sv: scarlet & violet promo cards"],
   [/^me(ga evolution)?\b.*(black star|promo)/, "me: mega evolution promo"],
+  [/^swsh\b.*(black star|promo)/, "swsh: sword & shield promo cards"],
+  [/^sm\b.*(black star|promo)/, "sm promos"],
+  [/^xy\b.*(black star|promo)/, "xy promos"],
 ];
 const tcgpSetMatch = (rowSet, cardSet) => {
   const rs = String(rowSet || "").toLowerCase(), cs = String(cardSet || "").toLowerCase().trim();
@@ -1442,7 +1445,9 @@ const tcgpTok = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ")
 const tcgpNameScore = (cardName, prodName) => {
   const ct = new Set(tcgpTok(cardName));
   let s = 0;
-  for (const t of tcgpTok(String(prodName).split(" - ")[0])) s += ct.has(t) ? 1 : -0.5;
+  // strip only the " - <num>" token so variant markers like "[Staff]" or
+  // "(Prerelease)" survive to be scored (and penalized when unasked-for)
+  for (const t of tcgpTok(String(prodName).replace(/ - [\w/.]+/, " "))) s += ct.has(t) ? 1 : -0.5;
   return s;
 };
 // ledger cards carry no condition, so everything exports as Near Mint; the
@@ -1459,9 +1464,19 @@ function buildTcgpUpload(rows, cards) {
   const usable = rows.filter((r) => /^\d+$/.test(String(r["TCGplayer Id"] || "").trim()) && tcgpCondRank(r["Condition"], "") >= 0);
   const picks = new Map(); // sku id -> { row, qty, values, ids }
   const unmatched = [];
+  // the export's Number column is occasionally wrong (promos filed under
+  // another set's number) while the product name's " - <num>" suffix is
+  // right — a row matches on either. A card whose number matches neither
+  // stays unmatched: falling back to name-only could stage a different
+  // variant's SKU (DR vs UR share the base name), which mis-lists.
+  const rowNum = (r) => {
+    const m = String(r["Product Name"]).match(/.* - ([\w/.]+)$/);
+    return m && /^[A-Za-z]{0,5}\d/.test(m[1]) ? m[1] : r["Number"];
+  };
   for (const c of cards) {
     const inSet = usable.filter((r) => tcgpSetMatch(r["Set Name"], c.set));
-    let cands = c.number ? inSet.filter((r) => normNum(r["Number"]) === normNum(c.number)) : inSet;
+    const want = c.number ? normNum(c.number) : null;
+    let cands = want ? inSet.filter((r) => normNum(r["Number"]) === want || normNum(rowNum(r)) === want) : inSet;
     const names = [...new Set(cands.map((r) => r["Product Name"]))];
     if (names.length > 1) {
       // several products share the number (Poke Ball / Master Ball patterns)
@@ -1779,6 +1794,39 @@ function Lookup({ state, patch }) {
     } catch { setErr("The card database didn't respond — tap search to try again."); }
     finally { setLoading(false); }
   };
+  // fallback: search a set straight from TCGplayer's catalog (via the Lambda) —
+  // newly released cards land there days before pokemontcg.io knows them
+  const sets = useSets();
+  const [catSet, setCatSet] = useState("");
+  const [catLoading, setCatLoading] = useState(false);
+  const catSearch = async () => {
+    const s = catSet.trim();
+    if (!s || catLoading) return;
+    setCatLoading(true); setErr(""); setRes([]);
+    try {
+      const r = await fetch(`${SYNC_URL}catalog?set=${encodeURIComponent(s)}`);
+      if (!r.ok) { const e = new Error(); e.status = r.status; throw e; }
+      const j = await r.json();
+      const toks = q.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+      const list = (j.cards || [])
+        .filter((p) => toks.every((t) => p.name.toLowerCase().includes(t)))
+        .sort((a, b) => (b.market || 0) - (a.market || 0))
+        .slice(0, 40)
+        .map((p) => ({
+          // pseudo-card in pokemontcg.io shape so the result list and its
+          // actions work as-is; `set` stays the name the user typed so price
+          // refreshes on the kept card resolve the same way later
+          id: `tcgp-${j.group}-${p.num}-${p.name}`,
+          name: p.name.replace(/ - [\w/.]+$/, ""),
+          number: p.num, rarity: p.rarity, set: { name: s }, images: {},
+          ...(p.market != null ? { tcgplayer: { prices: { holofoil: { market: p.market } } } } : {}),
+        }));
+      setRes(list);
+      if (!list.length) setErr(toks.length ? `Nothing in ${j.group} matches “${toks.join(" ")}” — clear the search box above to browse the whole set.` : "No singles found in that set.");
+    } catch (e) {
+      setErr(e.status === 404 ? "TCGplayer doesn't have a set by that name — pick one from the suggestions." : "TCGplayer catalog is unavailable right now — try again.");
+    } finally { setCatLoading(false); }
+  };
   const priceOf = cardPrice;
 
   const asBuy = (c) => { patch((s) => ({ buys: [{ id: uid(), item: `${c.name} ${c.number || ""}`.trim(), category: "Single", source: "Other", cost: priceOf(c) || 0, date: today() }, ...s.buys] })); flash(c.id, "Added to Buys"); };
@@ -1805,6 +1853,14 @@ function Lookup({ state, patch }) {
             </div>
           </div>); })}
       </div>
+      {!loading && !catLoading && <div className="cl-cat">
+        <div className="cl-row-meta">Missing from the database? New cards hit TCGplayer's catalog first — pick a set (the search box above filters it by name):</div>
+        <div className="cl-search">
+          <input className="cl-in" list="bb-set-list" placeholder="Set — e.g. ME Black Star Promos" value={catSet} onChange={(e) => setCatSet(e.target.value)} onKeyDown={(e) => e.key === "Enter" && catSearch()} />
+          <button className="cl-search-btn" onClick={catSearch}><PackageOpen size={15} /></button>
+        </div>
+        <datalist id="bb-set-list">{(sets || []).map((s) => <option key={s} value={s} />)}</datalist>
+      </div>}
     </div>
   );
 }
@@ -1979,6 +2035,8 @@ function Fonts() {
     .cl-tcgp-pick-row .cl-row-meta{margin-top:0;flex:none;}
     .cl-tcgp-pick-row .cl-money{margin-left:auto;font-size:12.5px;}
     .cl-tcgp-pick-name{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .cl-cat{background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px;display:flex;flex-direction:column;gap:8px;}
+    .cl-cat .cl-row-meta{margin-top:0;}
     .cl-import-btn:disabled{opacity:.6;cursor:default;}
     .cl-import-msg{font-size:12px;color:var(--mut);margin-top:7px;}
     .cl-empty{background:var(--surf);border:1px dashed var(--line);border-radius:12px;padding:18px;text-align:center;font-size:12.5px;color:var(--mut);line-height:1.5;}

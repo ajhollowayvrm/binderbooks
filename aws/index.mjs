@@ -46,10 +46,18 @@ const GROUP_ALIASES = [
   [/^sm\b.*(black star|promo)/, "sm promos"],
   [/^xy\b.*(black star|promo)/, "xy promos"],
 ];
-async function setPrices(setName) {
+// TCGplayer's catalog Number field is sometimes wrong (the Mega Greninja ex
+// 081 promo is filed under its Chaos Rising number, 022/086) while the
+// seller-facing product name carries the real number — prefer the name's
+// " - <num>" suffix when it looks like a collector number
+const nameNum = (name) => {
+  const m = String(name).match(/.* - ([\w/.]+)/);
+  return m && /^[A-Za-z]{0,5}\d/.test(m[1]) ? m[1] : null;
+};
+async function setData(setName) {
   const key = setName.toLowerCase();
   const hit = priceCache.get(key);
-  if (hit && Date.now() - hit.t < PRICE_TTL) return hit.body;
+  if (hit && Date.now() - hit.t < PRICE_TTL) return hit;
   if (!groupsCache || Date.now() - groupsCache.t > PRICE_TTL) {
     const gr = await fetch("https://tcgcsv.com/tcgplayer/3/groups", { headers: TCGCSV_HEADERS });
     if (!gr.ok) throw new Error(`groups HTTP ${gr.status}`);
@@ -70,17 +78,45 @@ async function setPrices(setName) {
     if (p.marketPrice == null) continue;
     (byProd[p.productId] ||= {})[p.subTypeName] = p.marketPrice;
   }
-  const out = {};
+  const products = [];
   for (const pr of prods.results || []) {
-    const num = (pr.extendedData || []).find((d) => d.name === "Number"); // absent on sealed products
-    const sub = num && byProd[pr.productId];
-    if (!sub) continue;
-    const val = sub["Normal"] ?? sub["Holofoil"] ?? Object.values(sub)[0];
-    if (val != null) out[normNum(num.value)] = val;
+    const ext = (pr.extendedData || []).find((d) => d.name === "Number"); // absent on sealed products
+    if (!ext) continue;
+    const rar = (pr.extendedData || []).find((d) => d.name === "Rarity");
+    const sub = byProd[pr.productId];
+    const market = sub ? sub["Normal"] ?? sub["Holofoil"] ?? Object.values(sub)[0] : null;
+    products.push({ name: pr.name, num: nameNum(pr.name) || ext.value, extNum: ext.value, rarity: rar?.value || "", market: market ?? null });
   }
-  const body = { set: setName, group: group.name, prices: out };
-  priceCache.set(key, { t: Date.now(), body });
-  return body;
+  const data = { t: Date.now(), group: group.name, products };
+  priceCache.set(key, data);
+  return data;
+}
+async function setPrices(setName) {
+  const d = await setData(setName);
+  if (!d) return null;
+  // [Staff] and (Prerelease) variants share the plain card's number but carry
+  // very different prices — they only fill a slot the plain card doesn't
+  const out = {};
+  const assign = (p, overwrite) => {
+    const k1 = normNum(p.num), k2 = normNum(p.extNum);
+    if (overwrite) out[k1] = p.market; else out[k1] ??= p.market;
+    // the catalog's own Number as a secondary key when it disagrees, never
+    // clobbering a real card's slot
+    if (k2 !== k1 && out[k2] == null) out[k2] = p.market;
+  };
+  const priced = d.products.filter((p) => p.market != null);
+  priced.filter((p) => /\[|\(prerelease\)/i.test(p.name)).forEach((p) => assign(p, false));
+  priced.filter((p) => !/\[|\(prerelease\)/i.test(p.name)).forEach((p) => assign(p, true));
+  return { set: setName, group: d.group, prices: out };
+}
+/* GET /catalog?set=<name> — the singles in a set straight from TCGplayer's
+   catalog (via tcgcsv): name, number, rarity, market. Newly released cards
+   land here days before pokemontcg.io knows them, so the app's Lookup tab
+   falls back to this when its card database comes up empty. */
+async function setCatalog(setName) {
+  const d = await setData(setName);
+  if (!d) return null;
+  return { set: setName, group: d.group, cards: d.products.map((p) => ({ name: p.name, num: p.num, rarity: p.rarity, market: p.market })) };
 }
 
 /* GET /graded?name=<card>&number=<num>&set=<set> — eBay-sold comps for PSA
@@ -150,6 +186,14 @@ export const handler = async (event) => {
     if (!setName) return res(400, { error: "set required" });
     try { const body = await setPrices(setName); return body ? res(200, body) : res(404, { error: "set not found" }); }
     catch (e) { console.error("prices route failed:", e); return res(502, { error: "price source unavailable" }); }
+  }
+
+  // also public market data, same deal as /prices
+  if (method === "GET" && event.rawPath?.endsWith("/catalog")) {
+    const setName = event.queryStringParameters?.set;
+    if (!setName) return res(400, { error: "set required" });
+    try { const body = await setCatalog(setName); return body ? res(200, body) : res(404, { error: "set not found" }); }
+    catch (e) { console.error("catalog route failed:", e); return res(502, { error: "catalog source unavailable" }); }
   }
 
   // also public market data, same deal as /prices
