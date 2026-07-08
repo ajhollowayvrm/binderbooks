@@ -11,6 +11,27 @@ import {
 /* ------------------------------------------------------------------ */
 const API_KEY = import.meta.env.VITE_POKEMONTCG_API_KEY;
 const PTCG_OPTS = API_KEY ? { headers: { "X-Api-Key": API_KEY } } : undefined;
+/* every pokemontcg.io call goes through here: the API's favorite failure mode
+   is hanging or dropping a request, so each call gets a hard timeout and one
+   retry — and `select=` trims the default payloads (full card objects carry
+   attacks/abilities/legalities we never render, ~10-20x the bytes we need) */
+const PTCG_SELECT = "id,name,number,rarity,set,images,tcgplayer";
+async function ptcgFetch(pathAndQuery, { tries = 2, timeout = 9000 } = {}) {
+  let err;
+  for (let i = 0; i < tries; i++) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), timeout);
+    try {
+      const r = await fetch(`https://api.pokemontcg.io/v2/${pathAndQuery}`, { ...(PTCG_OPTS || {}), signal: ctl.signal });
+      if (!r.ok) throw new Error(String(r.status));
+      return await r.json();
+    } catch (e) {
+      err = e;
+      if (i + 1 < tries) await new Promise((res) => setTimeout(res, 600));
+    } finally { clearTimeout(t); }
+  }
+  throw err;
+}
 const storage = {
   get: async (k) => { try { const v = localStorage.getItem(k); return v == null ? null : { key: k, value: v }; } catch { return null; } },
   set: async (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* quota / private mode */ } return { key: k, value: v }; },
@@ -61,9 +82,7 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const SETS_KEY = "cardledger:sets:v1";
 let setsPromise = null;
 async function fetchSets() {
-  const r = await fetch("https://api.pokemontcg.io/v2/sets?orderBy=-releaseDate&select=name,releaseDate&pageSize=250", PTCG_OPTS);
-  if (!r.ok) throw new Error(String(r.status));
-  const data = await r.json();
+  const data = await ptcgFetch("sets?orderBy=-releaseDate&select=name,releaseDate&pageSize=250");
   const names = [...new Set((data.data || []).map((s) => s.name))];
   if (!names.length) throw new Error("empty");
   try { localStorage.setItem(SETS_KEY, JSON.stringify({ t: Date.now(), names })); } catch {}
@@ -133,21 +152,26 @@ const setPricesPut = (set, p) => {
     localStorage.setItem(SETPRICE_KEY, JSON.stringify(all));
   } catch {}
 };
+// one { cardNumber: market } map per set from the Lambda's tcgcsv proxy —
+// `force` skips the 24h client cache (explicit refreshes want today's dump)
+// but still falls back to it if the network call fails
+async function fetchSetPrices(setName, force = false) {
+  if (!force) { const m = setPricesGet(setName); if (m) return m; }
+  try {
+    const r = await fetch(`${SYNC_URL}prices?set=${encodeURIComponent(setName)}`);
+    if (!r.ok) return force ? setPricesGet(setName) : null;
+    const m = (await r.json()).prices || {};
+    setPricesPut(setName, m);
+    return m;
+  } catch { return force ? setPricesGet(setName) : null; }
+}
 async function fillMissingPrices(list) {
   const missing = list.filter((c) => cardPrice(c) == null && c.set?.name && c.number);
   if (!missing.length) return list;
   const maps = {};
   await Promise.all([...new Set(missing.map((c) => c.set.name))].map(async (s) => {
-    let m = setPricesGet(s);
-    if (!m) {
-      try {
-        const r = await fetch(`${SYNC_URL}prices?set=${encodeURIComponent(s)}`);
-        if (!r.ok) return;
-        m = (await r.json()).prices || {};
-        setPricesPut(s, m);
-      } catch { return; }
-    }
-    maps[s] = m;
+    const m = await fetchSetPrices(s);
+    if (m) maps[s] = m;
   }));
   return list.map((c) => {
     if (cardPrice(c) != null) return c;
@@ -446,9 +470,8 @@ async function lookupCardPrice(card) {
   const esc = (s) => String(s || "").replace(/["\\]/g, "");
   const name = `name:"${esc(card.name)}"`;
   const fetchList = async (q) => {
-    const r = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q)}&pageSize=24`, PTCG_OPTS);
-    if (!r.ok) throw new Error(String(r.status));
-    return fillMissingPrices(((await r.json()).data || []).map(slimCard));
+    const data = await ptcgFetch(`cards?q=${encodeURIComponent(q)}&pageSize=24&select=${PTCG_SELECT}`);
+    return fillMissingPrices((data.data || []).map(slimCard));
   };
   try {
     if (card.number) {
@@ -947,14 +970,12 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
   const skip = useRef(false);
   const fillSeq = useRef(0);
 
-  const run = async (q, attempt = 0) => {
+  const run = async (q) => {
     setError(false); setPending(false); setLoading(true); setOpen(true);
     try {
       const { terms, descriptors, first } = buildQuery(q);
       const want = [...new Set(descriptors.flatMap((d) => DESC_RARITY[d] || []))];
-      const r = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(terms)}&pageSize=24`, PTCG_OPTS);
-      if (!r.ok) throw new Error(String(r.status));
-      const data = await r.json();
+      const data = await ptcgFetch(`cards?q=${encodeURIComponent(terms)}&pageSize=24&select=${PTCG_SELECT}`);
       const filled = await fillMissingPrices((data.data || []).map(slimCard));
       const list = filled.sort((a, b) => {
         const av = a.name.toLowerCase().startsWith(first) ? 0 : 1;
@@ -970,7 +991,7 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
       qcacheSet(terms, list);
       setResults(list);
     } catch (e) {
-      if (attempt < 1) { await new Promise((res) => setTimeout(res, 700)); return run(q, attempt + 1); }
+      // ptcgFetch already timed out and retried once — surface the tap-to-retry
       setResults([]); setError(true);
     } finally { setLoading(false); }
   };
@@ -992,7 +1013,9 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
       return;
     }
     setPending(true);
-    timer.current = setTimeout(() => run(q), 3000);
+    // 900ms of quiet typing fires the search — it was 3s, which read as broken;
+    // the slimmed payloads + query cache keep the request budget reasonable
+    timer.current = setTimeout(() => run(q), 900);
     return () => clearTimeout(timer.current);
   }, [value]);
 
@@ -1527,18 +1550,39 @@ function Inventory({ state, patch }) {
     const cands = inv.filter((c) => c.status !== "Sold" && c.name && (c.number || c.set));
     if (!cands.length) { setSyncMsg("Nothing to refresh — held cards need a set or number to match against the database."); return; }
     setRefreshing(true);
-    setSyncMsg(`Checking ${cands.length} card${cands.length === 1 ? "" : "s"} on pokemontcg.io…`);
+    setSyncMsg(`Checking ${cands.length} card${cands.length === 1 ? "" : "s"}…`);
     const hasEst = (c) => PSA_EST_GRADES.some((g) => Number(c.gradeEst?.[g]) > 0);
     const updates = {};
     let priced = 0, changed = 0, graded = 0, gradedNote = "";
+    const applyPrice = (c, price) => {
+      updates[c.id] = { ...(updates[c.id] || {}), value: price };
+      priced++;
+      if (price !== (Number(c.value) || 0)) changed++;
+    };
+    // fast path: one TCGplayer daily-dump pull per distinct set (via the
+    // Lambda) prices every card with a set + number in a few requests total —
+    // the old card-by-card pokemontcg.io walk took minutes and died mid-way
+    const setNames = [...new Set(cands.filter((c) => c.set && c.number).map((c) => c.set))];
+    const maps = {};
+    await Promise.all(setNames.map(async (s) => { const m = await fetchSetPrices(s, true); if (m) maps[s] = m; }));
+    const leftovers = [];
     for (const c of cands) {
+      const v = c.set && c.number ? maps[c.set]?.[normNum(c.number)] : null;
+      if (v != null) applyPrice(c, v);
+      else leftovers.push(c);
+    }
+    // slow path: whatever the set dump couldn't pin down (missing number, set
+    // name tcgcsv doesn't know) goes card-by-card to pokemontcg.io, which can
+    // also backfill a missing set/number from its match
+    for (const c of leftovers) {
       const m = await lookupCardPrice(c);
       const price = m ? cardPrice(m) : null;
       if (m && price != null) {
-        updates[c.id] = { ...(updates[c.id] || {}), value: price, ...(c.set ? {} : { set: m.set?.name || "" }), ...(c.number ? {} : { number: m.number || "" }) };
-        priced++;
-        if (price !== (Number(c.value) || 0)) changed++;
+        applyPrice(c, price);
+        updates[c.id] = { ...updates[c.id], ...(c.set ? {} : { set: m.set?.name || "" }), ...(c.number ? {} : { number: m.number || "" }) };
       }
+    }
+    for (const c of cands) {
       if (!gradedNote && (c.status === "At grading" || hasEst(c))) {
         try {
           const r = await fetchGradedComps(c.name, c.set, c.number);
@@ -1561,10 +1605,22 @@ function Inventory({ state, patch }) {
       ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the database yet` : ""}${gradedNote}.`
       : `None of those ${cands.length} card${cands.length === 1 ? "" : "s"} are in the database yet — check back later${gradedNote}.`);
   };
-  // Build a TCGplayer staged-upload CSV: the user picks their own TCGplayer
-  // export (which carries the SKU ids), we fill Add to Quantity + price for
-  // every raw Kept card we can match, and hand back the upload-ready file.
+  // Build a TCGplayer staged-upload CSV: the user ticks the cards to list,
+  // picks their own TCGplayer export (which carries the SKU ids), and we fill
+  // Add to Quantity + price for each match into an upload-ready file.
   const tcgpFileRef = useRef();
+  const [tcgpOpen, setTcgpOpen] = useState(false);
+  const [tcgpSel, setTcgpSel] = useState(() => new Set());
+  const tcgpEligible = inv
+    .filter((c) => c.status === "Kept" && c.grade === "Raw" && c.name && c.set)
+    .sort((a, b) => (a.set || "").localeCompare(b.set || "") || (a.name || "").localeCompare(b.name || ""));
+  const tcgpExcluded = inv.filter((c) => c.status === "Kept" && c.name).length - tcgpEligible.length;
+  const toggleTcgp = () => {
+    if (!tcgpOpen) setTcgpSel(new Set(tcgpEligible.map((c) => c.id)));
+    setTcgpOpen(!tcgpOpen);
+    setSyncMsg("");
+  };
+  const tcgpTick = (id) => setTcgpSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const onTcgpFile = (e) => {
     const file = e.target.files?.[0]; if (!file) return;
     Papa.parse(file, { header: true, skipEmptyLines: true, complete: (res) => {
@@ -1572,14 +1628,9 @@ function Inventory({ state, patch }) {
       const fields = res.meta?.fields || [];
       const missingCols = TCGP_REQ_COLS.filter((k) => !fields.includes(k));
       if (missingCols.length) { setSyncMsg(`That doesn't look like a TCGplayer inventory export — missing column${missingCols.length === 1 ? "" : "s"}: ${missingCols.join(", ")}.`); return; }
-      const kept = inv.filter((c) => c.status === "Kept" && c.name);
-      const cands = kept.filter((c) => c.grade === "Raw" && c.set);
+      const cands = tcgpEligible.filter((c) => tcgpSel.has(c.id));
+      if (!cands.length) { setSyncMsg("No cards selected."); return; }
       const skipped = [];
-      const graded = kept.filter((c) => c.grade !== "Raw").length;
-      const noSet = kept.filter((c) => c.grade === "Raw" && !c.set).length;
-      if (graded) skipped.push(`${graded} graded (the CSV import can't list slabs)`);
-      if (noSet) skipped.push(`${noSet} missing a set name`);
-      if (!cands.length) { setSyncMsg(`Nothing to upload — no raw Kept cards with a set.${skipped.length ? " Skipped " + skipped.join(" · ") + "." : ""}`); return; }
       const { out, exportedIds, unmatched, needPrice } = buildTcgpUpload(res.data, cands);
       if (unmatched.length) {
         const names = [...new Set(unmatched.map((c) => `${c.name} (${c.set})`))];
@@ -1590,6 +1641,7 @@ function Inventory({ state, patch }) {
       const csv = Papa.unparse({ fields, data: out.map((r) => fields.map((f) => r[f] ?? "")) }, { quotes: true });
       const fname = `Inventory-Upload-BinderBooks-${today()}.csv`;
       downloadFile(fname, csv);
+      setTcgpOpen(false);
       setSyncMsg(`Saved ${fname}: ${out.length} listing${out.length === 1 ? "" : "s"} covering ${exportedIds.length} card${exportedIds.length === 1 ? "" : "s"}. Upload it in Seller Portal → Inventory → Import to Staged, then push live.${skipped.length ? " Skipped " + skipped.join(" · ") + "." : ""}`);
       if (typeof window !== "undefined" && window.confirm(`CSV saved. Mark the ${exportedIds.length} exported card${exportedIds.length === 1 ? "" : "s"} as Listed?\n(Cancel if you're not going to upload this file.)`)) {
         const ids = new Set(exportedIds);
@@ -1610,10 +1662,32 @@ function Inventory({ state, patch }) {
       <Header title="Inventory" sub={`${live.length} held · ${hasRange ? fmtRange(range) : fmt(val)} market`} onAdd={() => { setAdding(!adding); setEditId(null); }} addOpen={adding} />
       {live.length > 0 && <div className="cl-grid2"><Stat label="Cost basis" value={fmt(basis)} tone="out" /><Stat label="Unrealized" value={hasRange ? <span className="cl-range">{fmtRange({ lo: range.lo - basis, hi: range.hi - basis })}</span> : fmt(val - basis)} tone={range.lo - basis >= 0 ? "in" : range.hi - basis < 0 ? "neg" : "out"} /></div>}
       {inv.length > 0 && <div className="cl-import">
-        <button className="cl-import-btn" onClick={refreshPrices} disabled={refreshing}><RefreshCw size={14} /> {refreshing ? "Refreshing prices…" : "Refresh market prices from pokemontcg.io"}</button>
+        <button className="cl-import-btn" onClick={refreshPrices} disabled={refreshing}><RefreshCw size={14} /> {refreshing ? "Refreshing prices…" : "Refresh market prices (TCGplayer daily data)"}</button>
         {(state.sales || []).length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={reconcileSold}><RefreshCw size={14} /> Check against sales — mark anything already sold</button>}
-        <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => tcgpFileRef.current?.click()}><Upload size={14} /> Build TCGplayer upload CSV — pick your TCGplayer export</button>
+        <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={toggleTcgp}><Upload size={14} /> Upload to TCGplayer — choose cards for a staged CSV</button>
         <input ref={tcgpFileRef} type="file" accept=".csv" hidden onChange={onTcgpFile} />
+        {tcgpOpen && <div className="cl-tcgp-pick">
+          {tcgpEligible.length === 0
+            ? <div className="cl-import-msg" style={{ marginTop: 0 }}>No raw Kept cards with a set name to list — the CSV import only takes raw singles, not slabs.</div>
+            : <>
+              <div className="cl-tcgp-pick-head">
+                <span>{tcgpSel.size} of {tcgpEligible.length} selected{tcgpExcluded ? ` · ${tcgpExcluded} not listable (graded or no set)` : ""}</span>
+                <span>
+                  <button className="cl-link" onClick={() => setTcgpSel(new Set(tcgpEligible.map((c) => c.id)))}>All</button>
+                  <button className="cl-link" onClick={() => setTcgpSel(new Set())}>None</button>
+                </span>
+              </div>
+              {tcgpEligible.map((c) => <label key={c.id} className="cl-tcgp-pick-row">
+                <input type="checkbox" checked={tcgpSel.has(c.id)} onChange={() => tcgpTick(c.id)} />
+                <span className="cl-tcgp-pick-name">{c.name}</span>
+                <span className="cl-row-meta">{c.set}{c.number ? ` · ${c.number}` : ""}</span>
+                <span className="cl-money">{fmt(Number(c.value) || 0)}</span>
+              </label>)}
+              <button className="cl-import-btn" style={{ marginTop: 8 }} disabled={!tcgpSel.size} onClick={() => tcgpFileRef.current?.click()}>
+                <Upload size={14} /> Pick your TCGplayer export & build ({tcgpSel.size} card{tcgpSel.size === 1 ? "" : "s"})
+              </button>
+            </>}
+        </div>}
         {syncMsg && <div className="cl-import-msg">{syncMsg}</div>}
       </div>}
       {adding && <InvForm onSave={add} onCancel={() => setAdding(false)} />}
@@ -1687,15 +1761,22 @@ function Lookup({ state, patch }) {
   const search = async () => {
     if (!q.trim()) return;
     setLoading(true); setErr(""); setRes([]);
+    const { terms } = buildQuery(q.trim());
+    // repeat searches come straight from the 24h query cache — instant, and
+    // immune to the API having a bad day
+    const cached = qcacheGet(terms);
+    if (cached) {
+      setRes(cached); setLoading(false);
+      if (!cached.length) setErr("No cards matched. Try just the Pokémon's name.");
+      return;
+    }
     try {
-      const { terms } = buildQuery(q.trim());
-      const url = `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(terms)}&pageSize=18&orderBy=-set.releaseDate`;
-      const r = await fetch(url, PTCG_OPTS); if (!r.ok) throw new Error();
-      const data = await r.json();
-      const filled = await fillMissingPrices(data.data || []);
+      const data = await ptcgFetch(`cards?q=${encodeURIComponent(terms)}&pageSize=18&orderBy=-set.releaseDate&select=${PTCG_SELECT}`);
+      const filled = await fillMissingPrices((data.data || []).map(slimCard));
+      qcacheSet(terms, filled);
       setRes(filled);
       if (!filled.length) setErr("No cards matched. Try just the Pokémon's name.");
-    } catch { setErr("Couldn't reach the price API. Check your connection and try again."); }
+    } catch { setErr("The card database didn't respond — tap search to try again."); }
     finally { setLoading(false); }
   };
   const priceOf = cardPrice;
@@ -1889,6 +1970,15 @@ function Fonts() {
     .cl-net-preview{font-size:13px;color:var(--mut);display:flex;justify-content:space-between;align-items:center;gap:10px;}
     .cl-import{background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px;}
     .cl-import-btn{display:flex;align-items:center;gap:8px;background:none;border:none;color:#c4b5fd;font-size:13px;cursor:pointer;font-family:'Inter';}
+    .cl-import-btn:disabled{opacity:.45;cursor:default;}
+    .cl-tcgp-pick{margin-top:9px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;}
+    .cl-tcgp-pick-head{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:var(--mut);margin-bottom:5px;}
+    .cl-tcgp-pick-head .cl-link{color:#c4b5fd;margin-left:10px;}
+    .cl-tcgp-pick-row{display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;}
+    .cl-tcgp-pick-row input{accent-color:#a78bfa;flex:none;}
+    .cl-tcgp-pick-row .cl-row-meta{margin-top:0;flex:none;}
+    .cl-tcgp-pick-row .cl-money{margin-left:auto;font-size:12.5px;}
+    .cl-tcgp-pick-name{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .cl-import-btn:disabled{opacity:.6;cursor:default;}
     .cl-import-msg{font-size:12px;color:var(--mut);margin-top:7px;}
     .cl-empty{background:var(--surf);border:1px dashed var(--line);border-radius:12px;padding:18px;text-align:center;font-size:12.5px;color:var(--mut);line-height:1.5;}

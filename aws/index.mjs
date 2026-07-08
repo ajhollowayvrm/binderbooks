@@ -37,6 +37,15 @@ let groupsCache = null;
 // some CDNs reject UA-less requests from cloud IPs; send a normal browser UA
 const TCGCSV_HEADERS = { "user-agent": "Mozilla/5.0 (BinderBooks price sync; personal use)" };
 const normNum = (s) => String(s).split("/")[0].trim().replace(/^0+(?=\w)/, "").toUpperCase();
+// pokemontcg.io promo-set names ("SWSH Black Star Promos") share no usable
+// suffix with TCGplayer's group names, so those eras get explicit aliases
+const GROUP_ALIASES = [
+  [/scarlet.*violet.*(black star|promo)/, "sv: scarlet & violet promo cards"],
+  [/^me(ga evolution)?\b.*(black star|promo)/, "me: mega evolution promo"],
+  [/^swsh\b.*(black star|promo)/, "swsh: sword & shield promo cards"],
+  [/^sm\b.*(black star|promo)/, "sm promos"],
+  [/^xy\b.*(black star|promo)/, "xy promos"],
+];
 async function setPrices(setName) {
   const key = setName.toLowerCase();
   const hit = priceCache.get(key);
@@ -47,7 +56,9 @@ async function setPrices(setName) {
     const g = await gr.json();
     groupsCache = { t: Date.now(), list: g.results || [] };
   }
-  const group = groupsCache.list.find((x) => x.name.toLowerCase().endsWith(key))
+  const alias = GROUP_ALIASES.find(([re]) => re.test(key))?.[1];
+  const group = (alias && groupsCache.list.find((x) => x.name.toLowerCase() === alias))
+    || groupsCache.list.find((x) => x.name.toLowerCase().endsWith(key))
     || groupsCache.list.find((x) => x.name.toLowerCase().includes(key));
   if (!group) return null;
   const [prods, prices] = await Promise.all([
