@@ -1639,6 +1639,61 @@ function Inventory({ state, patch }) {
       ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the database yet` : ""}${gradedNote}.`
       : `None of those ${cands.length} card${cands.length === 1 ? "" : "s"} are in the database yet — check back later${gradedNote}.`);
   };
+  // Grading-candidate scan: pull eBay graded comps for every held raw card at
+  // or above a value floor (highest value first, so the budget goes to the
+  // cards that matter), stash a slim snapshot on each card, and rank by what
+  // a PSA 10 nets over just selling raw. Snapshots live on the cards
+  // themselves — they sync across devices and survive the comps cache, so a
+  // scan the daily budget cuts short just resumes on the next run.
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanMsg, setScanMsg] = useState("");
+  const [scanFloor, setScanFloor] = useState("15");
+  const [scanFee, setScanFee] = useState("25");
+  const scanCands = inv
+    .filter((c) => (c.status === "Kept" || c.status === "Listed") && c.grade === "Raw" && c.name && (Number(c.value) || 0) >= (Number(scanFloor) || 0))
+    .sort((a, b) => (Number(b.value) || 0) - (Number(a.value) || 0));
+  const runScan = async () => {
+    if (scanning) return;
+    if (!scanCands.length) { setScanMsg("No raw held cards at or above the value floor."); return; }
+    setScanning(true);
+    const updates = {};
+    const isFresh = (c) => c.grading && Date.now() - c.grading.t < 3 * 864e5;
+    let pulled = 0, outOfBudget = false, i = 0;
+    for (const c of scanCands) {
+      i++;
+      if (isFresh(c)) continue; // fresh enough from a previous run
+      setScanMsg(`Pulling eBay comps… ${i}/${scanCands.length} (${c.name})`);
+      try {
+        const r = await fetchGradedComps(c.name, c.set, c.number);
+        const slim = (k) => (r.byGrade?.[k] ? { p: r.byGrade[k].price, n: r.byGrade[k].count } : null);
+        updates[c.id] = { grading: { t: Date.now(), raw: r.raw ? { p: r.raw.price, n: r.raw.count } : null, psa10: slim("psa10"), psa9: slim("psa9"), cgc10: slim("cgc10"), tag10: slim("tag10") } };
+        pulled++;
+      } catch (e) {
+        if (e.status === 429) { outOfBudget = true; break; }
+        if (e.status === 404) updates[c.id] = { grading: { t: Date.now(), none: true } };
+        // transient failures: skip, the next scan retries
+      }
+    }
+    if (Object.keys(updates).length) patch((s) => ({ inventory: (s.inventory || []).map((c) => (updates[c.id] ? { ...c, ...updates[c.id] } : c)) }));
+    setScanning(false);
+    // waiting = the card that hit the wall plus whatever after it isn't fresh
+    const waiting = outOfBudget ? 1 + scanCands.slice(i).filter((c) => !isFresh(c)).length : 0;
+    setScanMsg(outOfBudget
+      ? `Daily eBay-comps budget ran out — ${pulled} pulled this run, ${waiting} still waiting. Run it again after the daily reset to continue.`
+      : `Done — ${pulled} pulled fresh${pulled < scanCands.length ? ", the rest were already current" : ""}.`);
+  };
+  const scanFeeN = Number(scanFee) || 0;
+  const ranked = scanCands
+    .filter((c) => c.grading && !c.grading.none && c.grading.psa10)
+    .map((c) => {
+      const raw = Number(c.value) || 0;
+      const up10 = c.grading.psa10.p - raw - scanFeeN;
+      const up9 = c.grading.psa9 ? c.grading.psa9.p - raw - scanFeeN : null;
+      return { c, raw, up10, up9 };
+    })
+    .sort((a, b) => b.up10 - a.up10);
+  const scanNoData = scanCands.filter((c) => c.grading && (c.grading.none || !c.grading.psa10)).length;
   // Build a TCGplayer staged-upload CSV: the user ticks the cards to list,
   // picks their own TCGplayer export (which carries the SKU ids), and we fill
   // Add to Quantity + price for each match into an upload-ready file.
@@ -1699,6 +1754,35 @@ function Inventory({ state, patch }) {
       {inv.length > 0 && <div className="cl-import">
         <button className="cl-import-btn" onClick={refreshPrices} disabled={refreshing}><RefreshCw size={14} /> {refreshing ? "Refreshing prices…" : "Refresh market prices (TCGplayer daily data)"}</button>
         {(state.sales || []).length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={reconcileSold}><RefreshCw size={14} /> Check against sales — mark anything already sold</button>}
+        <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => { setScanOpen(!scanOpen); setSyncMsg(""); }}><Sparkles size={14} /> Grading candidates — rank raw cards by grading upside</button>
+        {scanOpen && <div className="cl-tcgp-pick">
+          <div className="cl-scan-ctl">
+            <Field label="Min raw value"><MoneyInput value={scanFloor} onChange={setScanFloor} /></Field>
+            <Field label="Grading cost"><MoneyInput value={scanFee} onChange={setScanFee} /></Field>
+            <button className="cl-save cl-scan-go" disabled={scanning || !scanCands.length} onClick={runScan}>{scanning ? "Scanning…" : `Scan ${scanCands.length} card${scanCands.length === 1 ? "" : "s"}`}</button>
+          </div>
+          <div className="cl-import-msg">Ranks raw held cards by what a PSA 10 nets over selling raw (recent eBay solds − raw value − grading cost). Spends the daily eBay-comps budget (~2 credits a card, highest-value cards first); results save to each card, so a scan the budget cuts short resumes next run.</div>
+          {scanMsg && <div className="cl-import-msg">{scanMsg}</div>}
+          {ranked.length > 0 && <div className="cl-stack sm" style={{ marginTop: 9 }}>
+            {ranked.map(({ c, raw, up10, up9 }) => (
+              <div key={c.id} className="cl-row click" onClick={() => setViewId(c.id)}>
+                <span className="holo-dot" />
+                <div className="cl-row-main">
+                  <div className="cl-row-title">{c.name}</div>
+                  <div className="cl-row-meta">
+                    raw {fmt(raw)} · PSA 10 {fmt(c.grading.psa10.p)}{c.grading.psa10.n ? ` ×${c.grading.psa10.n}` : ""}{c.grading.psa9 ? ` · PSA 9 ${fmt(c.grading.psa9.p)}` : ""}
+                    {up9 != null && <span className={"cl-st " + (up9 >= 0 ? "listed" : "grading")}>{up9 >= 0 ? "9 still profits" : `9 loses ${fmt(-up9)}`}</span>}
+                  </div>
+                </div>
+                <div className="cl-card-num">
+                  <div className={"cl-money " + (up10 >= 0 ? "pos" : "neg")}>{up10 >= 0 ? "+" : ""}{fmt(up10)}</div>
+                  <div className="cl-row-meta">if it 10s</div>
+                </div>
+              </div>
+            ))}
+          </div>}
+          {scanNoData > 0 && <div className="cl-import-msg">{scanNoData} card{scanNoData === 1 ? "" : "s"} had no usable graded-sales data.</div>}
+        </div>}
         <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={toggleTcgp}><Upload size={14} /> Upload to TCGplayer — choose cards for a staged CSV</button>
         <input ref={tcgpFileRef} type="file" accept=".csv" hidden onChange={onTcgpFile} />
         {tcgpOpen && <div className="cl-tcgp-pick">
@@ -2220,6 +2304,8 @@ function Fonts() {
     .cl-tcgp-pick-row .cl-row-meta{margin-top:0;flex:none;}
     .cl-tcgp-pick-row .cl-money{margin-left:auto;font-size:12.5px;}
     .cl-tcgp-pick-name{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .cl-scan-ctl{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px;}
+    .cl-scan-go{padding:11px 14px;font-size:13px;}
     .cl-cat{background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px;display:flex;flex-direction:column;gap:8px;}
     .cl-cat .cl-row-meta{margin-top:0;}
     .cl-import-btn:disabled{opacity:.6;cursor:default;}
@@ -2328,6 +2414,6 @@ function Fonts() {
     .cl-cm-meta{font-size:12px;color:var(--mut);line-height:1.5;}
     .cl-cm-links{display:flex;gap:6px;margin-top:10px;}
     .cl-cm-links .cl-mini{display:flex;align-items:center;justify-content:center;gap:5px;text-decoration:none;}
-    @media (max-width:420px){.cl-grid3{grid-template-columns:1fr;}.cl-hero-num{font-size:40px;}.cl-inv-summary .cl-stat-num{font-size:16px;}.cl-inv-summary .cl-range{font-size:11px;}.cl-gradeest{grid-template-columns:repeat(3,1fr);}.cl-cm-img{width:116px;}.cl-cm-mkt-num{font-size:22px;}}
+    @media (max-width:420px){.cl-grid3{grid-template-columns:1fr;}.cl-hero-num{font-size:40px;}.cl-inv-summary .cl-stat-num{font-size:16px;}.cl-inv-summary .cl-range{font-size:11px;}.cl-gradeest{grid-template-columns:repeat(3,1fr);}.cl-cm-img{width:116px;}.cl-cm-mkt-num{font-size:22px;}.cl-scan-ctl{grid-template-columns:1fr 1fr;}.cl-scan-go{grid-column:1/-1;}}
   `}</style>);
 }

@@ -85,7 +85,7 @@ async function setData(setName) {
     const rar = (pr.extendedData || []).find((d) => d.name === "Rarity");
     const sub = byProd[pr.productId];
     const market = sub ? sub["Normal"] ?? sub["Holofoil"] ?? Object.values(sub)[0] : null;
-    products.push({ name: pr.name, num: nameNum(pr.name) || ext.value, extNum: ext.value, rarity: rar?.value || "", market: market ?? null });
+    products.push({ id: pr.productId, name: pr.name, num: nameNum(pr.name) || ext.value, extNum: ext.value, rarity: rar?.value || "", market: market ?? null });
   }
   const data = { t: Date.now(), group: group.name, products };
   priceCache.set(key, data);
@@ -141,22 +141,44 @@ async function gradedPrices(name, number, set) {
   const key = `${name}|${number}|${set}`.toLowerCase();
   const hit = gradedCache.get(key);
   if (hit && Date.now() - hit.t < GRADED_TTL) return hit.body;
-  const search = async (withSet) => {
+  const ppt = async (params) => {
     const u = new URL("https://www.pokemonpricetracker.com/api/v2/cards");
-    u.searchParams.set("search", name);
-    if (withSet && set) u.searchParams.set("set", set);
+    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
     u.searchParams.set("includeEbay", "true");
-    // each returned card costs 2 credits with eBay data and the free tier is
-    // 100/day — limit 3 keeps a lookup at 6 credits (~16 fresh cards a day)
-    u.searchParams.set("limit", "3");
     const r = await fetch(u, { headers: { authorization: `Bearer ${process.env.PPT_KEY}` } });
     if (!r.ok) { const e = new Error(`ppt HTTP ${r.status}`); e.status = r.status; throw e; }
     const data = await r.json();
     return data.cards || data.data || (Array.isArray(data) ? data : []);
   };
-  let cards = await search(true);
-  // a set name PPT doesn't recognize shouldn't sink the lookup
-  if (!cards.length && set) cards = await search(false);
+  // cheapest path first: resolve the card to its TCGplayer product id via the
+  // set dump we already cache, then ask PPT for exactly that card — 2 credits
+  // (one card with eBay data) instead of a 3-candidate name search's 6, and
+  // no chance of comps from the wrong printing
+  let cards = [];
+  if (set && number) {
+    let tcgpId = null;
+    try {
+      const d = await setData(set);
+      if (d) {
+        const want = normNum(number);
+        const clean = d.products.filter((p) => p.id && !/\[|\(prerelease\)/i.test(p.name));
+        const prod = clean.find((p) => normNum(p.num) === want) || clean.find((p) => normNum(p.extNum) === want);
+        if (prod) tcgpId = prod.id;
+      }
+    } catch {} // dump unavailable — the name search below still works
+    if (tcgpId) {
+      cards = (await ppt({ tcgPlayerId: String(tcgpId) }))
+        // trust but verify: if PPT ever ignores the filter, don't accept arbitrary cards
+        .filter((c) => String(c.tcgPlayerId ?? "") === String(tcgpId));
+    }
+  }
+  if (!cards.length) {
+    // name search: each returned card costs 2 credits with eBay data — limit 3
+    // keeps a lookup at 6 credits
+    cards = await ppt({ search: name, ...(set ? { set } : {}), limit: "3" });
+    // a set name PPT doesn't recognize shouldn't sink the lookup
+    if (!cards.length && set) cards = await ppt({ search: name, limit: "3" });
+  }
   const cardNum = (c) => normNum(c.number ?? c.cardNumber ?? "");
   const want = number ? normNum(number) : null;
   const match = (want && cards.find((c) => cardNum(c) === want)) || cards[0];
