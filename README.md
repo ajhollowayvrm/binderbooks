@@ -56,6 +56,14 @@ retry if the API doesn't respond.
 
 ## Notes
 
+- **TCGplayer bulk listing:** the Inventory tab can build a staged-upload CSV.
+  Export a CSV from the TCGplayer Seller Portal (Live Inventory export, or a
+  Pricing-tab set export with out-of-stock rows included — those exports carry
+  the per-condition SKU in "TCGplayer Id", which is what the importer matches
+  on), click *Build TCGplayer upload CSV*, and pick that file. BinderBooks
+  fills Add to Quantity and TCG Marketplace Price for every raw Kept card it
+  can match, downloads the upload-ready file, and offers to flip the exported
+  cards to Listed. Upload it via Seller Portal → Inventory → Import to Staged.
 - A "Reset all data" button lives at the bottom of the Overview tab.
 - The app seeds with example data on first run; edit or delete those rows freely.
 - Card search matches substrings of the **card name** and supports multi-word

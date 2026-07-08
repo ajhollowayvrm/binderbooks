@@ -1390,6 +1390,93 @@ function SaleForm({ initial, inventory, onSave, onCancel }) {
 }
 
 /* ================================================================== */
+/* ------------------------------------------------------------------ */
+/* TCGplayer staged upload: merge held raw cards into the seller's own
+   TCGplayer CSV export. The "TCGplayer Id" the importer matches on is a
+   per-condition SKU number that only TCGplayer's exports carry (tcgcsv /
+   pokemontcg.io product ids are a different namespace), so the flow is:
+   export a CSV from the Seller Portal (Live Inventory export, or a
+   Pricing-tab set export with out-of-stock rows included), feed it here,
+   and upload the file this builds via Inventory → Import to Staged. */
+const TCGP_REQ_COLS = ["TCGplayer Id", "Set Name", "Product Name", "Number", "Condition", "Add to Quantity", "TCG Marketplace Price"];
+// ledger sets use pokemontcg.io names ("Prismatic Evolutions"), TCGplayer
+// prefixes them ("SV: Prismatic Evolutions") — suffix match covers all but
+// the promo sets, whose names share no usable suffix
+const TCGP_SET_ALIASES = [
+  [/scarlet.*violet.*(black star|promo)/, "sv: scarlet & violet promo cards"],
+  [/^me(ga evolution)?\b.*(black star|promo)/, "me: mega evolution promo"],
+];
+const tcgpSetMatch = (rowSet, cardSet) => {
+  const rs = String(rowSet || "").toLowerCase(), cs = String(cardSet || "").toLowerCase().trim();
+  if (!rs || !cs) return false;
+  for (const [re, target] of TCGP_SET_ALIASES) if (re.test(cs)) return rs === target;
+  return rs === cs || rs.endsWith(cs);
+};
+const tcgpTok = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+// score a TCGplayer product name against the ledger card name: shared words
+// count for, extra product words against — so plain "Fezandipiti" outranks
+// "Fezandipiti (Master Ball Pattern)" unless the card name actually says so
+const tcgpNameScore = (cardName, prodName) => {
+  const ct = new Set(tcgpTok(cardName));
+  let s = 0;
+  for (const t of tcgpTok(String(prodName).split(" - ")[0])) s += ct.has(t) ? 1 : -0.5;
+  return s;
+};
+// ledger cards carry no condition, so everything exports as Near Mint; the
+// rank picks which NM printing row to use when a product has several
+const tcgpCondRank = (cond, cardName) => {
+  const c = String(cond || "").toLowerCase();
+  if (!c.startsWith("near mint")) return -1;
+  if (c.includes("reverse")) return /\breverse\b/i.test(String(cardName)) ? 3 : 0;
+  return c.includes("holofoil") ? 2 : 1;
+};
+function buildTcgpUpload(rows, cards) {
+  // customs ("C-…" photo listings of one specific card) are never matched —
+  // adding quantity to those would double-sell that physical card
+  const usable = rows.filter((r) => /^\d+$/.test(String(r["TCGplayer Id"] || "").trim()) && tcgpCondRank(r["Condition"], "") >= 0);
+  const picks = new Map(); // sku id -> { row, qty, values, ids }
+  const unmatched = [];
+  for (const c of cards) {
+    const inSet = usable.filter((r) => tcgpSetMatch(r["Set Name"], c.set));
+    let cands = c.number ? inSet.filter((r) => normNum(r["Number"]) === normNum(c.number)) : inSet;
+    const names = [...new Set(cands.map((r) => r["Product Name"]))];
+    if (names.length > 1) {
+      // several products share the number (Poke Ball / Master Ball patterns)
+      // or we're matching on name alone — a clear name winner decides, a tie
+      // stays unmatched rather than guessing
+      const scored = names.map((n) => [tcgpNameScore(c.name, n), n]).sort((a, b) => b[0] - a[0]);
+      cands = scored[0][0] > 0 && scored[0][0] !== scored[1][0] ? cands.filter((r) => r["Product Name"] === scored[0][1]) : [];
+    }
+    if (!cands.length) { unmatched.push(c); continue; }
+    const best = cands.reduce((a, r) => (tcgpCondRank(r["Condition"], c.name) > tcgpCondRank(a["Condition"], c.name) ? r : a));
+    const key = String(best["TCGplayer Id"]).trim();
+    const p = picks.get(key) || { row: best, qty: 0, values: [], ids: [] };
+    p.qty++;
+    p.ids.push(c.id);
+    if (Number(c.value) > 0) p.values.push(Number(c.value));
+    picks.set(key, p);
+  }
+  const out = [], exportedIds = [], needPrice = [];
+  for (const { row, qty, values, ids } of picks.values()) {
+    // list at the ledger's market value (lowest across copies); cards with no
+    // value fall back to the export's own price columns
+    const fallback = ["TCG Marketplace Price", "TCG Market Price", "TCG Low Price With Shipping", "TCG Low Price"].map((k) => Number(row[k])).find((v) => v > 0);
+    const price = values.length ? Math.min(...values) : fallback;
+    if (!(price > 0)) { needPrice.push(row["Product Name"]); continue; }
+    out.push({ ...row, "Add to Quantity": String(qty), "TCG Marketplace Price": price.toFixed(2) });
+    exportedIds.push(...ids);
+  }
+  out.sort((a, b) => String(a["Set Name"]).localeCompare(b["Set Name"]) || String(a["Product Name"]).localeCompare(b["Product Name"]));
+  return { out, exportedIds, unmatched, needPrice };
+}
+const downloadFile = (name, text) => {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+};
+
 function Inventory({ state, patch }) {
   const inv = state.inventory || [];
   const [adding, setAdding] = useState(false);
@@ -1474,6 +1561,42 @@ function Inventory({ state, patch }) {
       ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the database yet` : ""}${gradedNote}.`
       : `None of those ${cands.length} card${cands.length === 1 ? "" : "s"} are in the database yet — check back later${gradedNote}.`);
   };
+  // Build a TCGplayer staged-upload CSV: the user picks their own TCGplayer
+  // export (which carries the SKU ids), we fill Add to Quantity + price for
+  // every raw Kept card we can match, and hand back the upload-ready file.
+  const tcgpFileRef = useRef();
+  const onTcgpFile = (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    Papa.parse(file, { header: true, skipEmptyLines: true, complete: (res) => {
+      if (tcgpFileRef.current) tcgpFileRef.current.value = "";
+      const fields = res.meta?.fields || [];
+      const missingCols = TCGP_REQ_COLS.filter((k) => !fields.includes(k));
+      if (missingCols.length) { setSyncMsg(`That doesn't look like a TCGplayer inventory export — missing column${missingCols.length === 1 ? "" : "s"}: ${missingCols.join(", ")}.`); return; }
+      const kept = inv.filter((c) => c.status === "Kept" && c.name);
+      const cands = kept.filter((c) => c.grade === "Raw" && c.set);
+      const skipped = [];
+      const graded = kept.filter((c) => c.grade !== "Raw").length;
+      const noSet = kept.filter((c) => c.grade === "Raw" && !c.set).length;
+      if (graded) skipped.push(`${graded} graded (the CSV import can't list slabs)`);
+      if (noSet) skipped.push(`${noSet} missing a set name`);
+      if (!cands.length) { setSyncMsg(`Nothing to upload — no raw Kept cards with a set.${skipped.length ? " Skipped " + skipped.join(" · ") + "." : ""}`); return; }
+      const { out, exportedIds, unmatched, needPrice } = buildTcgpUpload(res.data, cands);
+      if (unmatched.length) {
+        const names = [...new Set(unmatched.map((c) => `${c.name} (${c.set})`))];
+        skipped.push(`${unmatched.length} not in that export: ${names.slice(0, 6).join(", ")}${names.length > 6 ? ", …" : ""} — export those sets from Seller Portal → Pricing with out-of-stock rows included and rerun`);
+      }
+      if (needPrice.length) skipped.push(`${needPrice.length} with no price anywhere (give them a market value first): ${needPrice.slice(0, 4).join(", ")}`);
+      if (!out.length) { setSyncMsg(`No cards matched that export. ${skipped.join(" · ")}`); return; }
+      const csv = Papa.unparse({ fields, data: out.map((r) => fields.map((f) => r[f] ?? "")) }, { quotes: true });
+      const fname = `Inventory-Upload-BinderBooks-${today()}.csv`;
+      downloadFile(fname, csv);
+      setSyncMsg(`Saved ${fname}: ${out.length} listing${out.length === 1 ? "" : "s"} covering ${exportedIds.length} card${exportedIds.length === 1 ? "" : "s"}. Upload it in Seller Portal → Inventory → Import to Staged, then push live.${skipped.length ? " Skipped " + skipped.join(" · ") + "." : ""}`);
+      if (typeof window !== "undefined" && window.confirm(`CSV saved. Mark the ${exportedIds.length} exported card${exportedIds.length === 1 ? "" : "s"} as Listed?\n(Cancel if you're not going to upload this file.)`)) {
+        const ids = new Set(exportedIds);
+        patch((s) => ({ inventory: (s.inventory || []).map((c) => (ids.has(c.id) ? { ...c, status: "Listed" } : c)) }));
+      }
+    }, error: () => setSyncMsg("Couldn't read that file.") });
+  };
   const live = inv.filter((c) => c.status !== "Sold");
   const val = live.reduce((s, c) => s + (Number(c.value) || 0), 0);
   const basis = live.reduce((s, c) => s + invBasis(c), 0);
@@ -1489,6 +1612,8 @@ function Inventory({ state, patch }) {
       {inv.length > 0 && <div className="cl-import">
         <button className="cl-import-btn" onClick={refreshPrices} disabled={refreshing}><RefreshCw size={14} /> {refreshing ? "Refreshing prices…" : "Refresh market prices from pokemontcg.io"}</button>
         {(state.sales || []).length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={reconcileSold}><RefreshCw size={14} /> Check against sales — mark anything already sold</button>}
+        <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => tcgpFileRef.current?.click()}><Upload size={14} /> Build TCGplayer upload CSV — pick your TCGplayer export</button>
+        <input ref={tcgpFileRef} type="file" accept=".csv" hidden onChange={onTcgpFile} />
         {syncMsg && <div className="cl-import-msg">{syncMsg}</div>}
       </div>}
       {adding && <InvForm onSave={add} onCancel={() => setAdding(false)} />}
