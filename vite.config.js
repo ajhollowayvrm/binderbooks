@@ -9,6 +9,10 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      // registration lives in main.jsx (virtual:pwa-register) so the app can
+      // poll for new deploys and reload itself — the injected one-liner script
+      // registered once and never noticed updates until a full relaunch
+      injectRegister: false,
       manifest: false, // we ship our own public/manifest.webmanifest + icons
       workbox: {
         globPatterns: ["**/*.{js,css,html,png,webmanifest}"],
