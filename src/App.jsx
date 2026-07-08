@@ -133,7 +133,7 @@ const qcacheSet = (terms, results) => {
 };
 const slimCard = (c) => ({
   id: c.id, name: c.name, number: c.number, rarity: c.rarity,
-  set: { name: c.set?.name }, images: { small: c.images?.small, large: c.images?.large },
+  set: { name: c.set?.name }, images: { small: c.images?.small },
   ...(c.tcgplayer ? { tcgplayer: { prices: c.tcgplayer.prices } } : {}),
 });
 
@@ -466,13 +466,14 @@ const cardPrice = (c) => { const p = c.tcgplayer?.prices; if (!p) return null; c
 // prices" and the card modal. We only trust a match we can pin down (name +
 // number, or name + set); a bare name is too ambiguous to auto-pick, so we
 // skip it rather than risk grabbing the wrong card.
-async function lookupCardCandidates(card) {
+async function lookupCardCandidates(card, { fill = true } = {}) {
   if (!card.name) return [];
   const esc = (s) => String(s || "").replace(/["\\]/g, "");
   const name = `name:"${esc(card.name)}"`;
   const fetchList = async (q) => {
     const data = await ptcgFetch(`cards?q=${encodeURIComponent(q)}&pageSize=24&select=${PTCG_SELECT}`);
-    return fillMissingPrices((data.data || []).map(slimCard));
+    const list = (data.data || []).map(slimCard);
+    return fill ? fillMissingPrices(list) : list; // fill adds a Lambda round-trip — image lookups skip it
   };
   try {
     if (card.number) {
@@ -488,10 +489,17 @@ async function lookupCardPrice(card) {
   return (await lookupCardCandidates(card)).find((c) => cardPrice(c) != null) || null;
 }
 // the modal also wants a match with no price (for the image and set info):
-// prefer priced-with-image, then any image, then whatever matched
+// prefer priced-with-image, then any image, then whatever matched. Skips the
+// price backfill (the modal prices via the set dump separately) and keeps a
+// session cache so reopening a card shows its image instantly.
+const matchCache = new Map();
 async function lookupCardMatch(card) {
-  const list = await lookupCardCandidates(card);
-  return list.find((c) => cardPrice(c) != null && c.images?.small) || list.find((c) => c.images?.small) || list[0] || null;
+  const key = `${card.name}|${card.set || ""}|${card.number || ""}`.toLowerCase();
+  if (matchCache.has(key)) return matchCache.get(key);
+  const list = await lookupCardCandidates(card, { fill: false });
+  const hit = list.find((c) => cardPrice(c) != null && c.images?.small) || list.find((c) => c.images?.small) || list[0] || null;
+  if (hit) matchCache.set(key, hit); // misses stay uncached so a flaky API call retries next open
+  return hit;
 }
 
 /* ================================================================== */
@@ -1798,22 +1806,32 @@ const cmErrMsg = (s) => (s === 501 ? "eBay comps aren't set up on the sync Lambd
   : s === 404 ? "No recent eBay solds found for this card."
   : "eBay sold data is unavailable right now.");
 function CardModal({ card, onClose, onEdit, onValue }) {
-  const [match, setMatch] = useState(null);   // pokemontcg.io match (image, rarity, fallback price)
+  const [match, setMatch] = useState(null);   // pokemontcg.io match: null = looking, false = none found
   const [live, setLive] = useState(null);     // TCGplayer market from the set dump
   const [comps, setComps] = useState({ state: "loading" }); // /graded body
   useEffect(() => {
     let ok = true;
     setMatch(null); setLive(null); setComps({ state: "loading" });
+    // three independent sources, fired together — each fills its slot as it
+    // lands (the first market value to arrive wins; the rest keep theirs)
     (async () => {
-      if (card.set && card.number) {
-        const m = await fetchSetPrices(card.set);
-        const v = m?.[normNum(card.number)];
-        if (ok && v != null) setLive(v);
-      }
+      if (!card.set || !card.number) return;
+      const m = await fetchSetPrices(card.set);
+      const v = m?.[normNum(card.number)];
+      if (ok && v != null) setLive((p) => (p != null ? p : v));
+    })();
+    (async () => {
       const hit = await lookupCardMatch(card);
-      if (!ok || !hit) return;
-      setMatch(hit);
-      setLive((p) => (p != null ? p : cardPrice(hit)));
+      if (!ok) return;
+      setMatch(hit || false);
+      if (!hit) return;
+      let v = cardPrice(hit);
+      // ledger card missing set/number: the match names them, so its set dump can still price it
+      if (v == null && hit.set?.name && hit.number && !(card.set && card.number)) {
+        const m = await fetchSetPrices(hit.set.name);
+        v = m?.[normNum(hit.number)];
+      }
+      if (ok && v != null) setLive((p) => (p != null ? p : v));
     })();
     (async () => {
       try { const r = await fetchGradedComps(card.name, card.set, card.number); if (ok) setComps({ state: "ok", data: r }); }
@@ -1830,7 +1848,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
   }, [onClose]);
 
   const data = comps.data;
-  const img = match?.images?.large || match?.images?.small || data?.image || null;
+  const img = (match && match.images?.small) || data?.image || null;
   const market = live != null ? live : data?.market ?? null;
   const value = Number(card.value) || 0;
   const basis = invBasis(card);
@@ -1863,7 +1881,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
         <div className="cl-cm-top">
           {img
             ? <img className="cl-cm-img" src={img} alt={card.name} />
-            : <div className="cl-cm-img ph">{match || comps.state !== "loading" ? "no image found" : "loading…"}</div>}
+            : <div className="cl-cm-img ph">{match === null || comps.state === "loading" ? "loading…" : "no image found"}</div>}
           <div className="cl-cm-head">
             <div className="cl-cm-name">{card.name}</div>
             <div className="cl-row-meta">{card.set || match?.set?.name || data?.set || "set unknown"}{(card.number || match?.number || data?.number) ? ` · ${card.number || match?.number || data?.number}` : ""}{rarity ? ` · ${rarity}` : ""}</div>
