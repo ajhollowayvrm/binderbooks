@@ -148,7 +148,10 @@ async function gradedPrices(name, number, set) {
     const r = await fetch(u, { headers: { authorization: `Bearer ${process.env.PPT_KEY}` } });
     if (!r.ok) { const e = new Error(`ppt HTTP ${r.status}`); e.status = r.status; throw e; }
     const data = await r.json();
-    return data.cards || data.data || (Array.isArray(data) ? data : []);
+    // searches return a list but id lookups return one bare card object —
+    // normalize both to an array
+    const cards = data.cards ?? data.data ?? data;
+    return Array.isArray(cards) ? cards : cards && typeof cards === "object" ? [cards] : [];
   };
   // cheapest path first: resolve the card to its TCGplayer product id via the
   // set dump we already cache, then ask PPT for exactly that card — 2 credits
@@ -167,9 +170,11 @@ async function gradedPrices(name, number, set) {
       }
     } catch {} // dump unavailable — the name search below still works
     if (tcgpId) {
-      cards = (await ppt({ tcgPlayerId: String(tcgpId) }))
-        // trust but verify: if PPT ever ignores the filter, don't accept arbitrary cards
-        .filter((c) => String(c.tcgPlayerId ?? "") === String(tcgpId));
+      const got = await ppt({ tcgPlayerId: String(tcgpId) });
+      // trust but verify: if PPT ever ignores the filter, don't accept arbitrary cards
+      cards = got.filter((c) => String(c.tcgPlayerId ?? "") === String(tcgpId));
+      // a shape/field mismatch here silently triples the lookup cost — make it visible
+      if (!cards.length) console.log(`graded: id lookup ${tcgpId} unusable, falling back to name search:`, JSON.stringify(got).slice(0, 300));
     }
   }
   if (!cards.length) {

@@ -1659,7 +1659,7 @@ function Inventory({ state, patch }) {
     setScanning(true);
     const updates = {};
     const isFresh = (c) => c.grading && Date.now() - c.grading.t < 3 * 864e5;
-    let pulled = 0, outOfBudget = false, i = 0;
+    let pulled = 0, failed = 0, outOfBudget = false, i = 0;
     for (const c of scanCands) {
       i++;
       if (isFresh(c)) continue; // fresh enough from a previous run
@@ -1672,7 +1672,7 @@ function Inventory({ state, patch }) {
       } catch (e) {
         if (e.status === 429) { outOfBudget = true; break; }
         if (e.status === 404) updates[c.id] = { grading: { t: Date.now(), none: true } };
-        // transient failures: skip, the next scan retries
+        else failed++; // transient failure — the next scan retries it
       }
     }
     if (Object.keys(updates).length) patch((s) => ({ inventory: (s.inventory || []).map((c) => (updates[c.id] ? { ...c, ...updates[c.id] } : c)) }));
@@ -1681,6 +1681,8 @@ function Inventory({ state, patch }) {
     const waiting = outOfBudget ? 1 + scanCands.slice(i).filter((c) => !isFresh(c)).length : 0;
     setScanMsg(outOfBudget
       ? `Daily eBay-comps budget ran out — ${pulled} pulled this run, ${waiting} still waiting. Run it again after the daily reset to continue.`
+      : failed
+      ? `Done — ${pulled} pulled fresh, ${failed} lookup${failed === 1 ? "" : "s"} failed. Run it again to retry those.`
       : `Done — ${pulled} pulled fresh${pulled < scanCands.length ? ", the rest were already current" : ""}.`);
   };
   const scanFeeN = Number(scanFee) || 0;
