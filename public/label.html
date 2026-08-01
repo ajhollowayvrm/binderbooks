@@ -84,7 +84,7 @@
     placeholder="Store name&#10;Street&#10;City, ST ZIP"></textarea>
 
   <label for="src" style="margin-top:16px">Mailing address</label>
-  <textarea id="src" spellcheck="false" placeholder="Caleb Larson&#10;122 QUAIL DR&#10;DUDLEY, NC 28333-9518&#10;US"></textarea>
+  <textarea id="src" spellcheck="false" placeholder="Jordan Avery&#10;123 MAIN ST APT 4&#10;SPRINGFIELD, IL 62701&#10;US"></textarea>
 
   <div class="row">
     <label><input type="checkbox" id="caps"> All caps</label>
@@ -142,7 +142,7 @@ function fit(){
 
 function render(){
   let lines = clean(src.value);
-  if (!lines.length) lines = ['Caleb Larson','122 QUAIL DR','DUDLEY, NC 28333-9518'];
+  if (!lines.length) lines = ['Jordan Avery','123 MAIN ST APT 4','SPRINGFIELD, IL 62701'];
   addr.textContent = (caps.checked ? lines.join('\n').toUpperCase() : lines.join('\n'));
   ret.textContent = clean(retSrc.value).join('\n');
   save();
