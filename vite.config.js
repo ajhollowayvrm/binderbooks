@@ -17,6 +17,9 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,png,webmanifest}"],
         navigateFallback: "/binderbooks/index.html",
+        // label.html is a real page, not an app route — don't let the SW serve
+        // index.html in its place
+        navigateFallbackDenylist: [/label\.html$/],
         runtimeCaching: [
           { urlPattern: /^https:\/\/fonts\.googleapis\.com\//, handler: "StaleWhileRevalidate", options: { cacheName: "fonts-css" } },
           { urlPattern: /^https:\/\/fonts\.gstatic\.com\//, handler: "CacheFirst", options: { cacheName: "fonts", expiration: { maxEntries: 24, maxAgeSeconds: 31536000 } } },
