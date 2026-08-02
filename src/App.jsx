@@ -1355,6 +1355,11 @@ function Sales({ state, patch }) {
             <div style={{ marginTop: 6 }}><button className="cl-add-card" onClick={importOrder} disabled={!pasteText.trim()}>Import order</button></div>
           </div>
         )}
+        {/* opens in its own tab so an in-progress paste/import isn't torn down —
+            BASE_URL keeps it right in dev ("/") and on Pages ("/binderbooks/") */}
+        <a className="cl-import-btn" href={`${import.meta.env.BASE_URL}label.html`} target="_blank" rel="noopener noreferrer" style={{ marginTop: 8, textDecoration: "none" }}>
+          <Tags size={14} /> Print a 4×6 shipping label <ExternalLink size={12} />
+        </a>
         {msg && <div className="cl-import-msg">{msg}</div>}
       </div>
       {adding && <SaleForm inventory={state.inventory} onSave={add} onCancel={() => setAdding(false)} />}
