@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BinderBooks · Label maker</title>
+<style>
+  :root{
+    --ink:#14171a;
+    --paper:#ffffff;
+    --panel:#f2f0eb;
+    --line:#c9c5bc;
+    --accent:#2f5d50;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--panel);
+    color:var(--ink);
+    font:15px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:24px 20px 60px;
+  }
+  .wrap{max-width:640px;margin:0 auto}
+  h1{font-size:15px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;margin:0 0 18px}
+  label{display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b675e;margin:0 0 6px}
+  textarea{
+    width:100%;height:130px;padding:12px;border:1px solid var(--line);border-radius:2px;
+    background:var(--paper);color:var(--ink);
+    font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;resize:vertical;
+  }
+  textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
+  .row{display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin:14px 0 20px}
+  .row label{display:flex;align-items:center;gap:7px;margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)}
+  select{padding:6px 8px;border:1px solid var(--line);border-radius:2px;background:var(--paper);font:inherit;font-size:14px}
+  button{
+    padding:11px 22px;border:0;border-radius:2px;background:var(--accent);color:#fff;
+    font:inherit;font-weight:600;letter-spacing:.03em;cursor:pointer;
+  }
+  button:hover{background:#26493f}
+  button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  .hint{font-size:13px;color:#6b675e;margin:10px 0 0}
+
+  /* ---- the label itself ---- */
+  .sheet{
+    width:6in;height:4in;background:var(--paper);position:relative;overflow:hidden;
+    margin:0 auto;box-shadow:0 1px 0 var(--line),0 8px 24px rgba(0,0,0,.10);
+  }
+  .label{
+    width:6in;height:4in;position:absolute;top:50%;left:50%;
+    transform:translate(-50%,-50%);background:#fff;color:#000;
+    font-family:Helvetica,Arial,sans-serif;
+  }
+  body.rot90  .label{transform:translate(-50%,-50%) rotate(90deg)}
+  body.rot270 .label{transform:translate(-50%,-50%) rotate(270deg)}
+  body.rot90 .sheet, body.rot270 .sheet{width:4in;height:6in}
+
+  .ret{position:absolute;top:.22in;left:.24in;font-size:12pt;line-height:1.28;white-space:pre-line}
+  .main{position:absolute;left:.24in;right:.24in;top:1.15in;bottom:.18in;
+        display:flex;align-items:flex-end;justify-content:center}
+  .addr{text-align:center;white-space:pre;line-height:1.14;font-weight:700;letter-spacing:-.01em}
+
+  .scaler{margin:0 -20px}
+  @media (max-width:660px){
+    .scaler{transform:scale(.62);transform-origin:top center;height:2.6in}
+    body.rot90 .scaler,body.rot270 .scaler{height:3.9in}
+  }
+
+  @media print{
+    body{background:#fff;padding:0}
+    .wrap > :not(.scaler),.hint{display:none !important}
+    .scaler{margin:0;transform:none;height:auto}
+    .sheet{box-shadow:none;margin:0}
+    .label{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+</style>
+<style id="pagesize">@page{size:6in 4in;margin:0}</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Label maker · 4×6 thermal</h1>
+
+  <label for="ret-src">Return address <span style="text-transform:none;letter-spacing:0">— saved on this device only</span></label>
+  <textarea id="ret-src" spellcheck="false" style="height:78px"
+    placeholder="Store name&#10;Street&#10;City, ST ZIP"></textarea>
+
+  <label for="src" style="margin-top:16px">Mailing address</label>
+  <textarea id="src" spellcheck="false" placeholder="Jordan Avery&#10;123 MAIN ST APT 4&#10;SPRINGFIELD, IL 62701&#10;US"></textarea>
+
+  <div class="row">
+    <label><input type="checkbox" id="caps"> All caps</label>
+    <label>Feed
+      <select id="orient">
+        <option value="land">6 in wide (landscape)</option>
+        <option value="rot90">4 in wide, rotate 90°</option>
+        <option value="rot270">4 in wide, rotate 270°</option>
+      </select>
+    </label>
+    <button id="print">Print label</button>
+  </div>
+
+  <div class="scaler">
+    <div class="sheet">
+      <div class="label">
+        <div class="ret" id="ret"></div>
+        <div class="main" id="main"><div class="addr" id="addr"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="hint">Paste the address, check the preview, print at 100% scale with no margins. The country
+  line is dropped automatically. The return address stays in this browser — nothing is uploaded.</p>
+</div>
+
+<script>
+const KEY = 'bb.label.settings';
+const src = document.getElementById('src');
+const retSrc = document.getElementById('ret-src');
+const addr = document.getElementById('addr');
+const main = document.getElementById('main');
+const ret = document.getElementById('ret');
+const caps = document.getElementById('caps');
+const orient = document.getElementById('orient');
+
+function clean(text){
+  return text.split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(l => l.length)
+    .filter(l => !/^(u\.?s\.?a?\.?|united states( of america)?)$/i.test(l));
+}
+
+// Grow the type until it just fits the box, on both axes.
+function fit(){
+  let lo = 8, hi = 400;
+  for (let i = 0; i < 30; i++){
+    const mid = (lo + hi) / 2;
+    addr.style.fontSize = mid + 'px';
+    if (addr.offsetWidth <= main.clientWidth && addr.offsetHeight <= main.clientHeight) lo = mid;
+    else hi = mid;
+  }
+  addr.style.fontSize = lo.toFixed(2) + 'px';
+}
+
+function render(){
+  let lines = clean(src.value);
+  if (!lines.length) lines = ['Jordan Avery','123 MAIN ST APT 4','SPRINGFIELD, IL 62701'];
+  addr.textContent = (caps.checked ? lines.join('\n').toUpperCase() : lines.join('\n'));
+  ret.textContent = clean(retSrc.value).join('\n');
+  save();
+  fit();
+}
+
+function save(){
+  try {
+    localStorage.setItem(KEY, JSON.stringify({
+      ret: retSrc.value, caps: caps.checked, orient: orient.value
+    }));
+  } catch (e) { /* private mode — settings just won't stick */ }
+}
+
+function load(){
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY) || '{}');
+    if (s.ret) retSrc.value = s.ret;
+    caps.checked = !!s.caps;
+    if (s.orient) orient.value = s.orient;
+  } catch (e) { /* ignore */ }
+}
+
+function setOrientation(){
+  const v = orient.value;
+  document.body.classList.toggle('rot90',  v === 'rot90');
+  document.body.classList.toggle('rot270', v === 'rot270');
+  document.getElementById('pagesize').textContent =
+    (v === 'land') ? '@page{size:6in 4in;margin:0}' : '@page{size:4in 6in;margin:0}';
+  render();
+}
+
+src.addEventListener('input', render);
+retSrc.addEventListener('input', render);
+caps.addEventListener('change', render);
+orient.addEventListener('change', setOrientation);
+document.getElementById('print').addEventListener('click', () => window.print());
+window.addEventListener('resize', fit);
+load();
+setOrientation();
+</script>
+</body>
+</html>

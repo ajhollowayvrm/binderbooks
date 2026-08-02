@@ -54,6 +54,25 @@ and occasionally drops requests. To lift the limits:
 The app works without a key — it just retries on failure and shows a tappable
 retry if the API doesn't respond.
 
+## Tools
+
+Two standalone helpers that don't need the app running:
+
+- **`tools/tcgp-scraper.js`** — paste into a DevTools Snippet (or the Console) on
+  a TCGplayer Seller Portal **Order Details** page. It emits the order as JSON
+  three ways (console `copy()`, an on-page box with a Copy button, and a
+  `console.log`); paste that into **Sales → "Paste TCGP order"**. Setup, the
+  bookmarklet one-liner, and the output shape are in
+  [`tools/tcgp-bookmarklet.md`](tools/tcgp-bookmarklet.md).
+- **`public/label.html`** — shipping-label formatter for a 4×6 thermal printer
+  (Munbyn fanfold). Paste a mailing address; it drops the country line and scales
+  the type to the largest size that fits along the 6-inch edge, anchored to the
+  bottom, with a small return address in the top-left corner — so both blocks cut
+  out cleanly. Live at
+  <https://ajhollowayvrm.github.io/binderbooks/label.html>. The return address is
+  typed once and kept in that browser's localStorage, so it never lands in the
+  repo.
+
 ## Notes
 
 - **TCGplayer bulk listing:** the Inventory tab can build a staged-upload CSV.
