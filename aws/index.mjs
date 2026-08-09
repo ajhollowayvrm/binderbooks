@@ -54,6 +54,11 @@ const nameNum = (name) => {
   const m = String(name).match(/.* - ([\w/.]+)/);
   return m && /^[A-Za-z]{0,5}\d/.test(m[1]) ? m[1] : null;
 };
+// one price out of a card's per-printing map, for callers that want a single
+// number. The client picks a printing deliberately when it knows the card's
+// variant; this is the "don't care" answer, and the order is load-bearing —
+// it's the collapse /prices has always returned.
+const collapse = (sub) => (sub ? sub["Normal"] ?? sub["Holofoil"] ?? Object.values(sub)[0] ?? null : null);
 async function setData(setName) {
   const key = setName.toLowerCase();
   const hit = priceCache.get(key);
@@ -84,8 +89,7 @@ async function setData(setName) {
     if (!ext) continue;
     const rar = (pr.extendedData || []).find((d) => d.name === "Rarity");
     const sub = byProd[pr.productId];
-    const market = sub ? sub["Normal"] ?? sub["Holofoil"] ?? Object.values(sub)[0] : null;
-    products.push({ id: pr.productId, name: pr.name, num: nameNum(pr.name) || ext.value, extNum: ext.value, rarity: rar?.value || "", market: market ?? null });
+    products.push({ id: pr.productId, name: pr.name, num: nameNum(pr.name) || ext.value, extNum: ext.value, rarity: rar?.value || "", market: collapse(sub), subs: sub || null });
   }
   const data = { t: Date.now(), group: group.name, products };
   priceCache.set(key, data);
@@ -96,18 +100,24 @@ async function setPrices(setName) {
   if (!d) return null;
   // [Staff] and (Prerelease) variants share the plain card's number but carry
   // very different prices — they only fill a slot the plain card doesn't
-  const out = {};
+  const subs = {};
   const assign = (p, overwrite) => {
     const k1 = normNum(p.num), k2 = normNum(p.extNum);
-    if (overwrite) out[k1] = p.market; else out[k1] ??= p.market;
+    if (overwrite) subs[k1] = p.subs; else subs[k1] ??= p.subs;
     // the catalog's own Number as a secondary key when it disagrees, never
     // clobbering a real card's slot
-    if (k2 !== k1 && out[k2] == null) out[k2] = p.market;
+    if (k2 !== k1 && subs[k2] == null) subs[k2] = p.subs;
   };
   const priced = d.products.filter((p) => p.market != null);
   priced.filter((p) => /\[|\(prerelease\)/i.test(p.name)).forEach((p) => assign(p, false));
   priced.filter((p) => !/\[|\(prerelease\)/i.test(p.name)).forEach((p) => assign(p, true));
-  return { set: setName, group: d.group, prices: out };
+  // `prices` stays a flat { number: market } map. Clients running a cached
+  // bundle read it straight into a card's value, and would write NaN — and
+  // then sync it — if these became objects. Derived from `subs` rather than
+  // tracked alongside, so the two can never disagree about a slot.
+  const out = {};
+  for (const n of Object.keys(subs)) out[n] = collapse(subs[n]);
+  return { set: setName, group: d.group, prices: out, subs };
 }
 /* GET /catalog?set=<name> — the singles in a set straight from TCGplayer's
    catalog (via tcgcsv): name, number, rarity, market. Newly released cards
@@ -116,7 +126,7 @@ async function setPrices(setName) {
 async function setCatalog(setName) {
   const d = await setData(setName);
   if (!d) return null;
-  return { set: setName, group: d.group, cards: d.products.map((p) => ({ name: p.name, num: p.num, rarity: p.rarity, market: p.market })) };
+  return { set: setName, group: d.group, cards: d.products.map((p) => ({ name: p.name, num: p.num, rarity: p.rarity, market: p.market, subs: p.subs })) };
 }
 
 /* GET /graded?name=<card>&number=<num>&set=<set> — eBay-sold comps for PSA
@@ -224,6 +234,103 @@ async function gradedPrices(name, number, set) {
   return body;
 }
 
+/* POST /identify — read a photographed card with Claude and report what's on
+   it. Unlike the price routes this one costs money per call, so it lives
+   behind the token wall. Always answers with { cards: [...] }, even for one
+   card, so scanning a whole binder page later is a prompt change rather than
+   a new response shape. */
+const IDENTIFY_MODEL = "claude-haiku-4-5";
+const MAX_IMAGE_B64 = 5 * 1024 * 1024; // Lambda caps the whole request at 6MB
+const MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const IDENTIFY_SYSTEM = `You identify Pokémon trading cards from photographs for a collector's inventory app.
+
+Report only what is actually visible on the card. Never infer a collector number or a set from the card's name.
+
+- name: the card name exactly as printed, without the set, the number, or any variant wording.
+- number: the collector number exactly as printed, including the denominator when one is shown ("095/086", "TG12/TG30", "SV107"). null if unreadable.
+- setName: the full English expansion name, if you recognise it. null otherwise.
+- setCode: the short expansion code printed beside the collector number or in a bottom corner ("ME4", "PRE", "SVI"). null if not visible. Do not derive it from the set name.
+- variant: which printing this is.
+    * "Reverse Holofoil" - foil covers the whole card face including the border and text box, while the artwork box itself is plain.
+    * "Holofoil" - foil is confined to the artwork box.
+    * "Normal" - no foil anywhere.
+    * "Unknown" - the photograph doesn't show enough to tell.
+  Full-art, illustration-rare and secret-rare cards have no reverse printing; report those as "Holofoil".
+- confidence: "high" only when the name and the number are both plainly legible.
+- notes: one short sentence, only when something is ambiguous or unreadable. null otherwise.`;
+const IDENTIFY_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["cards"],
+  properties: {
+    cards: {
+      type: "array",
+      items: {
+        type: "object", additionalProperties: false,
+        required: ["name", "number", "setName", "setCode", "variant", "confidence", "notes"],
+        properties: {
+          name: { type: "string" },
+          number: { type: ["string", "null"] },
+          setName: { type: ["string", "null"] },
+          setCode: { type: ["string", "null"] },
+          variant: { type: "string", enum: ["Normal", "Holofoil", "Reverse Holofoil", "Unknown"] },
+          confidence: { type: "string", enum: ["high", "medium", "low"] },
+          notes: { type: ["string", "null"] },
+        },
+      },
+    },
+  },
+};
+async function identifyCards(image, mediaType, mode) {
+  const ctl = new AbortController();
+  // API Gateway cuts the integration off at 30s, so abort first — otherwise a
+  // hung call surfaces as an opaque gateway 504 with nothing in the log
+  const timer = setTimeout(() => ctl.abort(), 25000);
+  let r;
+  try {
+    r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      signal: ctl.signal,
+      headers: {
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: IDENTIFY_MODEL,
+        max_tokens: mode === "page" ? 4096 : 1024,
+        system: IDENTIFY_SYSTEM,
+        // constrains the reply to IDENTIFY_SCHEMA — still needs parsing, but
+        // can't come back as prose or a fenced code block
+        output_config: { format: { type: "json_schema", schema: IDENTIFY_SCHEMA } },
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: mediaType, data: image } },
+            { type: "text", text: mode === "page" ? "Identify every card in this photograph, in reading order." : "Identify this card." },
+          ],
+        }],
+      }),
+    });
+  } finally { clearTimeout(timer); }
+  if (!r.ok) {
+    const e = new Error(`anthropic HTTP ${r.status}`);
+    e.status = r.status;
+    e.detail = (await r.text().catch(() => "")).slice(0, 300); // logged only, never returned
+    throw e;
+  }
+  const msg = await r.json();
+  // both of these bypass the schema guarantee, so check before parsing
+  if (msg.stop_reason === "refusal" || msg.stop_reason === "max_tokens") {
+    const e = new Error(`stop_reason ${msg.stop_reason}`); e.unreadable = true; throw e;
+  }
+  let parsed;
+  try { parsed = JSON.parse((msg.content || []).find((b) => b.type === "text")?.text || ""); }
+  catch { const e = new Error("unparsable reply"); e.unreadable = true; throw e; }
+  return {
+    cards: Array.isArray(parsed?.cards) ? parsed.cards : [],
+    usage: msg.usage ? { input_tokens: msg.usage.input_tokens, output_tokens: msg.usage.output_tokens } : null,
+  };
+}
+
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method;
   // CORS preflight must get a 2xx; API Gateway injects the CORS headers
@@ -265,6 +372,30 @@ export const handler = async (event) => {
   }
 
   if (!authed(event)) return res(401, { error: "unauthorized" });
+
+  // must be method-scoped: the ledger GET below matches any authed GET
+  // regardless of path
+  if (method === "POST" && event.rawPath?.endsWith("/identify")) {
+    if (!process.env.ANTHROPIC_API_KEY) return res(501, { error: "card scanning not configured" });
+    let body;
+    try {
+      const raw = event.isBase64Encoded ? Buffer.from(event.body || "", "base64").toString("utf8") : event.body || "";
+      body = JSON.parse(raw);
+    } catch { return res(400, { error: "bad json" }); }
+    const { image, media_type: mediaType = "image/jpeg", mode = "single" } = body || {};
+    if (typeof image !== "string" || !image || !MEDIA_TYPES.has(mediaType)) return res(400, { error: "bad payload" });
+    if (image.length > MAX_IMAGE_B64) return res(413, { error: "image too large" });
+    try {
+      const out = await identifyCards(image, mediaType, mode);
+      return out.cards.length ? res(200, out) : res(422, { error: "couldn't read that card — retake the photo" });
+    } catch (e) {
+      // the upstream body can name the key or the account; log it, never return it
+      console.error("identify route failed:", e.status || "", e.message, e.detail || "");
+      if (e.unreadable) return res(422, { error: "couldn't read that card — retake the photo" });
+      if (e.status === 429) return res(429, { error: "scan rate limit — try again in a moment" });
+      return res(502, { error: "card scanner unavailable" });
+    }
+  }
 
   if (method === "GET") {
     const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: { id: ID } }));

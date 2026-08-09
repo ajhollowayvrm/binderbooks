@@ -54,6 +54,28 @@ and occasionally drops requests. To lift the limits:
 The app works without a key — it just retries on failure and shows a tappable
 retry if the API doesn't respond.
 
+## Card scanner (Scan tab)
+
+Photograph a card and the **Scan** tab fills in its name, collector number, set
+and printing, then hands it to the same *+ Buy / + Keep / + Hit* actions the
+Lookup tab uses. The photo is read by Claude via the `/identify` route on the
+`binderbooks-sync` Lambda, which needs an Anthropic API key:
+
+```powershell
+cd aws
+.\deploy.ps1 -AnthropicKey "sk-ant-..."
+```
+
+Like `PPT_KEY`, the key lives only on the Lambda, never in the repo — the app is
+a static bundle, so anything shipped to the client is public. Without the key
+the route answers `501` and the tab says so. Unlike the price routes, `/identify`
+sits **behind the sync token** (it costs money per call), so a device has to be
+connected to Cloud sync before it can scan.
+
+Scans run on Claude Haiku 4.5 at roughly **$2.40 per 1,000 cards**. Photograph
+one card at a time, straight on and filling the frame — the collector number in
+the bottom corner is what pins the match down.
+
 ## Tools
 
 Two standalone helpers that don't need the app running:
@@ -75,6 +97,11 @@ Two standalone helpers that don't need the app running:
 
 ## Notes
 
+- **Printings:** inventory cards carry a `variant` (Normal / Holofoil / Reverse
+  Holofoil). A reverse holo is often worth several times its normal printing, so
+  setting it changes what "Refresh market prices" writes and which SKU the
+  TCGplayer upload CSV picks. Cards from before this field existed are left
+  unset and price exactly as they did before.
 - **TCGplayer bulk listing:** the Inventory tab can build a staged-upload CSV.
   The first time you list from a set, add its export from the TCGplayer Seller
   Portal (Pricing → Export Filtered CSV with out-of-stock rows included, or a

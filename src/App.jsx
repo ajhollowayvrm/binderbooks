@@ -3,7 +3,7 @@ import Papa from "papaparse";
 import {
   LayoutDashboard, PackageOpen, ShoppingCart, Tags, Search, Archive,
   Plus, Trash2, Pencil, ChevronDown, ChevronRight, Sparkles, Upload, X,
-  CalendarRange, ChevronLeft, RefreshCw, ExternalLink,
+  CalendarRange, ChevronLeft, RefreshCw, ExternalLink, Camera,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -78,21 +78,35 @@ const KEY = "cardledger:v1";
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 /* set list for the structured buy form — live from pokemontcg.io,
-   cached for a week so the dropdown opens instantly */
-const SETS_KEY = "cardledger:sets:v1";
+   cached for a week so the dropdown opens instantly. v2 also carries the
+   printed expansion codes ("PRE" -> "Prismatic Evolutions") that the card
+   scanner resolves a photographed set symbol against. */
+const SETS_KEY = "cardledger:sets:v2"; // v2: entries carry ptcgoCode
 let setsPromise = null;
 async function fetchSets() {
-  const data = await ptcgFetch("sets?orderBy=-releaseDate&select=name,releaseDate&pageSize=250");
+  const data = await ptcgFetch("sets?orderBy=-releaseDate&select=name,releaseDate,ptcgoCode&pageSize=250");
   const names = [...new Set((data.data || []).map((s) => s.name))];
   if (!names.length) throw new Error("empty");
-  try { localStorage.setItem(SETS_KEY, JSON.stringify({ t: Date.now(), names })); } catch {}
-  return names;
+  // eight codes are shared by two sets, and every one of them is a main set
+  // plus a subset of it ("BRS" is both Brilliant Stars and Brilliant Stars
+  // Trainer Gallery). Prefer the main set — it holds nearly every card and its
+  // name is always the shorter. A subset card still resolves, via
+  // lookupCardCandidates' retry without the set filter.
+  const codes = {};
+  for (const s of data.data || []) {
+    if (!s.ptcgoCode || !s.name) continue;
+    const k = s.ptcgoCode.toUpperCase();
+    if (!codes[k] || s.name.length < codes[k].length) codes[k] = s.name;
+  }
+  try { localStorage.setItem(SETS_KEY, JSON.stringify({ t: Date.now(), names, codes })); } catch {}
+  return { names, codes };
 }
 /* card-search cache: query -> slimmed results, 24h TTL, ~30 most recent
    queries kept. Repeat searches are instant and rate-limit failures drop. */
 const QCACHE_KEY = "cardledger:qcache:v2"; // v2: entries must carry fallback prices
 const QCACHE_TTL = 24 * 3600 * 1000;
 const cachedSets = () => { try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); return c?.names || null; } catch { return null; } };
+const cachedSetCodes = () => { try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); return c?.codes || null; } catch { return null; } };
 // words that describe a variant, not a card name — "ampharos full art" should
 // search name:*ampharos* and float Illustration/Ultra Rares, not find nothing
 const SEARCH_STOP = new Set(["full", "art", "fullart", "alt", "illustration", "special", "secret", "rainbow", "hyper", "holo", "reverse", "foil", "textured", "sir", "ir", "promo"]);
@@ -140,8 +154,39 @@ const slimCard = (c) => ({
 /* fallback prices: pokemontcg.io has no price data for sets newer than
    Nov 2025, so cards missing a price get TCGplayer market values from the
    tcgcsv.com dump, proxied through our Lambda (see aws/index.mjs). */
-const SETPRICE_KEY = "cardledger:setprices:v1";
+const SETPRICE_KEY = "cardledger:setprices:v2"; // v2: entries are per-printing maps, not scalars
 const normNum = (s) => String(s || "").split("/")[0].trim().replace(/^0+(?=\w)/, "").toUpperCase();
+
+/* printings. A card's reverse holo can be worth several times its normal
+   printing, so which one a ledger card is decides what it's worth. tcgcsv
+   labels them one way and pokemontcg.io another, hence the two tables. */
+const VARIANTS = ["Normal", "Holofoil", "Reverse Holofoil"];
+const PTCG_VARIANT_KEY = { "Normal": "normal", "Holofoil": "holofoil", "Reverse Holofoil": "reverseHolofoil" };
+// list rows are tight on a phone — "Reverse Holofoil" doesn't fit next to a
+// status and a grade chip
+const VARIANT_SHORT = { "Normal": "Normal", "Holofoil": "Holo", "Reverse Holofoil": "Reverse" };
+// preference order per printing. The "" row is the Lambda's own collapse, so a
+// card with no variant set prices exactly as it did before variants existed;
+// the fallbacks keep Normal-only cards working when asked for a holo.
+const SUB_ORDER = {
+  "Normal": ["Normal", "Holofoil", "Reverse Holofoil"],
+  "Holofoil": ["Holofoil", "Normal", "Reverse Holofoil"],
+  "Reverse Holofoil": ["Reverse Holofoil", "Holofoil", "Normal"],
+  "": ["Normal", "Holofoil", "Reverse Holofoil"],
+};
+// one printing's market price out of a /prices `subs` entry. Always a number
+// or null — never an object. That guard matters more than the fallback chain:
+// this value goes straight into a card's `value`, which then syncs, so an
+// object here would zero out inventory on every device.
+const subPrice = (entry, variant) => {
+  if (entry == null) return null;
+  if (typeof entry === "number") return entry; // scalar `prices`, or a v1 cache entry
+  if (typeof entry !== "object") return null;
+  for (const k of SUB_ORDER[variant] || SUB_ORDER[""]) if (typeof entry[k] === "number") return entry[k];
+  // vintage subtypes ("1st Edition Holofoil", "Unlimited") match no row above
+  const any = Object.values(entry).find((v) => typeof v === "number");
+  return any ?? null;
+};
 const setPricesGet = (set) => { try { const c = (JSON.parse(localStorage.getItem(SETPRICE_KEY)) || {})[set]; return c && Date.now() - c.t < 24 * 3600 * 1000 ? c.p : null; } catch { return null; } };
 const setPricesPut = (set, p) => {
   try {
@@ -152,15 +197,18 @@ const setPricesPut = (set, p) => {
     localStorage.setItem(SETPRICE_KEY, JSON.stringify(all));
   } catch {}
 };
-// one { cardNumber: market } map per set from the Lambda's tcgcsv proxy —
-// `force` skips the 24h client cache (explicit refreshes want today's dump)
-// but still falls back to it if the network call fails
+// one { cardNumber: { printing: market } } map per set from the Lambda's
+// tcgcsv proxy — read through subPrice, never directly. `force` skips the 24h
+// client cache (explicit refreshes want today's dump) but still falls back to
+// it if the network call fails. Falls back to the flat `prices` map so a
+// client that ships ahead of the Lambda still prices cards.
 async function fetchSetPrices(setName, force = false) {
   if (!force) { const m = setPricesGet(setName); if (m) return m; }
   try {
     const r = await fetch(`${SYNC_URL}prices?set=${encodeURIComponent(setName)}`);
     if (!r.ok) return force ? setPricesGet(setName) : null;
-    const m = (await r.json()).prices || {};
+    const j = await r.json();
+    const m = j.subs || j.prices || {};
     setPricesPut(setName, m);
     return m;
   } catch { return force ? setPricesGet(setName) : null; }
@@ -175,9 +223,118 @@ async function fillMissingPrices(list) {
   }));
   return list.map((c) => {
     if (cardPrice(c) != null) return c;
-    const v = maps[c.set?.name]?.[normNum(c.number)];
-    return v == null ? c : { ...c, tcgplayer: { prices: { holofoil: { market: v } } } };
+    const p = subsToPrices(maps[c.set?.name]?.[normNum(c.number)]);
+    return p ? { ...c, tcgplayer: { prices: p } } : c;
   });
+}
+// a tcgcsv per-printing map as pokemontcg.io-shaped price blocks. This used to
+// force every price under `holofoil` regardless of its real subtype, which
+// left a card's displayed price unrelated to the printing it came from.
+const subsToPrices = (e) => {
+  if (e == null) return null;
+  const prices = {};
+  if (typeof e === "number") prices.holofoil = { market: e };
+  else for (const [k, v] of Object.entries(e)) {
+    const pk = PTCG_VARIANT_KEY[k];
+    if (pk && typeof v === "number") prices[pk] = { market: v };
+  }
+  // vintage subtypes ("1st Edition Holofoil") map to no key above — fall back
+  // to the single-price shape rather than dropping the card's price entirely
+  if (!Object.keys(prices).length) { const v = subPrice(e, ""); if (v != null) prices.holofoil = { market: v }; }
+  return Object.keys(prices).length ? prices : null;
+};
+/* a TCGplayer catalog product as a pokemontcg.io-shaped card, so the Lookup
+   result list, the scanner, and the three add-paths all handle one shape.
+   `set` stays the ledger's own name for the set, not TCGplayer's group name,
+   so a later price refresh on the kept card resolves the same way. */
+const catalogCard = (group, p, setName) => {
+  const prices = subsToPrices(p.subs ?? p.market);
+  return {
+    id: `tcgp-${group}-${p.num}-${p.name}`,
+    name: p.name.replace(/ - [\w/.]+$/, ""),
+    number: p.num, rarity: p.rarity, set: { name: setName }, images: {},
+    ...(prices ? { tcgplayer: { prices } } : {}),
+  };
+};
+// a set name as read off a card -> the ledger's own name for it. Exact first,
+// then a unique substring either way round ("Chaos Rising" vs "ME04: Chaos
+// Rising"). Ambiguous matches are refused rather than guessed.
+const matchSetName = (text, sets) => {
+  const t = String(text || "").toLowerCase().trim();
+  if (!t || !sets?.length) return null;
+  const exact = sets.find((s) => s.toLowerCase() === t);
+  if (exact) return exact;
+  const part = sets.filter((s) => { const l = s.toLowerCase(); return l.includes(t) || t.includes(l); });
+  return part.length === 1 ? part[0] : null;
+};
+
+/* ---- card scanner ------------------------------------------------- */
+// Claude reads the card at 1568px on its long edge, so anything bigger is
+// downscaled server-side and only costs upload time. Much smaller and the
+// collector number stops being legible, which is the one glyph that matters.
+// createImageBitmap rather than <img>: it honours EXIF orientation, and a
+// sideways photo is the single most common cause of a bad read.
+async function downscale(file, maxEdge = 1500, quality = 0.85) {
+  let bmp;
+  try { bmp = await createImageBitmap(file, { imageOrientation: "from-image" }); }
+  catch { bmp = await createImageBitmap(file); } // older Safari has no options arg
+  const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale)), h = Math.max(1, Math.round(bmp.height * scale));
+  const cv = document.createElement("canvas");
+  cv.width = w; cv.height = h;
+  cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
+  bmp.close?.();
+  return cv.toDataURL("image/jpeg", quality).split(",")[1]; // strip the data: prefix
+}
+// the scan route is token-walled (it costs money per call), so it can't use
+// the bare fetch the public price routes use
+const identifyFetch = async (body) => {
+  const r = await fetch(`${SYNC_URL}identify`, {
+    method: "POST",
+    headers: { "x-sync-token": syncToken(), "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
+  return j;
+};
+const snapErrMsg = (e) =>
+  e.status === 401 ? "Connect this device to cloud sync first — the scanner runs behind the same token."
+  : e.status === 501 ? "Card scanning isn't set up yet — the sync Lambda needs an Anthropic API key (see aws/deploy.ps1)."
+  : e.status === 429 ? "Too many scans just now — give it a moment and try again."
+  : e.status === 422 ? "Couldn't read that card. Retake the photo straight-on, filling the frame, in even light."
+  : e.status === 413 ? "That photo was too large to send — try again."
+  : e.name === "NotReadableError" || /createImageBitmap|decode/i.test(e.message || "") ? "That image format isn't supported — photograph the card directly instead of picking a HEIC from the library."
+  : "The scanner is unavailable right now — try again in a moment.";
+/* what Claude read -> a real catalog card. Set first (the printed code is the
+   strongest signal), then the card, with the same two fallbacks the rest of
+   the app uses: pokemontcg.io, then TCGplayer's catalog for sets it doesn't
+   know yet. Every step may come up empty; the confirm sheet is editable. */
+async function resolveScan(hit, sets, codes) {
+  const printed = hit.number || "";
+  const setName = (hit.setCode && codes?.[hit.setCode.toUpperCase()]) || matchSetName(hit.setName, sets) || "";
+  const variant = hit.variant && hit.variant !== "Unknown" ? hit.variant : "";
+  // pokemontcg.io stores "95" where the card prints "095/086", and its query
+  // matches the stored form — so normalise before asking, or both the
+  // set-filtered attempt and its retry miss
+  const num = normNum(printed);
+  let card = null;
+  if (hit.name && num) {
+    try { card = (await lookupCardCandidates({ name: hit.name, set: setName, number: num }))[0] || null; } catch {}
+  }
+  if (!card && setName && num) {
+    try {
+      const r = await fetch(`${SYNC_URL}catalog?set=${encodeURIComponent(setName)}`);
+      if (r.ok) {
+        const j = await r.json();
+        const toks = String(hit.name || "").toLowerCase().split(/\s+/).filter(Boolean);
+        const byNum = (j.cards || []).filter((x) => normNum(x.num) === num);
+        const p = byNum.find((x) => toks.every((t) => x.name.toLowerCase().includes(t))) || byNum[0];
+        if (p) card = catalogCard(j.group, p, setName);
+      }
+    } catch {}
+  }
+  return { card, setName, variant, number: card?.number || printed };
 }
 
 /* PSA comps for the grading-estimate fields: eBay sold averages per grade,
@@ -229,10 +386,28 @@ function useSets() {
     if (sets) return;
     if (!setsPromise) setsPromise = fetchSets();
     let live = true;
-    setsPromise.then((n) => live && setSets(n)).catch(() => { setsPromise = null; if (live) setSets([]); });
+    setsPromise.then((d) => live && setSets(d.names)).catch(() => { setsPromise = null; if (live) setSets([]); });
     return () => { live = false; };
   }, [sets]);
   return sets; // null = loading, [] = unavailable, [...] = loaded
+}
+
+// printed expansion code -> set name, for resolving a scanned card's set
+// symbol. Shares fetchSets' promise and cache entry, so pairing it with
+// useSets costs no extra request.
+function useSetCodes() {
+  const [codes, setCodes] = useState(() => {
+    try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); if (c && Date.now() - c.t < 7 * 864e5 && c.codes) return c.codes; } catch {}
+    return null;
+  });
+  useEffect(() => {
+    if (codes) return;
+    if (!setsPromise) setsPromise = fetchSets();
+    let live = true;
+    setsPromise.then((d) => live && setCodes(d.codes || {})).catch(() => { setsPromise = null; if (live) setCodes({}); });
+    return () => { live = false; };
+  }, [codes]);
+  return codes; // null = loading, {} = unavailable, {...} = loaded
 }
 
 const SOURCES = ["Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "TCGplayer", "eBay", "PSA", "Other"];
@@ -315,7 +490,9 @@ function seed() {
 function migrate(s) {
   s = { ...s };
   if (!s.inventory) s.inventory = [];
-  s.inventory = s.inventory.map((c) => ({ status: "Kept", gradingCost: 0, ...c }));
+  // defaults first so existing values win — this runs on every local and
+  // remote load, which is what back-fills `variant` onto pre-scanner cards
+  s.inventory = s.inventory.map((c) => ({ status: "Kept", gradingCost: 0, variant: "", ...c }));
   if (!s.version || s.version < 2) {
     const idx = s.sales.findIndex((x) => x.item === "TCGplayer orders (31)");
     if (idx >= 0) s.sales = [...tcgpSales(), ...s.sales.filter((_, i) => i !== idx)];
@@ -355,9 +532,18 @@ const ripPL = (r, buys) => ripValue(r) - ripCostOf(r, buys);
 function addHitToState(s, ripId, hit) {
   const h = { id: uid(), ...hit };
   const rip = s.rips.find((r) => r.id === ripId);
-  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", grade: "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, value: Number(h.value) || 0, date: rip?.date || today() };
+  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", grade: "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, value: Number(h.value) || 0, date: rip?.date || today() };
   return { rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r)), inventory: [inv, ...(s.inventory || [])] };
 }
+
+/* the three ways an identified card enters the ledger. Each takes a card in
+   pokemontcg.io shape and returns a patch slice, so Lookup and the scanner
+   add cards through the same code instead of two copies that drift.
+   `c.variant` is optional — Lookup results don't carry one and price exactly
+   as they always did. */
+const addAsBuy = (c) => (s) => ({ buys: [{ id: uid(), item: `${c.name} ${c.number || ""}`.trim(), category: "Single", source: "Other", cost: cardPrice(c, c.variant) || 0, date: today() }, ...s.buys] });
+const addAsKeep = (c) => (s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", grade: "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, value: cardPrice(c, c.variant) || 0, date: today() }, ...(s.inventory || [])] });
+const addAsHit = (c, ripId) => (s) => addHitToState(s, ripId, { name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", value: cardPrice(c, c.variant) || 0 });
 const buyLineSet = (b) => { const s = [...new Set((b?.lines || []).map((l) => l.set).filter(Boolean))]; return s.length === 1 ? s[0] : ""; };
 // which set a rip belongs to: explicit field, else the linked buy's lines,
 // else a set name found in the product text, else the majority set of the hits
@@ -461,7 +647,14 @@ const invRange = (cards) => cards.reduce((a, c) => {
 }, { lo: 0, hi: 0 });
 const fmtRange = (r) => (r.lo === r.hi ? fmt(r.lo) : `${fmt(r.lo)} – ${fmt(r.hi)}`);
 const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "");
-const cardPrice = (c) => { const p = c.tcgplayer?.prices; if (!p) return null; const v = p.holofoil || p.normal || p.reverseHolofoil || p["1stEditionHolofoil"] || Object.values(p)[0]; return v?.market ?? v?.mid ?? null; };
+// `variant` is optional — without it this picks a printing the way it always
+// has, so every existing caller is unaffected
+const cardPrice = (c, variant) => {
+  const p = c.tcgplayer?.prices; if (!p) return null;
+  const want = PTCG_VARIANT_KEY[variant];
+  const v = (want && p[want]) || p.holofoil || p.normal || p.reverseHolofoil || p["1stEditionHolofoil"] || Object.values(p)[0];
+  return v?.market ?? v?.mid ?? null;
+};
 // Look up one stored card on pokemontcg.io — used by Inventory's "refresh
 // prices" and the card modal. We only trust a match we can pin down (name +
 // number, or name + set); a bare name is too ambiguous to auto-pick, so we
@@ -485,8 +678,8 @@ async function lookupCardCandidates(card, { fill = true } = {}) {
   } catch { return []; }
   return []; // no number and no set — too ambiguous to match safely
 }
-async function lookupCardPrice(card) {
-  return (await lookupCardCandidates(card)).find((c) => cardPrice(c) != null) || null;
+async function lookupCardPrice(card, variant) {
+  return (await lookupCardCandidates(card)).find((c) => cardPrice(c, variant) != null) || null;
 }
 // the modal also wants a match with no price (for the image and set info):
 // prefer priced-with-image, then any image, then whatever matched. Skips the
@@ -644,7 +837,7 @@ export default function App() {
     ["dash", "Overview", LayoutDashboard], ["month", "Monthly", CalendarRange],
     ["rips", "Rips", PackageOpen], ["buys", "Buys", ShoppingCart],
     ["sales", "Sales", Tags], ["inv", "Inventory", Archive],
-    ["look", "Lookup", Search],
+    ["look", "Lookup", Search], ["snap", "Scan", Camera],
   ];
 
   return (
@@ -665,6 +858,7 @@ export default function App() {
         {tab === "sales" && <Sales state={state} patch={patch} />}
         {tab === "inv" && <Inventory state={state} patch={patch} />}
         {tab === "look" && <Lookup state={state} patch={patch} />}
+        {tab === "snap" && <CardSnap state={state} patch={patch} />}
       </main>
     </div>
   );
@@ -1475,17 +1669,23 @@ const tcgpNameScore = (cardName, prodName) => {
   return s;
 };
 // ledger cards carry no condition, so everything exports as Near Mint; the
-// rank picks which NM printing row to use when a product has several
-const tcgpCondRank = (cond, cardName) => {
+// rank picks which NM printing row to use when a product has several. The
+// card's own `variant` decides when it has one — cards from before that field
+// existed fall back to the old name-text heuristic and rank exactly as before.
+const tcgpCondRank = (cond, card) => {
   const c = String(cond || "").toLowerCase();
   if (!c.startsWith("near mint")) return -1;
-  if (c.includes("reverse")) return /\breverse\b/i.test(String(cardName)) ? 3 : 0;
-  return c.includes("holofoil") ? 2 : 1;
+  const rev = c.includes("reverse"), holo = c.includes("holofoil");
+  const v = card?.variant || (/\breverse\b/i.test(String(card?.name || "")) ? "Reverse Holofoil" : "");
+  if (v === "Reverse Holofoil") return rev ? 3 : holo ? 2 : 1;
+  if (v === "Holofoil") return rev ? 0 : holo ? 3 : 1;
+  if (v === "Normal") return rev ? 0 : holo ? 1 : 3;
+  return rev ? 0 : holo ? 2 : 1; // printing unknown — the ordering this always used
 };
 function buildTcgpUpload(rows, cards) {
   // customs ("C-…" photo listings of one specific card) are never matched —
   // adding quantity to those would double-sell that physical card
-  const usable = rows.filter((r) => /^\d+$/.test(String(r["TCGplayer Id"] || "").trim()) && tcgpCondRank(r["Condition"], "") >= 0);
+  const usable = rows.filter((r) => /^\d+$/.test(String(r["TCGplayer Id"] || "").trim()) && tcgpCondRank(r["Condition"], null) >= 0);
   const picks = new Map(); // sku id -> { row, qty, values, ids }
   const unmatched = [];
   // the export's Number column is occasionally wrong (promos filed under
@@ -1510,7 +1710,7 @@ function buildTcgpUpload(rows, cards) {
       cands = scored[0][0] > 0 && scored[0][0] !== scored[1][0] ? cands.filter((r) => r["Product Name"] === scored[0][1]) : [];
     }
     if (!cands.length) { unmatched.push(c); continue; }
-    const best = cands.reduce((a, r) => (tcgpCondRank(r["Condition"], c.name) > tcgpCondRank(a["Condition"], c.name) ? r : a));
+    const best = cands.reduce((a, r) => (tcgpCondRank(r["Condition"], c) > tcgpCondRank(a["Condition"], c) ? r : a));
     const key = String(best["TCGplayer Id"]).trim();
     const p = picks.get(key) || { row: best, qty: 0, values: [], ids: [] };
     p.qty++;
@@ -1657,7 +1857,9 @@ function Inventory({ state, patch }) {
     await Promise.all(setNames.map(async (s) => { const m = await fetchSetPrices(s, true); if (m) maps[s] = m; }));
     const leftovers = [];
     for (const c of cands) {
-      const v = c.set && c.number ? maps[c.set]?.[normNum(c.number)] : null;
+      // subPrice, never the raw entry — these are per-printing maps now, and
+      // this value is written straight onto the card and then synced
+      const v = c.set && c.number ? subPrice(maps[c.set]?.[normNum(c.number)], c.variant) : null;
       if (v != null) applyPrice(c, v);
       else leftovers.push(c);
     }
@@ -1665,8 +1867,8 @@ function Inventory({ state, patch }) {
     // name tcgcsv doesn't know) goes card-by-card to pokemontcg.io, which can
     // also backfill a missing set/number from its match
     for (const c of leftovers) {
-      const m = await lookupCardPrice(c);
-      const price = m ? cardPrice(m) : null;
+      const m = await lookupCardPrice(c, c.variant);
+      const price = m ? cardPrice(m, c.variant) : null;
       if (m && price != null) {
         applyPrice(c, price);
         updates[c.id] = { ...updates[c.id], ...(c.set ? {} : { set: m.set?.name || "" }), ...(c.number ? {} : { number: m.number || "" }) };
@@ -1973,7 +2175,7 @@ function Inventory({ state, patch }) {
           ? <InvForm key={c.id} initial={c} onSave={upd} onCancel={() => setEditId(null)} />
           : <div key={c.id} className={"cl-row click" + (c.status === "Sold" ? " sold" : "")} onClick={() => setViewId(c.id)}>
               <span className="holo-dot" />
-              <div className="cl-row-main"><div className="cl-row-title">{c.name}</div><div className="cl-row-meta"><span className={"cl-st " + stCls(c.status)}>{c.status}</span><span className="cl-chip">{c.grade}</span>{c.set ? `${c.set}${c.number ? " · " + c.number : ""} · ` : ""}{c.source}</div></div>
+              <div className="cl-row-main"><div className="cl-row-title">{c.name}</div><div className="cl-row-meta"><span className={"cl-st " + stCls(c.status)}>{c.status}</span><span className="cl-chip">{c.grade}</span>{c.variant && <span className="cl-chip">{VARIANT_SHORT[c.variant] || c.variant}</span>}{c.set ? `${c.set}${c.number ? " · " + c.number : ""} · ` : ""}{c.source}</div></div>
               <div className="cl-card-num"><div className="cl-money" style={{ color: "var(--holo2)" }}>{gradeRange(c) ? fmtRange(gradeRange(c)) : fmt(Number(c.value) || 0)}</div>{invBasis(c) ? <div className="cl-row-meta">basis {fmt(invBasis(c))}</div> : null}</div>
               <button className="cl-x" onClick={(e) => { e.stopPropagation(); setEditId(c.id); setAdding(false); }}><Pencil size={13} /></button>
               <button className="cl-x" onClick={(e) => { e.stopPropagation(); del(c.id); }}><Trash2 size={13} /></button>
@@ -1988,8 +2190,8 @@ function Inventory({ state, patch }) {
 function InvForm({ initial, onSave, onCancel }) {
   const estStr = (e) => Object.fromEntries(PSA_EST_GRADES.map((g) => [g, numStr(e?.[g])]));
   const [f, setF] = useState(initial
-    ? { name: initial.name, set: initial.set || "", number: initial.number || "", grade: initial.grade || "Raw", status: initial.status || "Kept", source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst), date: initial.date || today() }
-    : { name: "", set: "", number: "", grade: "Raw", status: "Kept", source: "Rip pull", cost: "", gradingCost: "", value: "", gradeEst: estStr(null), date: today() });
+    ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", grade: initial.grade || "Raw", status: initial.status || "Kept", source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst), date: initial.date || today() }
+    : { name: "", set: "", number: "", variant: "", grade: "Raw", status: "Kept", source: "Rip pull", cost: "", gradingCost: "", value: "", gradeEst: estStr(null), date: today() });
   const [comps, setComps] = useState("");
   const pullComps = async () => {
     if (comps === "loading") return;
@@ -2013,15 +2215,18 @@ function InvForm({ initial, onSave, onCancel }) {
     <Form editing={!!initial}>
       <Field label="Card"><input className="cl-in" placeholder="Umbreon ex SIR" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
       <div className="cl-grid2"><Field label="Set"><input className="cl-in" placeholder="Prismatic Evolutions" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /></Field><Field label="Number"><input className="cl-in" placeholder="161/131" value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /></Field></div>
-      <div className="cl-grid2"><Field label="Grade"><Select opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => setF({ ...f, status: v })} /></Field></div>
+      {/* "Printing" is what TCGplayer calls it on the listing form; the field
+          is `variant` in the ledger. Raw select rather than <Select> so the
+          unset option can carry a label instead of rendering blank. */}
+      <div className="cl-grid2"><Field label="Printing"><select className="cl-in" value={f.variant} onChange={(e) => setF({ ...f, variant: e.target.value })}><option value="">— not set —</option>{VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}</select></Field><Field label="Grade"><Select opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field></div>
+      <div className="cl-grid2"><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => setF({ ...f, status: v })} /></Field><Field label="Source"><Select opts={INV_SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field></div>
       {f.status === "At grading" && <div className="cl-field">
         <div className="cl-gradeest-head"><span>If it grades — what you think it's worth at each PSA grade</span><button className="cl-link" disabled={!f.name || comps === "loading"} onClick={pullComps}>{comps === "loading" ? "Pulling…" : "Pull eBay comps"}</button></div>
         <div className="cl-gradeest">{PSA_EST_GRADES.map((g) => <div key={g} className="cl-gradeest-cell"><span className="cl-gradeest-g">PSA {g}</span><MoneyInput placeholder="—" value={f.gradeEst[g]} onChange={(v) => setF({ ...f, gradeEst: { ...f.gradeEst, [g]: v } })} /></div>)}</div>
         {comps && <div className="cl-gradeest-note">{comps === "loading" ? "Pulling eBay sold comps…" : comps}</div>}
       </div>}
-      <Field label="Source"><Select opts={INV_SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field>
       <div className="cl-grid3"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Grading cost"><MoneyInput value={f.gradingCost} onChange={(v) => setF({ ...f, gradingCost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} /></Field></div>
-      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, grade: f.grade, status: f.status, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(PSA_EST_GRADES.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
+      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, variant: f.variant, grade: f.grade, status: f.status, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(PSA_EST_GRADES.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
     </Form>
   );
 }
@@ -2057,7 +2262,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
     (async () => {
       if (!card.set || !card.number) return;
       const m = await fetchSetPrices(card.set);
-      const v = m?.[normNum(card.number)];
+      const v = subPrice(m?.[normNum(card.number)], card.variant);
       if (ok && v != null) setLive((p) => (p != null ? p : v));
     })();
     (async () => {
@@ -2065,11 +2270,11 @@ function CardModal({ card, onClose, onEdit, onValue }) {
       if (!ok) return;
       setMatch(hit || false);
       if (!hit) return;
-      let v = cardPrice(hit);
+      let v = cardPrice(hit, card.variant);
       // ledger card missing set/number: the match names them, so its set dump can still price it
       if (v == null && hit.set?.name && hit.number && !(card.set && card.number)) {
         const m = await fetchSetPrices(hit.set.name);
-        v = m?.[normNum(hit.number)];
+        v = subPrice(m?.[normNum(hit.number)], card.variant);
       }
       if (ok && v != null) setLive((p) => (p != null ? p : v));
     })();
@@ -2125,10 +2330,13 @@ function CardModal({ card, onClose, onEdit, onValue }) {
           <div className="cl-cm-head">
             <div className="cl-cm-name">{card.name}</div>
             <div className="cl-row-meta">{card.set || match?.set?.name || data?.set || "set unknown"}{(card.number || match?.number || data?.number) ? ` · ${card.number || match?.number || data?.number}` : ""}{rarity ? ` · ${rarity}` : ""}</div>
-            <div className="cl-row-meta"><span className={"cl-st " + stCls(card.status)}>{card.status}</span><span className="cl-chip">{card.grade}</span></div>
+            <div className="cl-row-meta"><span className={"cl-st " + stCls(card.status)}>{card.status}</span><span className="cl-chip">{card.grade}</span>{card.variant && <span className="cl-chip">{VARIANT_SHORT[card.variant] || card.variant}</span>}</div>
             <div className="cl-cm-mkt">
               <div className="cl-cm-mkt-num">{market != null ? fmt(market) : "—"}</div>
-              <div className="cl-cm-mkt-lab">TCGplayer market{market == null ? " — no data" : ""}</div>
+              {/* name the printing this price is for — the button below writes
+                  it into the ledger, and silently applying a normal price to a
+                  reverse holo is exactly what the variant field exists to stop */}
+              <div className="cl-cm-mkt-lab">TCGplayer market{card.variant ? ` · ${card.variant}` : ""}{market == null ? " — no data" : ""}</div>
             </div>
             {market != null && Math.abs(market - value) > 0.005 && card.status !== "Sold" &&
               <button className="cl-mini cl-cm-apply" onClick={() => onValue(Math.round(market * 100) / 100)}>Set ledger value to {fmt(market)}</button>}
@@ -2235,15 +2443,7 @@ function Lookup({ state, patch }) {
         .filter((p) => toks.every((t) => p.name.toLowerCase().includes(t)))
         .sort((a, b) => (b.market || 0) - (a.market || 0))
         .slice(0, 40)
-        .map((p) => ({
-          // pseudo-card in pokemontcg.io shape so the result list and its
-          // actions work as-is; `set` stays the name the user typed so price
-          // refreshes on the kept card resolve the same way later
-          id: `tcgp-${j.group}-${p.num}-${p.name}`,
-          name: p.name.replace(/ - [\w/.]+$/, ""),
-          number: p.num, rarity: p.rarity, set: { name: s }, images: {},
-          ...(p.market != null ? { tcgplayer: { prices: { holofoil: { market: p.market } } } } : {}),
-        }));
+        .map((p) => catalogCard(j.group, p, s));
       setRes(list);
       if (!list.length) setErr(toks.length ? `Nothing in ${j.group} matches “${toks.join(" ")}” — clear the search box above to browse the whole set.` : "No singles found in that set.");
     } catch (e) {
@@ -2252,9 +2452,9 @@ function Lookup({ state, patch }) {
   };
   const priceOf = cardPrice;
 
-  const asBuy = (c) => { patch((s) => ({ buys: [{ id: uid(), item: `${c.name} ${c.number || ""}`.trim(), category: "Single", source: "Other", cost: priceOf(c) || 0, date: today() }, ...s.buys] })); flash(c.id, "Added to Buys"); };
-  const asKeep = (c) => { patch((s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, grade: "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, value: priceOf(c) || 0, date: today() }, ...(s.inventory || [])] })); flash(c.id, "Kept in inventory"); };
-  const asHit = (c) => { const ripId = ripFor[c.id] || state.rips[0]?.id; if (!ripId) { flash(c.id, "Make a rip first"); return; } patch((s) => addHitToState(s, ripId, { name: c.name, set: c.set?.name, number: c.number, value: priceOf(c) || 0 })); flash(c.id, "Added as hit"); };
+  const asBuy = (c) => { patch(addAsBuy(c)); flash(c.id, "Added to Buys"); };
+  const asKeep = (c) => { patch(addAsKeep(c)); flash(c.id, "Kept in inventory"); };
+  const asHit = (c) => { const ripId = ripFor[c.id] || state.rips[0]?.id; if (!ripId) { flash(c.id, "Make a rip first"); return; } patch(addAsHit(c, ripId)); flash(c.id, "Added as hit"); };
 
   return (
     <div className="cl-stack">
@@ -2284,6 +2484,126 @@ function Lookup({ state, patch }) {
         </div>
         <datalist id="bb-set-list">{(sets || []).map((s) => <option key={s} value={s} />)}</datalist>
       </div>}
+    </div>
+  );
+}
+
+/* ================================================================== */
+/* Card scanner: photograph a card, Claude reads what's on it, and the
+   match drops into the same three add-paths the Lookup tab uses.
+   Named `snap` throughout — `scan` already belongs to the grading-
+   candidate scanner on the Inventory tab. */
+function CardSnap({ state, patch }) {
+  const sets = useSets();
+  const codes = useSetCodes();
+  const camRef = useRef(null);
+  const libRef = useRef(null);
+  const [busy, setBusy] = useState("");   // "" | "reading" | "matching"
+  const [err, setErr] = useState("");
+  const [shot, setShot] = useState("");   // object URL of the photo just taken
+  const [d, setD] = useState(null);       // the editable draft
+  const [ripId, setRipId] = useState("");
+  const [done, setDone] = useState("");
+  const connected = !!syncToken();
+
+  // one place owns revoking: the cleanup fires whenever `shot` changes and on
+  // unmount, so nothing else has to remember to release the object URL
+  useEffect(() => () => { if (shot) URL.revokeObjectURL(shot); }, [shot]);
+  const dropShot = () => setShot("");
+
+  const onPhoto = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // without this, re-shooting the same file fires no change
+    if (!file) return;
+    setErr(""); setD(null); setDone("");
+    setShot(URL.createObjectURL(file));
+    setBusy("reading");
+    try {
+      const image = await downscale(file);
+      const { cards } = await identifyFetch({ image, media_type: "image/jpeg", mode: "single" });
+      const hit = cards?.[0];
+      if (!hit) { const x = new Error("nothing found"); x.status = 422; throw x; }
+      setBusy("matching");
+      const r = await resolveScan(hit, sets, codes);
+      setD({ id: r.card?.id || "snap-" + uid(), card: r.card, name: r.card?.name || hit.name || "", set: r.setName, number: r.number, variant: r.variant, confidence: hit.confidence, notes: hit.notes });
+    } catch (e2) { setErr(snapErrMsg(e2)); dropShot(); }
+    finally { setBusy(""); }
+  };
+
+  // re-run the match after the set or number is corrected by hand
+  const rematch = async () => {
+    setBusy("matching");
+    try {
+      const r = await resolveScan({ name: d.name, number: d.number, setName: d.set, setCode: null, variant: d.variant || "Unknown" }, sets, codes);
+      setD((p) => ({ ...p, card: r.card, id: r.card?.id || p.id, set: r.setName || p.set, number: r.number || p.number }));
+    } catch { setErr("Couldn't reach the card database — try again."); }
+    finally { setBusy(""); }
+  };
+
+  // what the add-paths actually receive. Edits flow straight through, so the
+  // price re-derives the moment the printing changes — which is the whole
+  // point of asking for it.
+  const card = d && { ...(d.card || { images: {} }), id: d.id, name: d.name, number: d.number, set: { name: d.set }, variant: d.variant };
+  const price = card ? cardPrice(card, d.variant) : null;
+  const clear = () => { setD(null); dropShot(); };
+  const add = (slice, msg) => { patch(slice); setDone(msg); clear(); };
+
+  return (
+    <div className="cl-stack">
+      <Header title="Scan a card" sub="Photograph it — the name, number, set and printing are read for you" />
+      {!connected
+        ? <Empty>Connect this device to cloud sync on the Overview tab first — the scanner runs behind the same token.</Empty>
+        : <>
+          <div className="cl-import">
+            <button className="cl-import-btn" disabled={!!busy} onClick={() => camRef.current?.click()}>
+              <Camera size={14} /> {busy === "reading" ? "Reading the card…" : busy === "matching" ? "Matching to the catalog…" : "Photograph a card"}
+            </button>
+            <button className="cl-import-btn" style={{ marginTop: 8 }} disabled={!!busy} onClick={() => libRef.current?.click()}>
+              <Upload size={14} /> Use a photo you already took
+            </button>
+            {/* capture="environment" opens the camera straight to the back
+                lens; the second input has no capture so the library is still
+                reachable, which is also the way to test this on a desktop */}
+            <input ref={camRef} type="file" accept="image/*" capture="environment" hidden onChange={onPhoto} />
+            <input ref={libRef} type="file" accept="image/*" hidden onChange={onPhoto} />
+          </div>
+          {err && <Empty>{err}</Empty>}
+          {done && <div className="cl-flash">{done}</div>}
+          {!d && !busy && !err && <div className="cl-note">Fill the frame with one card, straight on, in even light. The collector number in the bottom corner is what pins the match down.</div>}
+          {d && <Panel title="Is this right?" action={<button className="cl-link" disabled={!!busy} onClick={rematch}>Re-match</button>}>
+            <div className="cl-cm-top">
+              {shot ? <img className="cl-cm-img" src={shot} alt="the card you photographed" /> : <div className="cl-cm-img ph">no photo</div>}
+              <div className="cl-cm-head">
+                <div className="cl-cm-name">{d.name || "not read"}</div>
+                <div className="cl-row-meta">{d.set || "set unknown"}{d.number ? ` · ${d.number}` : ""}</div>
+                <div className="cl-cm-mkt">
+                  <div className="cl-cm-mkt-num">{price != null ? fmt(price) : "—"}</div>
+                  <div className="cl-cm-mkt-lab">TCGplayer market{d.variant ? ` · ${d.variant}` : ""}{price == null ? " — no data" : ""}</div>
+                </div>
+              </div>
+            </div>
+            {(d.confidence !== "high" || d.notes) && <div className="cl-note" style={{ marginTop: 10 }}>{d.notes || "Parts of this were hard to read — check them before adding."}</div>}
+            {!d.card && <div className="cl-note" style={{ marginTop: 10 }}>No catalog match, so there's no market price yet. Correct the set or number and hit Re-match, or add it as-is and set the value by hand.</div>}
+            <Field label="Card"><input className="cl-in" value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} /></Field>
+            <div className="cl-grid2">
+              <Field label="Set"><SetPicker sets={sets} value={d.set} onChange={(v) => setD({ ...d, set: v })} allowEmpty /></Field>
+              <Field label="Number"><input className="cl-in" value={d.number} onChange={(e) => setD({ ...d, number: e.target.value })} /></Field>
+            </div>
+            <Field label="Printing">
+              <select className="cl-in" value={d.variant} onChange={(e) => setD({ ...d, variant: e.target.value })}>
+                <option value="">— not set —</option>
+                {VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </Field>
+            {state.rips.length > 0 && <Field label="Add a hit to"><select className="cl-in" value={ripId} onChange={(e) => setRipId(e.target.value)}><option value="">latest rip</option>{state.rips.map((r) => <option key={r.id} value={r.id}>{r.product || "Rip"}</option>)}</select></Field>}
+            <div className="cl-snap-go">
+              <button className="cl-mini" disabled={!d.name} onClick={() => add(addAsBuy(card), "Added to Buys.")}>+ Buy</button>
+              <button className="cl-mini" disabled={!d.name} onClick={() => add(addAsKeep(card), "Kept in inventory.")}>+ Keep</button>
+              <button className="cl-mini holo-border" disabled={!d.name || !state.rips.length} onClick={() => add(addAsHit(card, ripId || state.rips[0]?.id), "Added as a rip hit.")}>+ Hit</button>
+              <button className="cl-mini" onClick={clear}>Discard</button>
+            </div>
+          </Panel>}
+        </>}
     </div>
   );
 }
@@ -2487,6 +2807,10 @@ function Fonts() {
     .cl-lk-name{font-size:13px;font-weight:600;font-family:'Space Grotesk';}
     .cl-lk-price{font-family:'Space Grotesk';font-weight:600;color:var(--pos);font-size:15px;font-variant-numeric:tabular-nums;margin-top:2px;}
     .cl-lk-actions{display:flex;gap:5px;margin-top:6px;}
+    /* scanner: the add row wraps rather than shrinking the buttons, so the
+       tap targets stay full size on a narrow phone */
+    .cl-snap-go{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;}
+    .cl-snap-go .cl-mini{flex:1 1 auto;justify-content:center;padding:9px 12px;}
     .cl-mini{flex:1;background:var(--surf2);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px 4px;font-size:11.5px;cursor:pointer;font-family:'Inter';}
     .cl-rip-sel{margin-top:6px;background:#10141b;border:1px solid var(--line);color:var(--mut);border-radius:8px;padding:5px;font-size:11px;font-family:'Inter';}
     .cl-flash{font-size:11px;color:#7cf5a0;margin-top:5px;text-align:center;}
