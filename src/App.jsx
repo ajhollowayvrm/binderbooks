@@ -1442,8 +1442,9 @@ function SaleForm({ initial, inventory, onSave, onCancel }) {
    per-condition SKU number that only TCGplayer's exports carry (tcgcsv /
    pokemontcg.io product ids are a different namespace), so the flow is:
    export a CSV from the Seller Portal (Live Inventory export, or a
-   Pricing-tab set export with out-of-stock rows included), feed it here,
-   and upload the file this builds via Inventory → Import to Staged. */
+   Pricing-tab set export with out-of-stock rows included), feed it here
+   once — it's cached per set from then on — and upload the file this
+   builds via Inventory → Import to Staged. */
 const TCGP_REQ_COLS = ["TCGplayer Id", "Set Name", "Product Name", "Number", "Condition", "Add to Quantity", "TCG Marketplace Price"];
 // ledger sets use pokemontcg.io names ("Prismatic Evolutions"), TCGplayer
 // prefixes them ("SV: Prismatic Evolutions") — suffix match covers all but
@@ -1530,6 +1531,56 @@ function buildTcgpUpload(rows, cards) {
   out.sort((a, b) => String(a["Set Name"]).localeCompare(b["Set Name"]) || String(a["Product Name"]).localeCompare(b["Product Name"]));
   return { out, exportedIds, unmatched, needPrice };
 }
+/* Cached set exports.
+
+   The SKU ids only exist in the seller's own export, so before this the flow
+   asked for the file on every run — and picking the wrong set's export only
+   failed at the end, in the "skipped" message. Instead we parse each export
+   once, keep its rows per Set Name, and the normal run needs no file picker.
+
+   Deliberately localStorage-only: this never goes through patch()/syncFetch().
+   Sync stores the whole ledger as one DynamoDB item (400KB cap) and a couple
+   of cached sets would break sync for everything. Per-device and rebuilt on
+   demand, exactly like GRADED_KEY. */
+const TCGP_SKU_KEY = "cardledger:tcgpsku:v1";
+// entry shape: { savedAt, fields: <the export's own header, in order>, rows: [...] }
+// keyed by row["Set Name"] lowercased/trimmed — one file can carry several sets
+const TCGP_STALE_MS = 90 * 864e5;
+// exactly the rows buildTcgpUpload's `usable` line keeps; everything else could
+// never have matched, so dropping it costs nothing and saves a lot of quota
+const tcgpCacheable = (r) =>
+  /^\d+$/.test(String(r["TCGplayer Id"] || "").trim()) &&
+  String(r["Condition"] || "").toLowerCase().startsWith("near mint");
+const tcgpCacheRead = () => { try { return JSON.parse(localStorage.getItem(TCGP_SKU_KEY)) || {}; } catch { return {}; } };
+/* Persist the cache. localStorage throws on quota (and in private mode); on a
+   full store we evict the least-recently-saved set — never one of `keep`, the
+   entries this write is adding — and retry a few times. If it still won't fit
+   nothing was written, so the last good copy is still on disk: hand that back
+   and let the caller keep the fresh rows in memory for the current export. */
+const tcgpCacheSave = (all, keep = []) => {
+  const kept = new Set(keep);
+  const store = {};
+  for (const [k, v] of Object.entries(all)) store[k] = { savedAt: v.savedAt, fields: v.fields, rows: v.rows };
+  for (let i = 0; i < 4; i++) {
+    try { localStorage.setItem(TCGP_SKU_KEY, JSON.stringify(store)); return { ok: true, all: store }; } catch {
+      const victim = Object.keys(store).filter((k) => !kept.has(k)).sort((a, b) => (store[a].savedAt || 0) - (store[b].savedAt || 0))[0];
+      if (!victim) break;
+      delete store[victim];
+    }
+  }
+  return { ok: false, all: tcgpCacheRead() };
+};
+const tcgpCacheBytes = (all) => { try { return JSON.stringify(all).length; } catch { return 0; } };
+// keys are lowercased for matching; show the export's own casing
+const tcgpSetLabel = (key, entry) => entry?.rows?.[0]?.["Set Name"] || key;
+const tcgpAge = (t) => {
+  const d = Math.floor((Date.now() - (t || 0)) / 864e5);
+  if (d <= 0) return "saved today";
+  if (d === 1) return "saved yesterday";
+  if (d < 60) return `saved ${d} days ago`;
+  const m = Math.round(d / 30);
+  return `saved ${m} month${m === 1 ? "" : "s"} ago`;
+};
 const downloadFile = (name, text) => {
   const url = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
   const a = document.createElement("a");
@@ -1701,12 +1752,15 @@ function Inventory({ state, patch }) {
     })
     .sort((a, b) => b.up10 - a.up10);
   const scanNoData = scanCands.filter((c) => c.grading && (c.grading.none || !c.grading.psa10)).length;
-  // Build a TCGplayer staged-upload CSV: the user ticks the cards to list,
-  // picks their own TCGplayer export (which carries the SKU ids), and we fill
-  // Add to Quantity + price for each match into an upload-ready file.
+  // Build a TCGplayer staged-upload CSV: the user ticks the cards to list and
+  // we fill Add to Quantity + price for each match into an upload-ready file.
+  // The SKU ids come from cached set exports (see TCGP_SKU_KEY) — the picker
+  // only appears when a selected card's set hasn't been cached yet.
   const tcgpFileRef = useRef();
   const [tcgpOpen, setTcgpOpen] = useState(false);
   const [tcgpSel, setTcgpSel] = useState(() => new Set());
+  const [tcgpCache, setTcgpCache] = useState(tcgpCacheRead);
+  const [tcgpCacheOpen, setTcgpCacheOpen] = useState(false);
   const tcgpEligible = inv
     .filter((c) => c.status === "Kept" && c.grade === "Raw" && c.name && c.set)
     .sort((a, b) => (a.set || "").localeCompare(b.set || "") || (a.name || "").localeCompare(b.name || ""));
@@ -1717,33 +1771,90 @@ function Inventory({ state, patch }) {
     setSyncMsg("");
   };
   const tcgpTick = (id) => setTcgpSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  // Preflight coverage: which of the ticked cards we already hold SKUs for.
+  // Reuses tcgpSetMatch so the promo aliases apply to cache keys too.
+  const tcgpCacheKeys = Object.keys(tcgpCache);
+  const tcgpPicked = tcgpEligible.filter((c) => tcgpSel.has(c.id));
+  const tcgpKeysFor = (cards) => tcgpCacheKeys.filter((k) => cards.some((c) => tcgpSetMatch(k, c.set)));
+  const tcgpCovered = tcgpPicked.filter((c) => tcgpCacheKeys.some((k) => tcgpSetMatch(k, c.set)));
+  // name the sets the way the user does, not the TCGplayer-prefixed way
+  const tcgpMissingSets = [...new Set(tcgpPicked.filter((c) => !tcgpCovered.includes(c)).map((c) => c.set))].sort();
+  const tcgpCoveredSets = new Set(tcgpCovered.map((c) => c.set)).size;
+  const tcgpCoverage = !tcgpPicked.length
+    ? "No cards selected."
+    : !tcgpMissingSets.length
+      ? `${tcgpPicked.length} card${tcgpPicked.length === 1 ? "" : "s"} across ${tcgpCoveredSets} set${tcgpCoveredSets === 1 ? "" : "s"} — ready to export.`
+      : tcgpCovered.length
+        ? `${tcgpCovered.length} of ${tcgpPicked.length} cards ready. Missing set export${tcgpMissingSets.length === 1 ? "" : "s"}: ${tcgpMissingSets.join(", ")}.`
+        : `No cached export covers ${tcgpMissingSets.length === 1 ? "that set" : "those sets"}: ${tcgpMissingSets.join(", ")}.`;
+  const tcgpBuild = (rows, fields, cands) => {
+    const skipped = [];
+    const { out, exportedIds, unmatched, needPrice } = buildTcgpUpload(rows, cands);
+    if (unmatched.length) {
+      const names = [...new Set(unmatched.map((c) => `${c.name} (${c.set})`))];
+      skipped.push(`${unmatched.length} not in the cached export${names.length === 1 ? "" : "s"}: ${names.slice(0, 6).join(", ")}${names.length > 6 ? ", …" : ""} — refresh those sets from Seller Portal → Pricing with out-of-stock rows included and rerun`);
+    }
+    if (needPrice.length) skipped.push(`${needPrice.length} with no price anywhere (give them a market value first): ${needPrice.slice(0, 4).join(", ")}`);
+    if (!out.length) { setSyncMsg(`No cards matched. ${skipped.join(" · ")}`); return; }
+    const csv = Papa.unparse({ fields, data: out.map((r) => fields.map((f) => r[f] ?? "")) }, { quotes: true });
+    const fname = `TCGP-Staged-Upload-${today()}.csv`;
+    downloadFile(fname, csv);
+    setTcgpOpen(false);
+    setSyncMsg(`Saved ${fname}: ${out.length} listing${out.length === 1 ? "" : "s"} covering ${exportedIds.length} card${exportedIds.length === 1 ? "" : "s"}. Upload it in Seller Portal → Inventory → Import to Staged, then push live.${skipped.length ? " Skipped " + skipped.join(" · ") + "." : ""}`);
+    if (typeof window !== "undefined" && window.confirm(`CSV saved. Mark the ${exportedIds.length} exported card${exportedIds.length === 1 ? "" : "s"} as Listed?\n(Cancel if you're not going to upload this file.)`)) {
+      const ids = new Set(exportedIds);
+      patch((s) => ({ inventory: (s.inventory || []).map((c) => (ids.has(c.id) ? { ...c, status: "Listed" } : c)) }));
+    }
+  };
+  const tcgpExport = () => {
+    if (!tcgpCovered.length) { setSyncMsg("None of the selected cards' sets are cached yet — add a set export first."); return; }
+    const used = tcgpKeysFor(tcgpCovered);
+    const rows = used.flatMap((k) => tcgpCache[k]?.rows || []);
+    // exports of the same vintage share a header; take it from the entry that
+    // contributed most rows (ties broken by key) so the header is deterministic
+    const src = used.slice().sort((a, b) => (tcgpCache[b].rows?.length || 0) - (tcgpCache[a].rows?.length || 0) || a.localeCompare(b))[0];
+    tcgpBuild(rows, tcgpCache[src]?.fields || [], tcgpCovered);
+  };
+  // The picker now feeds the cache instead of building one file and forgetting
+  // it — same validation and messages, but the rows survive the run.
   const onTcgpFile = (e) => {
     const file = e.target.files?.[0]; if (!file) return;
     Papa.parse(file, { header: true, skipEmptyLines: true, complete: (res) => {
       if (tcgpFileRef.current) tcgpFileRef.current.value = "";
       const fields = res.meta?.fields || [];
       const missingCols = TCGP_REQ_COLS.filter((k) => !fields.includes(k));
-      if (missingCols.length) { setSyncMsg(`That doesn't look like a TCGplayer inventory export — missing column${missingCols.length === 1 ? "" : "s"}: ${missingCols.join(", ")}.`); return; }
-      const cands = tcgpEligible.filter((c) => tcgpSel.has(c.id));
-      if (!cands.length) { setSyncMsg("No cards selected."); return; }
-      const skipped = [];
-      const { out, exportedIds, unmatched, needPrice } = buildTcgpUpload(res.data, cands);
-      if (unmatched.length) {
-        const names = [...new Set(unmatched.map((c) => `${c.name} (${c.set})`))];
-        skipped.push(`${unmatched.length} not in that export: ${names.slice(0, 6).join(", ")}${names.length > 6 ? ", …" : ""} — export those sets from Seller Portal → Pricing with out-of-stock rows included and rerun`);
+      if (missingCols.length) { setSyncMsg(`That doesn't look like a TCGplayer set export — missing column${missingCols.length === 1 ? "" : "s"}: ${missingCols.join(", ")}.`); return; }
+      const savedAt = Date.now();
+      const found = {};
+      for (const r of res.data) {
+        if (!tcgpCacheable(r)) continue;
+        const key = String(r["Set Name"] || "").toLowerCase().trim();
+        if (!key) continue;
+        (found[key] || (found[key] = { savedAt, fields, rows: [] })).rows.push(r);
       }
-      if (needPrice.length) skipped.push(`${needPrice.length} with no price anywhere (give them a market value first): ${needPrice.slice(0, 4).join(", ")}`);
-      if (!out.length) { setSyncMsg(`No cards matched that export. ${skipped.join(" · ")}`); return; }
-      const csv = Papa.unparse({ fields, data: out.map((r) => fields.map((f) => r[f] ?? "")) }, { quotes: true });
-      const fname = `Inventory-Upload-BinderBooks-${today()}.csv`;
-      downloadFile(fname, csv);
-      setTcgpOpen(false);
-      setSyncMsg(`Saved ${fname}: ${out.length} listing${out.length === 1 ? "" : "s"} covering ${exportedIds.length} card${exportedIds.length === 1 ? "" : "s"}. Upload it in Seller Portal → Inventory → Import to Staged, then push live.${skipped.length ? " Skipped " + skipped.join(" · ") + "." : ""}`);
-      if (typeof window !== "undefined" && window.confirm(`CSV saved. Mark the ${exportedIds.length} exported card${exportedIds.length === 1 ? "" : "s"} as Listed?\n(Cancel if you're not going to upload this file.)`)) {
-        const ids = new Set(exportedIds);
-        patch((s) => ({ inventory: (s.inventory || []).map((c) => (ids.has(c.id) ? { ...c, status: "Listed" } : c)) }));
-      }
+      const keys = Object.keys(found);
+      if (!keys.length) { setSyncMsg("That export had no Near Mint rows with a TCGplayer Id — re-export it from Seller Portal → Pricing with out-of-stock rows included."); return; }
+      const { ok, all } = tcgpCacheSave({ ...tcgpCache, ...found }, keys);
+      // storage full: nothing was written, but keep the fresh rows (and any
+      // earlier session-only ones) in memory so this export still works
+      const mem = Object.fromEntries(Object.entries(tcgpCache).filter(([, v]) => v.mem).concat(keys.map((k) => [k, { ...found[k], mem: true }])));
+      setTcgpCache(ok ? all : { ...all, ...mem });
+      const msg = keys.map((k) => `${tcgpCache[k] ? "Updated" : "Cached"} ${tcgpSetLabel(k, found[k])} (${found[k].rows.length} SKU${found[k].rows.length === 1 ? "" : "s"})`).join(" · ") + ".";
+      setSyncMsg(ok ? msg : "Couldn't cache that set — storage is full. Clear some cached sets below. Using it for this export only.");
     }, error: () => setSyncMsg("Couldn't read that file.") });
+  };
+  const tcgpCacheDrop = (key) => {
+    const next = { ...tcgpCache };
+    const label = tcgpSetLabel(key, tcgpCache[key]);
+    delete next[key];
+    const { ok, all } = tcgpCacheSave(next);
+    setTcgpCache(ok ? all : next); // the removal stands either way
+    setSyncMsg(`Removed ${label}.`);
+  };
+  const tcgpCacheClear = () => {
+    try { localStorage.removeItem(TCGP_SKU_KEY); } catch {}
+    setTcgpCache({});
+    setSyncMsg("Cleared all cached set exports.");
   };
   const live = inv.filter((c) => c.status !== "Sold");
   const val = live.reduce((s, c) => s + (Number(c.value) || 0), 0);
@@ -1809,10 +1920,48 @@ function Inventory({ state, patch }) {
                 <span className="cl-row-meta">{c.set}{c.number ? ` · ${c.number}` : ""}</span>
                 <span className="cl-money">{fmt(Number(c.value) || 0)}</span>
               </label>)}
-              <button className="cl-import-btn" style={{ marginTop: 8 }} disabled={!tcgpSel.size} onClick={() => tcgpFileRef.current?.click()}>
-                <Upload size={14} /> Pick your TCGplayer export & build ({tcgpSel.size} card{tcgpSel.size === 1 ? "" : "s"})
-              </button>
+              <div className="cl-import-msg">
+                {tcgpCacheKeys.length
+                  ? tcgpCoverage
+                  : "Export a set from Seller Portal → Pricing → Export Filtered CSV, with out-of-stock rows included. BinderBooks remembers it after the first time."}
+              </div>
+              {(!tcgpCacheKeys.length || tcgpMissingSets.length > 0) && <>
+                <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => tcgpFileRef.current?.click()}>
+                  <Upload size={14} /> Add a set export
+                </button>
+                <div className="cl-import-msg" style={{ marginTop: 3 }}>Your set export from Seller Portal → Pricing</div>
+              </>}
+              {tcgpCovered.length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={tcgpExport}>
+                <Upload size={14} /> Export CSV ({tcgpCovered.length} card{tcgpCovered.length === 1 ? "" : "s"})
+              </button>}
             </>}
+          {tcgpCacheKeys.length > 0 && <div className="cl-tcgp-cache">
+            <button className="cl-link" onClick={() => setTcgpCacheOpen(!tcgpCacheOpen)}>
+              {tcgpCacheOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Cached set exports ({tcgpCacheKeys.length})
+            </button>
+            {tcgpCacheOpen && <>
+              {tcgpCacheKeys
+                .slice()
+                .sort((a, b) => tcgpSetLabel(a, tcgpCache[a]).localeCompare(tcgpSetLabel(b, tcgpCache[b])))
+                .map((k) => <div key={k} className="cl-tcgp-cache-row">
+                  <div className="cl-row-main">
+                    <div className="cl-tcgp-pick-name">{tcgpSetLabel(k, tcgpCache[k])}</div>
+                    <div className="cl-row-meta">
+                      {(tcgpCache[k].rows || []).length} SKUs · {tcgpAge(tcgpCache[k].savedAt)}
+                      {Date.now() - (tcgpCache[k].savedAt || 0) > TCGP_STALE_MS ? " · may be missing new products" : ""}
+                      {tcgpCache[k].mem ? " · this session only" : ""}
+                    </div>
+                  </div>
+                  {/* the OS picker can't be scoped to one set, so say which file to pick */}
+                  <button className="cl-link" onClick={() => { setSyncMsg(`Pick a fresh ${tcgpSetLabel(k, tcgpCache[k])} export to replace the cached one.`); tcgpFileRef.current?.click(); }}>Refresh</button>
+                  <button className="cl-link" onClick={() => tcgpCacheDrop(k)}>Remove</button>
+                </div>)}
+              <div className="cl-import-msg">
+                {Math.max(1, Math.round(tcgpCacheBytes(tcgpCache) / 1024))} KB stored
+                <button className="cl-link" style={{ marginLeft: 10 }} onClick={tcgpCacheClear}><Trash2 size={12} /> Clear all</button>
+              </div>
+            </>}
+          </div>}
         </div>}
         {syncMsg && <div className="cl-import-msg">{syncMsg}</div>}
       </div>}
@@ -2311,6 +2460,12 @@ function Fonts() {
     .cl-tcgp-pick-row .cl-row-meta{margin-top:0;flex:none;}
     .cl-tcgp-pick-row .cl-money{margin-left:auto;font-size:12.5px;}
     .cl-tcgp-pick-name{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .cl-tcgp-cache{margin-top:10px;border-top:1px solid var(--line);padding-top:8px;}
+    .cl-tcgp-cache > .cl-link{display:flex;align-items:center;gap:4px;color:#c4b5fd;padding:0;}
+    .cl-tcgp-cache-row{display:flex;align-items:center;gap:8px;padding:4px 0;}
+    .cl-tcgp-cache-row .cl-row-meta{margin-top:2px;}
+    .cl-tcgp-cache-row .cl-link{color:#c4b5fd;flex:none;}
+    .cl-import-msg .cl-link{color:#c4b5fd;display:inline-flex;align-items:center;gap:4px;vertical-align:-2px;}
     .cl-scan-ctl{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px;}
     .cl-scan-go{padding:11px 14px;font-size:13px;}
     .cl-cat{background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px;display:flex;flex-direction:column;gap:8px;}

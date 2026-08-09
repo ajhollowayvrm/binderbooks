@@ -76,13 +76,19 @@ Two standalone helpers that don't need the app running:
 ## Notes
 
 - **TCGplayer bulk listing:** the Inventory tab can build a staged-upload CSV.
-  Export a CSV from the TCGplayer Seller Portal (Live Inventory export, or a
-  Pricing-tab set export with out-of-stock rows included — those exports carry
-  the per-condition SKU in "TCGplayer Id", which is what the importer matches
-  on), click *Build TCGplayer upload CSV*, and pick that file. BinderBooks
-  fills Add to Quantity and TCG Marketplace Price for every raw Kept card it
-  can match, downloads the upload-ready file, and offers to flip the exported
-  cards to Listed. Upload it via Seller Portal → Inventory → Import to Staged.
+  The first time you list from a set, add its export from the TCGplayer Seller
+  Portal (Pricing → Export Filtered CSV with out-of-stock rows included, or a
+  Live Inventory export — those exports carry the per-condition SKU in
+  "TCGplayer Id", which is what the importer matches on). BinderBooks caches
+  the SKU rows for that set on the device, so later runs are just tick the
+  cards and *Export CSV* — no file picker. Before you export it tells you
+  which selected cards' sets aren't cached yet. It fills Add to Quantity and
+  TCG Marketplace Price for every raw Kept card it can match, downloads
+  `TCGP-Staged-Upload-<date>.csv`, and offers to flip the exported cards to
+  Listed. Upload it via Seller Portal → Inventory → Import to Staged. Cached
+  exports are listed (with age and size) under *Cached set exports* in the
+  same panel, where you can refresh or clear them; they're per-device and
+  never synced.
 - A "Reset all data" button lives at the bottom of the Overview tab.
 - The app seeds with example data on first run; edit or delete those rows freely.
 - Card search matches substrings of the **card name** and supports multi-word
