@@ -113,7 +113,8 @@ const SEARCH_STOP = new Set(["full", "art", "fullart", "alt", "illustration", "s
 const DESC_RARITY = { full: ["illustration", "ultra", "full"], art: ["illustration", "ultra", "full"], fullart: ["illustration", "ultra", "full"], alt: ["illustration"], illustration: ["illustration"], special: ["special"], sir: ["special illustration"], ir: ["illustration"], secret: ["secret", "hyper"], rainbow: ["rainbow", "hyper"], hyper: ["hyper"], holo: ["holo"], reverse: ["reverse"], foil: ["holo"], textured: ["special illustration"], promo: ["promo"] };
 const buildQuery = (q) => {
   const sets = cachedSets();
-  let tokens = q.replace(/[^\w\s-]/g, " ").trim().split(/\s+/).filter(Boolean);
+  // "143/190" printed on a card means card 143 — the denominator is set size
+  let tokens = q.replace(/(\d+)\s*\/\s*\d+/g, "$1").replace(/[^\w\s-]/g, " ").trim().split(/\s+/).filter(Boolean);
   // a set name in the query becomes a set filter ("ampharos chaos rising")
   let setFilter = null;
   if (sets?.length) {
@@ -129,10 +130,19 @@ const buildQuery = (q) => {
       }
     }
   }
+  // a collector number becomes a number filter ("dedenne 143", "TG12") — as a
+  // name term it matches nothing. Set matching ran first on purpose: "mew 151"
+  // is the set named 151, not card #151.
+  let number = null;
+  tokens = tokens.filter((t) => {
+    if (!number && /^(?:\d{1,3}|(?:tg|gg|rc|sv|swsh|sm|xy|bw|dp|hgss|cc)\d{1,3})[a-z]?$/i.test(t)) { number = t; return false; }
+    return true;
+  });
   const descriptors = [...new Set(tokens.filter((t) => SEARCH_STOP.has(t.toLowerCase())).map((t) => t.toLowerCase()))];
   const nameTokens = tokens.filter((t) => !SEARCH_STOP.has(t.toLowerCase()));
   const parts = nameTokens.map((t) => `name:*${t}*`);
   if (setFilter) parts.push(`set.name:"${setFilter}"`);
+  if (number) parts.push(`number:${number.replace(/^0+(?=\w)/, "").toUpperCase()}`);
   return { terms: parts.join(" ") || `name:*${q.trim()}*`, descriptors, first: (nameTokens[0] || "").toLowerCase() };
 };
 const qcacheRead = () => { try { return JSON.parse(localStorage.getItem(QCACHE_KEY)) || {}; } catch { return {}; } };
@@ -1187,7 +1197,10 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
     try {
       const { terms, descriptors, first } = buildQuery(q);
       const want = [...new Set(descriptors.flatMap((d) => DESC_RARITY[d] || []))];
-      const data = await ptcgFetch(`cards?q=${encodeURIComponent(terms)}&pageSize=24&select=${PTCG_SELECT}`);
+      // newest sets first — the default order fills the page with the oldest
+      // printings, so a fresh pull ("dedenne" from Perfect Order) never even
+      // reached the pool before the cut below
+      const data = await ptcgFetch(`cards?q=${encodeURIComponent(terms)}&pageSize=24&orderBy=-set.releaseDate&select=${PTCG_SELECT}`);
       const filled = await fillMissingPrices((data.data || []).map(slimCard));
       const list = filled.sort((a, b) => {
         const av = a.name.toLowerCase().startsWith(first) ? 0 : 1;
@@ -1243,7 +1256,7 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
         <div className="cl-ac-pop">
           {loading && <div className="cl-ac-loading">Searching the card database…</div>}
           {!loading && error && <button className="cl-ac-loading cl-ac-retry" onMouseDown={(e) => e.preventDefault()} onClick={() => run(value.trim())}>Card search didn’t respond — tap to retry</button>}
-          {!loading && !error && results.length === 0 && <div className="cl-ac-loading">No matches — try just the Pokémon name</div>}
+          {!loading && !error && results.length === 0 && <div className="cl-ac-loading">No matches — try just the name (set names and card numbers work too)</div>}
           {!loading && !error && results.map((c) => (
             <button key={c.id} className="cl-ac-item" onMouseDown={(e) => e.preventDefault()} onClick={() => choose(c)}>
               {c.images?.small ? <img src={c.images.small} alt="" className="cl-ac-img" /> : <div className="cl-ac-img" />}
@@ -1263,7 +1276,7 @@ function HitForm({ onAdd }) {
   const pick = (c) => setF({ name: c.name, set: c.set?.name || "", number: c.number || "", value: cardPrice(c) != null ? String(cardPrice(c)) : "" });
   return (
     <div className="cl-hitform">
-      <CardAutocomplete value={f.name} onChange={(v) => setF({ ...f, name: v })} onSelect={pick} placeholder="Add a hit — search card name" />
+      <CardAutocomplete value={f.name} onChange={(v) => setF({ ...f, name: v })} onSelect={pick} placeholder="Add a hit — try “Dedenne Perfect Order” or “Dedenne 143”" />
       <div className="cl-grid3"><input className="cl-in" placeholder="Set" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /><input className="cl-in" placeholder="No." value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} placeholder="Value" /></div>
       <button className="cl-add-hit" onClick={add}><Plus size={14} /> Add hit</button>
     </div>
@@ -1616,7 +1629,7 @@ function SaleForm({ initial, inventory, onSave, onCancel }) {
       </Field>
       {availInv.length > 0 && <Field label="Add a card you kept"><select className="cl-in" value="" onChange={(e) => { addInv(e.target.value); }}><option value="">— choose from inventory —</option>{availInv.map((c) => <option key={c.id} value={c.id}>{c.name}{c.number ? " " + c.number : ""} · basis {fmt(invBasis(c))}</option>)}</select></Field>}
       <div className="cl-typedadd">
-        <CardAutocomplete value={tname} onChange={(v) => { setTname(v); setTmeta(null); }} onSelect={pickTyped} placeholder="…or search a card name" />
+        <CardAutocomplete value={tname} onChange={(v) => { setTname(v); setTmeta(null); }} onSelect={pickTyped} placeholder="…or search — name, set, number" />
         <div className="cl-money-in cl-basisbox"><span>$</span><input className="cl-in bare" inputMode="decimal" placeholder="basis" value={tbasis} onChange={(e) => setTbasis(e.target.value.replace(/[^0-9.]/g, ""))} /></div>
         <button className="cl-add-card" onClick={addTyped}><Plus size={15} /></button>
       </div>
