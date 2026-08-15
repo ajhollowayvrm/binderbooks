@@ -2,7 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+    <!-- viewport-fit=cover lets the page paint under the notch and the home indicator, which is what
+         makes env(safe-area-inset-*) report real numbers instead of 0. The native shell pins its web
+         view edge to edge and relies on the CSS below to inset the content. maximum-scale is kept
+         for non-iOS browsers; iOS has ignored it since iOS 10, so the shell locks zoom natively. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
     <title>BinderBooks — Card P&L Ledger</title>
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

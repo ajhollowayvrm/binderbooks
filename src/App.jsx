@@ -858,7 +858,7 @@ export default function App() {
         <div className="cl-tag">card P&amp;L ledger</div>
       </header>
       <nav className="cl-tabs">
-        {TABS.map(([k, label, Icon]) => (<button key={k} className={"cl-tab" + (tab === k ? " on" : "")} onClick={() => setTab(k)}><Icon size={15} /> <span>{label}</span></button>))}
+        {TABS.map(([k, label, Icon]) => (<button key={k} className={"cl-tab" + (tab === k ? " on" : "")} onClick={() => { haptic("select"); setTab(k); }}><Icon size={15} /> <span>{label}</span></button>))}
       </nav>
       <main className="cl-main">
         {tab === "dash" && <Dashboard state={state} go={setTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} resolveChoice={resolveChoice} />}
@@ -1794,12 +1794,26 @@ const tcgpAge = (t) => {
   const m = Math.round(d / 30);
   return `saved ${m} month${m === 1 ? "" : "s"} ago`;
 };
+// `a.download` is INERT inside the iOS shell's WKWebView: the click lands, no
+// file is written, and nothing reports an error — so the export button silently
+// does nothing. The shell takes {name, text} and puts the file through the
+// system share sheet instead, which reaches Files, Mail and AirDrop.
 const downloadFile = (name, text) => {
+  if (window.__BINDERBOOKS_NATIVE__) {
+    window.webkit?.messageHandlers?.saveFile?.postMessage({ name, text });
+    return;
+  }
   const url = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
   const a = document.createElement("a");
   a.href = url; a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
+};
+
+// Taptics have no web API on iOS. The shell answers this; every other host
+// ignores it, so call sites need no guard of their own.
+const haptic = (kind = "light") => {
+  if (window.__BINDERBOOKS_NATIVE__) window.webkit?.messageHandlers?.haptics?.postMessage(kind);
 };
 
 function Inventory({ state, patch }) {
@@ -2664,7 +2678,11 @@ function Fonts() {
   return (<style>{`
     @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&display=swap');
     .cl-root{--bg:#0c0e13;--surf:#161a22;--surf2:#1d222c;--line:#2a3140;--ink:#e8ebf2;--mut:#8b93a4;--pos:#3fd68c;--neg:#ff6f6f;--out:#ffb454;--holo2:#c4b5fd;
-      background:radial-gradient(1200px 600px at 50% -10%,#19202c 0%,var(--bg) 60%);color:var(--ink);font-family:'Inter',system-ui,sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased;}
+      background:radial-gradient(1200px 600px at 50% -10%,#19202c 0%,var(--bg) 60%);color:var(--ink);font-family:'Inter',system-ui,sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased;
+      /* Safe area. Every inset is 0 without a notch, so all three of these are inert on desktop, on
+         Android and in a normal browser tab — they only do work where the app draws edge to edge
+         (the iOS shell, and Safari's add-to-home-screen mode). */
+      padding-top:env(safe-area-inset-top);}
     .cl-root *{box-sizing:border-box;}
     .holo-text{background:linear-gradient(110deg,#5ce1e6,#a78bfa,#ffd479,#7cf5a0,#5ce1e6);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:holo 6s linear infinite;}
     .holo-text.neg{background:linear-gradient(110deg,#ff9a8b,#ff6f6f,#ffb454,#ff6f6f,#ff9a8b);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;}
@@ -2676,10 +2694,12 @@ function Fonts() {
     .cl-brand{display:flex;align-items:center;gap:8px;font-family:'Space Grotesk';font-weight:700;font-size:19px;letter-spacing:-.02em;}
     .cl-spark{color:#a78bfa;}
     .cl-tag{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.14em;}
-    .cl-tabs{display:flex;gap:4px;padding:4px 12px 0;overflow-x:auto;position:sticky;top:0;z-index:5;background:linear-gradient(180deg,var(--bg),rgba(12,14,19,.6));backdrop-filter:blur(8px);}
+    /* sticky offsets are measured against the VIEWPORT, so padding on .cl-root cannot move these —
+       without their own top offset the tabs slide under the status bar as the header scrolls away */
+    .cl-tabs{display:flex;gap:4px;padding:4px 12px 0;overflow-x:auto;position:sticky;top:env(safe-area-inset-top);z-index:5;background:linear-gradient(180deg,var(--bg),rgba(12,14,19,.6));backdrop-filter:blur(8px);}
     .cl-tab{display:flex;align-items:center;gap:6px;padding:9px 13px;border:none;background:none;color:var(--mut);font-size:13px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;font-family:'Inter';}
     .cl-tab.on{color:var(--ink);border-bottom-color:#a78bfa;}
-    .cl-main{padding:16px 14px 60px;max-width:680px;margin:0 auto;}
+    .cl-main{padding:16px 14px calc(60px + env(safe-area-inset-bottom));max-width:680px;margin:0 auto;}
     .cl-center{padding:40px;text-align:center;color:var(--mut);}
     .cl-stack{display:flex;flex-direction:column;gap:14px;}
     .cl-stack.sm{gap:8px;}
