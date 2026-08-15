@@ -137,7 +137,7 @@ name, and it adds no JavaScript API, so no app code can come to depend on it.
 
 | Want to | Do |
 |---|---|
-| Change the app icon | Edit and rerun `npm run ios:icon` (1024×1024, **no alpha**) |
+| Change the app icon | Edit `scripts/gen-icons.mjs` and rerun `npm run ios:icon`. That one generator draws the web icons **and** the app icon from the same scene, so they cannot drift apart. The iOS copy renders natively at 1024 and drops its alpha channel, because iOS rejects an app icon that carries one |
 | Run on iPad too | `TARGETED_DEVICE_FAMILY: "1,2"` in `project.yml` |
 | Allow landscape | Add the landscape orientations to `UISupportedInterfaceOrientations` |
 | Add a native capability | A `WKScriptMessageHandler` case in `Shell.swift`. If you need a value back, use `WKScriptMessageHandlerWithReply` — `postMessage` then returns a real JS Promise |

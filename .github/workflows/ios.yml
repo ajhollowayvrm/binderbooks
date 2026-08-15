@@ -26,7 +26,7 @@ on:
       - 'vite.config.js'
       - 'package.json'
       - 'ios/**'
-      - 'tools/ios/**'
+      - 'scripts/gen-icons.mjs'
       - '.github/workflows/ios.yml'
 
 jobs:

@@ -9,4 +9,6 @@ backups/
 # Vite build, so neither belongs in the repo.
 ios/www
 ios/BinderBooks.xcodeproj
-ios/build
+# glob, not `ios/build`: a device build uses its own derived-data path
+# (ios/build-device), and an exact match silently let that whole tree into a commit
+ios/build*

@@ -7,7 +7,8 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "public");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const OUT = join(ROOT, "public");
 
 /* ---------- tiny PNG encoder (8-bit RGBA, no filtering) ---------- */
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
@@ -32,6 +33,27 @@ function encodePNG(size, rgba) {
   ihdr[8] = 8; ihdr[9] = 6; // 8-bit RGBA
   const raw = Buffer.alloc(size * (size * 4 + 1));
   for (let y = 0; y < size; y++) rgba.copy(raw, y * (size * 4 + 1) + 1, y * size * 4, (y + 1) * size * 4);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw, { level: 9 })), chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/* The same scene without an alpha channel — colour type 2 instead of 6.
+   iOS REJECTS an app icon that carries alpha, and `render` already writes 255
+   into every alpha byte, so dropping the channel loses nothing. */
+function encodePNGOpaque(size, rgba) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8; ihdr[9] = 2; // 8-bit truecolour, no alpha
+  const raw = Buffer.alloc(size * (size * 3 + 1));
+  for (let y = 0; y < size; y++) {
+    const row = y * (size * 3 + 1) + 1;
+    for (let x = 0; x < size; x++) {
+      const s = (y * size + x) * 4, d = row + x * 3;
+      raw[d] = rgba[s]; raw[d + 1] = rgba[s + 1]; raw[d + 2] = rgba[s + 2];
+    }
+  }
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw, { level: 9 })), chunk("IEND", Buffer.alloc(0)),
@@ -115,3 +137,12 @@ for (const [name, size] of [["icon-512.png", 512], ["icon-192.png", 192], ["appl
   writeFileSync(join(OUT, name), encodePNG(size, render(size)));
   console.log(`wrote public/${name}`);
 }
+
+// The iOS app icon comes from this same scene, so the phone and the web app
+// never drift apart. It is rendered natively at 1024 rather than upscaled from
+// icon-512.png — every coordinate above is already in 1024-space, so this is
+// the resolution the artwork was drawn for.
+const IOS_ICON = join(ROOT, "ios", "Resources", "Assets.xcassets", "AppIcon.appiconset", "icon-1024.png");
+mkdirSync(dirname(IOS_ICON), { recursive: true });
+writeFileSync(IOS_ICON, encodePNGOpaque(1024, render(1024)));
+console.log("wrote ios/Resources/Assets.xcassets/AppIcon.appiconset/icon-1024.png");

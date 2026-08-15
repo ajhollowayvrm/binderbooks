@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "build:ios": "vite build --mode ios --outDir ios/www --emptyOutDir",
-    "ios:icon": "node tools/ios/make-icon.cjs",
+    "ios:icon": "node scripts/gen-icons.mjs",
     "ios:project": "cd ios && xcodegen generate",
     "ios": "npm run build:ios && npm run ios:project"
   },
