@@ -60,17 +60,27 @@ const syncToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ""; } 
 const setSyncTokenLS = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} };
 const localStamp = () => { try { return Number(localStorage.getItem(STAMP_KEY)) || 0; } catch { return 0; } };
 const setLocalStamp = (t) => { try { localStorage.setItem(STAMP_KEY, String(t)); } catch {} };
+/* A mobile network can hold a request open with no reply and no error. A radio
+   that wakes up, a captive portal, or an app that resumes from suspend all cause
+   this. Each sync call uses a hard timeout. A stalled request then fails, and
+   the app recovers from the failure. */
+const SYNC_TIMEOUT = 12000;
 const syncFetch = async (method, body, since) => {
-  const r = await fetch(since ? `${SYNC_URL}?since=${since}` : SYNC_URL, {
-    method,
-    headers: { "x-sync-token": syncToken(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (r.status === 404) return null;
-  if (r.status === 204) return { unchanged: true }; // server: you already have the latest
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
-  return j;
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), SYNC_TIMEOUT);
+  try {
+    const r = await fetch(since ? `${SYNC_URL}?since=${since}` : SYNC_URL, {
+      method,
+      headers: { "x-sync-token": syncToken(), ...(body ? { "content-type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: ctl.signal,
+    });
+    if (r.status === 404) return null;
+    if (r.status === 204) return { unchanged: true }; // server: you already have the latest
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
+    return j;
+  } finally { clearTimeout(t); }
 };
 
 /* ------------------------------------------------------------------ */
@@ -728,12 +738,18 @@ export default function App() {
     if (!p || !syncToken()) return;
     pendingPush.current = null;
     clearTimeout(pushTimer.current);
+    // Do not abort a keepalive push. The browser sends it after the page closes.
+    // Every other push uses the timeout. A stalled push then returns to the
+    // queue, and the app sends it again.
+    const ctl = new AbortController();
+    const t = keepalive ? null : setTimeout(() => ctl.abort(), SYNC_TIMEOUT);
     try {
       const r = await fetch(SYNC_URL, {
         method: "PUT",
         headers: { "x-sync-token": syncToken(), "content-type": "application/json" },
         body: JSON.stringify({ updatedAt: p.ts, data: p.data }),
         keepalive, // lets the request outlive the page when iOS backgrounds us
+        ...(keepalive ? {} : { signal: ctl.signal }),
       });
       if (r.status === 409) { const remote = await syncFetch("GET"); if (remote) adoptRemote(remote); setSync("on"); return; }
       if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; }
@@ -741,34 +757,42 @@ export default function App() {
     } catch (e) {
       if (!pendingPush.current) pendingPush.current = p; // keep it queued — retried on next edit or focus change
       setSync(e.status === 401 ? "badtoken" : "error");
-    }
+    } finally { clearTimeout(t); }
   }, [adoptRemote]);
 
   useEffect(() => { (async () => {
     let local = null;
     try { const r = await storage.get(KEY); if (r && r.value) local = migrate(JSON.parse(r.value)); } catch {}
-    if (!syncToken()) { setState(local || seed()); return; }
+    const cur = local || seed();
+    if (!syncToken()) { setState(cur); return; }
+    // Show the ledger from this device before the app calls the cloud. The cloud
+    // check reconciles the two copies. It is not a precondition to read the
+    // local copy. A slow request must not hold the first render, because local
+    // storage already holds the data.
+    remoteApply.current = true; // loading isn't editing — don't re-stamp
+    setState(cur);
+    const bootStamp = localStamp(); // moves only if the user edits while we wait
     try {
-      const remote = await syncFetch("GET", null, localStamp());
+      const remote = await syncFetch("GET", null, bootStamp);
       const freshToken = (() => { try { return sessionStorage.getItem("cardledger:fresh") === "1"; } catch { return false; } })();
       if (remote && !remote.unchanged && freshToken && localStamp() > 0) {
         // setup link just installed a token, but this device already has its
         // own ledger — hold everything and let the user pick the winner
         pendingRemote.current = remote;
         choosing.current = true;
-        remoteApply.current = true;
-        setState(local || seed());
         setSync("choose");
         return;
       }
       try { sessionStorage.removeItem("cardledger:fresh"); } catch {}
       if (remote && !remote.unchanged && remote.updatedAt > localStamp()) adoptRemote(remote);
       else {
-        const cur = local || seed();
-        remoteApply.current = true; // loading isn't editing — don't re-stamp
-        setState(cur);
         const ts = localStamp() || Date.now();
-        if (!remote?.unchanged && (!remote || ts > remote.updatedAt)) {
+        // `cur` holds the ledger from the start time. The user can edit the
+        // ledger while this check runs. An edit is newer than `cur`, and the
+        // edit sends its own push. Do not heal the cloud from `cur` after an
+        // edit, because `cur` would replace the newer copy.
+        const edited = localStamp() !== bootStamp || pendingPush.current;
+        if (!edited && !remote?.unchanged && (!remote || ts > remote.updatedAt)) {
           // cloud is behind us (a push never made it out) — heal it, same stamp
           setLocalStamp(ts);
           await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(cur) });
@@ -776,7 +800,6 @@ export default function App() {
       }
       setSync("on");
     } catch (e) {
-      setState((s) => s || local || seed());
       setSync(e.status === 401 ? "badtoken" : "error");
     }
   })(); }, [adoptRemote]);
