@@ -4,3 +4,9 @@ dist
 .DS_Store
 .sync-token
 backups/
+
+# iOS: both are generated. `npm run ios` rebuilds them from project.yml and the
+# Vite build, so neither belongs in the repo.
+ios/www
+ios/BinderBooks.xcodeproj
+ios/build

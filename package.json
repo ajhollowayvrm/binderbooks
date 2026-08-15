@@ -7,7 +7,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:ios": "vite build --mode ios --outDir ios/www --emptyOutDir",
+    "ios:icon": "node tools/ios/make-icon.cjs",
+    "ios:project": "cd ios && xcodegen generate",
+    "ios": "npm run build:ios && npm run ios:project"
   },
   "dependencies": {
     "lucide-react": "^0.383.0",

@@ -1,0 +1,79 @@
+# XcodeGen spec — the Xcode project is GENERATED from this file, never committed.
+#
+# That is the whole reason this approach was picked over Capacitor: there is no .xcodeproj to create
+# or open, so the build needs no Mac in the loop. CI runs `xcodegen generate` on a macOS runner and
+# the project appears. Locally it's `brew install xcodegen && xcodegen generate`.
+#
+# Everything the app is: one Swift file, one asset catalog, and the Vite build in ios/www.
+#
+#   npm run build:ios     → writes ios/www (DO THIS FIRST — the target needs it to exist)
+#   npm run ios:project   → regenerate ios/BinderBooks.xcodeproj
+#   .github/workflows/ios.yml → does both, then archives an unsigned .ipa
+
+name: BinderBooks
+
+options:
+  bundleIdPrefix: com.ajholloway
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # iPhone only. The ledger is a 680px mobile-first column; add "2" here for iPad if you want it.
+    TARGETED_DEVICE_FAMILY: "1"
+    # Deliberately NOT setting code-signing here. CI archives with signing switched off on the
+    # command line (SideStore re-signs the .ipa with your Apple ID anyway), and leaving these alone
+    # means opening the project on a Mac still behaves like a normal Xcode project.
+
+targets:
+  BinderBooks:
+    type: application
+    platform: iOS
+
+    sources:
+      - path: Sources
+      - path: Resources
+      # The Vite build, carried in as a FOLDER reference so the whole tree lands in the bundle with
+      # its structure intact — Shell.swift serves it from <bundle>/www. `type: folder` and not
+      # `group`: a group would flatten assets/ into the bundle root and copy each file as its own
+      # build input, which breaks the hashed filenames index.html asks for.
+      - path: www
+        type: folder
+        buildPhase: resources
+
+    settings:
+      base:
+        # Apple requires globally unique bundle IDs even under free provisioning. It also identifies
+        # the app's CONTAINER: changing it after the first install strands the ledger in the old one.
+        # Set it once, before installing.
+        PRODUCT_BUNDLE_IDENTIFIER: com.ajholloway.binderbooks
+        PRODUCT_NAME: BinderBooks
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+    info:
+      path: BinderBooks-Info.plist
+      properties:
+        CFBundleDisplayName: BinderBooks
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # A storyboard-free launch screen that is just the app's own background colour.
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        # Dark-only, so the keyboard, share sheet and system alerts match the ledger palette.
+        UIUserInterfaceStyle: Dark
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UIViewControllerBasedStatusBarAppearance: true
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # The Scan tab. WebKit presents the camera and the picker itself for
+        # <input type="file" accept="image/*" capture="environment">, but iOS kills the app on the
+        # spot if the matching usage string is missing — so these two lines ARE the camera support.
+        NSCameraUsageDescription: BinderBooks uses the camera to photograph a card and identify it.
+        NSPhotoLibraryUsageDescription: BinderBooks reads a photo you pick so it can identify the card in it.
+        # Nothing here uses non-exempt encryption; declaring it keeps upload tooling quiet.
+        ITSAppUsesNonExemptEncryption: false
