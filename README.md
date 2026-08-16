@@ -43,8 +43,8 @@ wanted again.
 
 ## Deploy
 
-Nothing builds or deploys automatically. Build the app in Xcode and install it
-on the phone yourself — see [iPhone app](#iphone-app).
+Nothing builds or deploys automatically. `npm run ios:device` builds, signs and
+installs onto a connected iPhone in one step — see [iPhone app](#iphone-app).
 
 GitHub Pages hosted this app until 2026-08-15. The site is switched off, and the
 deploy workflow is deleted. A GitHub Actions workflow built an unsigned `.ipa`
@@ -60,11 +60,17 @@ pinch zoom, the storage origin, and the camera usage strings the Scan tab needs.
 
 ```bash
 brew install xcodegen
-npm run ios                    # build the web bundle + generate the project
-open ios/BinderBooks.xcodeproj # then ⌘R with an iPhone plugged in
+npm run ios:device             # build + sign + install onto the phone, then launch it
 ```
 
-Full detail, and the reason for each piece, is in [`ios/README.md`](ios/README.md).
+That is the whole update loop: run it and the new build is open on the device
+about a minute later. It installs over the existing app, so the bundle id, the
+container and the ledger inside it are untouched. It builds Release, so the
+debug automation bridge is not in what lands on the phone.
+
+To work in Xcode instead — `npm run ios && open ios/BinderBooks.xcodeproj`, then
+⌘R. Full detail, and the reason for each piece, is in
+[`ios/README.md`](ios/README.md).
 
 ## Optional: pokemontcg.io API key (recommended once hosted)
 

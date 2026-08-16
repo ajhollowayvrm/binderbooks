@@ -398,10 +398,10 @@ extension ShellViewController: WKScriptMessageHandler {
 /// reads it back, and screenshots the result.
 ///
 /// Three properties keep it out of a Release build:
-///  1. `#if DEBUG` fences the whole file section, so no byte of this reaches a Release build.
-///     Deleting the fence is the only way to compile it into one. Nothing verifies this on a
-///     schedule any more — CI archived Release on every push until 2026-08-16, and CI is gone. ⌘R
-///     builds Debug, so pick the Release scheme for a build you intend to keep on a phone.
+///  1. `#if DEBUG` fences the whole file section, so no byte of this reaches a Release build, and
+///     deleting the fence is the only way to compile it into one. `npm run ios:device` — the normal
+///     way onto a phone — builds Release. Only ⌘R builds Debug, so a build you keep should come
+///     from the script or from the Release scheme.
 ///  2. It binds 127.0.0.1 by name. It is unreachable from another machine, and macOS raises no
 ///     "accept incoming connections" prompt.
 ///  3. It adds no JavaScript API and no user script. The page cannot detect it, so no app code can

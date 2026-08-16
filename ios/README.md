@@ -66,23 +66,44 @@ Two consequences to remember:
 
 ## Getting it on your phone
 
-Xcode on a Mac is the only path. Nothing builds this app in CI.
+A Mac is the only path. Nothing builds this app in CI, and there is no over-the-air update.
 
 ```sh
 brew install xcodegen
+npm run ios:device
+```
+
+That builds the web bundle, regenerates the project, signs a **Release** build and installs it onto
+the first available iPhone, then launches it. Roughly a minute end to end. `scripts/ios-device.mjs`
+carries the two facts that make it work and are not guessable — how to find the team id, and what
+the free-profile app limit really is.
+
+The phone does not need a cable if it is paired for network development: `devicectl` finds it as
+`<name>.coredevice.local` over Wi-Fi.
+
+**It installs over the app that is already there.** Same bundle id means the same container, so the
+ledger survives an update. Only *deleting* the app destroys it.
+
+**Release, so no DevBridge.** The automation listener below is `#if DEBUG`, and this path builds
+Release, so it is not in what lands on the phone. That matters because the alternative below is not.
+
+### In Xcode instead
+
+For breakpoints, or to watch the console:
+
+```sh
 npm run ios                    # build:ios + xcodegen generate
 open ios/BinderBooks.xcodeproj
 ```
 
-Plug the iPhone in, pick it as the run destination, ⌘R. Xcode signs with your Apple ID and installs
-directly — no CI, no artifact, no sideloading tool. Signing settings are deliberately **not** in
+Plug the iPhone in, pick it as the run destination, ⌘R. Signing settings are deliberately **not** in
 `project.yml`, so the project behaves like any normal one: Signing & Capabilities → *Automatically
 manage signing* → pick your Personal Team.
 
-**Debug or Release?** ⌘R installs a **Debug** build, which contains the `DevBridge` automation
-listener. It binds `127.0.0.1`, so nothing off the phone can reach it. For a build you keep, switch
-the scheme to Release — Product → Scheme → Edit Scheme → Run → Build Configuration → *Release* —
-which carries no byte of the bridge. Nothing checks this for you, so make it a habit.
+**⌘R installs a Debug build**, which contains the `DevBridge` automation listener. It binds
+`127.0.0.1`, so nothing off the phone can reach it, but it has no business on a phone you keep.
+Either use `npm run ios:device`, or switch the scheme to Release — Product → Scheme → Edit Scheme →
+Run → Build Configuration → *Release*.
 
 **A free Apple ID expires the signature after 7 days.** The app then refuses to launch until you ⌘R
 again. You may also hold 3 sideloaded apps at once. A paid account ($99/yr) removes both limits.
@@ -117,9 +138,8 @@ xcrun simctl io "iPhone 17 Pro" screenshot shot.png
 ```
 
 Three things keep it out of a Release build: `#if DEBUG`, it binds `127.0.0.1` by name, and it adds
-no JavaScript API, so no app code can come to depend on it. Nothing enforces this any more — CI used
-to archive Release on every push, and CI is gone. ⌘R installs Debug, so a phone you install to the
-fast way carries the bridge. Switch the scheme to Release for a build you intend to keep.
+no JavaScript API, so no app code can come to depend on it. `npm run ios:device` builds Release, so
+the normal way onto the phone excludes it. Only ⌘R installs a Debug build.
 
 ---
 

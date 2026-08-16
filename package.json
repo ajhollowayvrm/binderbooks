@@ -11,7 +11,8 @@
     "build:ios": "vite build --mode ios --outDir ios/www --emptyOutDir",
     "ios:icon": "node scripts/gen-icons.mjs",
     "ios:project": "cd ios && xcodegen generate",
-    "ios": "npm run build:ios && npm run ios:project"
+    "ios": "npm run build:ios && npm run ios:project",
+    "ios:device": "node scripts/ios-device.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.383.0",
