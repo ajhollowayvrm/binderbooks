@@ -28,7 +28,8 @@
 //  handled by WebKit itself. It needs the two usage strings in the Info.plist and nothing more.
 //
 //  Everything else — layout, state, the whole ledger — stays in the web bundle, unchanged and still
-//  runnable from GitHub Pages with no shell at all.
+//  runnable in a plain browser with no shell at all. Every bridge below is feature-detected on the
+//  web side, so `npm run dev` is a real way to work on this app.
 
 import UIKit
 import WebKit

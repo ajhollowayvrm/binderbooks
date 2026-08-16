@@ -8,11 +8,11 @@
          for non-iOS browsers; iOS has ignored it since iOS 10, so the shell locks zoom natively. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
     <title>BinderBooks — Card P&L Ledger</title>
+    <!-- The favicon is for a browser tab during `npm run dev`. There is deliberately no web app
+         manifest and no apple-touch-icon: both exist to install a hosted site to the home screen,
+         and this app ships as a real iOS app whose icon comes from the asset catalogue. -->
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#0c0e13" />
-    <meta name="apple-mobile-web-app-title" content="BinderBooks" />
     <style>html,body,#root{height:100%;margin:0;background:#0c0e13;}</style>
   </head>
   <body>

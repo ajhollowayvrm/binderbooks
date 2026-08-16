@@ -18,7 +18,8 @@ in as a folder reference. Both `ios/www` and the generated `.xcodeproj` are giti
 
 ## Why a shell at all
 
-The app is already a PWA. Five things stay broken until you wrap it, and two of them are silent:
+The ledger is a plain web app and runs in any browser. Five things stay broken until you wrap it in
+a native shell, and two of them are silent:
 
 - **The CSV export does nothing.** `a.download` is inert in a WKWebView. The TCGplayer staged-upload
   file is the whole point of the Inventory export, and in a plain web view the button reports no
@@ -120,9 +121,30 @@ short of deleting the app. Cloud sync makes this a non-event.
 
 ## Updating the app
 
-The bundle inside the app **is** the app. There is no service worker, so a change reaches the phone
-when you rebuild and reinstall. The app is the only build that ships, because GitHub Pages is
-switched off. No auto-update path exists any more.
+`npm run ios:device` is the whole update loop. The bundle inside the app **is** the app — there is no
+service worker and nothing is fetched at runtime — so a change reaches the phone when you build and
+install, and not before.
+
+### Why there is no over-the-air update
+
+The shell could fetch the web bundle from S3 at launch and update itself with no Mac in the loop.
+That was designed and then rejected on 2026-08-16. Recorded here so it is not re-proposed:
+
+- **It needs far more than a download.** A manifest, a SHA-256 per file, a staging directory and an
+  atomic swap — and then a probation-and-rollback path, because a bundle that fails to boot would
+  otherwise leave the app dead on the phone until a reinstall. That is the opposite of the goal.
+- **It downloads and executes code.** Whoever controls the bucket prefix controls the app. Per-file
+  hashes stop corruption, not a hostile publisher, since the same access replaces the manifest too.
+  Closing that properly means signing the manifest and pinning a key in the app.
+- **It cannot update this file.** `Shell.swift`, the Info.plist and the entitlements still need a
+  real install, so the Mac never actually leaves the loop.
+- **The simple version of it is worse.** Pointing the web view at an `https://` URL needs none of the
+  above, but it changes the page's origin — which orphans the ledger in `localStorage` on every
+  device that already has the app. See the warning at the top of this file.
+
+`npm run ios:device` costs one command and about a minute, updates native and web together, and has
+none of those problems. Revisit only if the app ever needs to update on a phone that is nowhere near
+this Mac.
 
 ---
 
@@ -147,7 +169,7 @@ the normal way onto the phone excludes it. Only ⌘R installs a Debug build.
 
 | Want to | Do |
 |---|---|
-| Change the app icon | Edit `scripts/gen-icons.mjs` and rerun `npm run ios:icon`. That one generator draws the web icons **and** the app icon from the same scene, so they cannot drift apart. The iOS copy renders natively at 1024 and drops its alpha channel, because iOS rejects an app icon that carries one |
+| Change the app icon | Edit `scripts/gen-icons.mjs` and rerun `npm run ios:icon`. That one generator draws the browser favicon **and** the app icon from the same scene, so they cannot drift apart. The iOS copy renders natively at 1024 and drops its alpha channel, because iOS rejects an app icon that carries one |
 | Run on iPad too | `TARGETED_DEVICE_FAMILY: "1,2"` in `project.yml` |
 | Allow landscape | Add the landscape orientations to `UISupportedInterfaceOrientations` |
 | Add a native capability | A `WKScriptMessageHandler` case in `Shell.swift`. If you need a value back, use `WKScriptMessageHandlerWithReply` — `postMessage` then returns a real JS Promise |
@@ -156,9 +178,8 @@ the normal way onto the phone excludes it. Only ⌘R installs a Debug build.
 
 ## What the web layer knows about the shell
 
-`Shell.swift` injects `window.__BINDERBOOKS_NATIVE__ = true` at document start. Three places read it:
+`Shell.swift` injects `window.__BINDERBOOKS_NATIVE__ = true` at document start. Two places read it:
 
-- `src/main.jsx` skips `registerSW` — a custom scheme has no `navigator.serviceWorker` at all.
 - `downloadFile` in `src/App.jsx` posts to the `saveFile` bridge instead of clicking an `<a download>`.
 - `haptic` in `src/App.jsx` posts to the `haptics` bridge; every other host ignores the call.
 

@@ -1,7 +1,11 @@
 // Procedurally renders the BinderBooks app icon (a tilted holo-gradient
-// trading card with a sparkle and ledger bars) and writes the PNGs that
-// index.html / manifest.webmanifest reference. Rerun after design tweaks:
+// trading card with a sparkle and ledger bars) and writes the two PNGs that
+// survive: the browser favicon and the iOS app icon. Rerun after design tweaks:
 //   node scripts/gen-icons.mjs
+//
+// It used to emit icon-192, icon-512 and apple-touch-icon as well. Those existed
+// for the web app manifest, which went when GitHub Pages did — nothing installs
+// this to a home screen any more. Add them back here if a web host ever returns.
 import { deflateSync } from "node:zlib";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -133,15 +137,16 @@ function render(size) {
 }
 
 mkdirSync(OUT, { recursive: true });
-for (const [name, size] of [["icon-512.png", 512], ["icon-192.png", 192], ["apple-touch-icon.png", 180], ["favicon-32.png", 32]]) {
+// A list of one, kept as a loop because it was a list of four and may be again.
+for (const [name, size] of [["favicon-32.png", 32]]) {
   writeFileSync(join(OUT, name), encodePNG(size, render(size)));
   console.log(`wrote public/${name}`);
 }
 
-// The iOS app icon comes from this same scene, so the phone and the web app
-// never drift apart. It is rendered natively at 1024 rather than upscaled from
-// icon-512.png — every coordinate above is already in 1024-space, so this is
-// the resolution the artwork was drawn for.
+// The iOS app icon comes from this same scene, so the phone and the browser tab
+// never drift apart. It renders natively at 1024 rather than upscaling a smaller
+// copy — every coordinate above is already in 1024-space, so this is the
+// resolution the artwork was drawn for.
 const IOS_ICON = join(ROOT, "ios", "Resources", "Assets.xcassets", "AppIcon.appiconset", "icon-1024.png");
 mkdirSync(dirname(IOS_ICON), { recursive: true });
 writeFileSync(IOS_ICON, encodePNGOpaque(1024, render(1024)));

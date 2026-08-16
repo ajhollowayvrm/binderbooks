@@ -30,26 +30,20 @@ npm run dev
 
 Then open the printed URL (usually http://localhost:5173).
 
-## Build & host
+## Build & ship
+
+`npm run ios:device` builds, signs and installs onto a connected iPhone. That is
+the only thing that ships — see [iPhone app](#iphone-app).
 
 ```bash
-npm run build      # outputs static files to ./dist
-npm run preview    # preview the production build locally
+npm run build      # a plain static site in ./dist, if a web host is ever wanted
+npm run preview    # preview that build locally
 ```
 
-`dist/` is a plain static site and needs no backend. Nothing hosts it now. The
-`npm run build` script stays for a local preview, and for the day a web host is
-wanted again.
-
-## Deploy
-
-Nothing builds or deploys automatically. `npm run ios:device` builds, signs and
-installs onto a connected iPhone in one step — see [iPhone app](#iphone-app).
-
-GitHub Pages hosted this app until 2026-08-15. The site is switched off, and the
-deploy workflow is deleted. A GitHub Actions workflow built an unsigned `.ipa`
-for sideloading from Windows until 2026-08-16. That workflow is deleted too,
-because Xcode on a Mac is the only install path in use.
+Nothing hosts `dist/`, and nothing builds automatically. GitHub Pages hosted this
+app until 2026-08-15, and a GitHub Actions workflow built an unsigned `.ipa` for
+sideloading from Windows until 2026-08-16. Both are switched off and deleted,
+because a Mac is the only install path in use.
 
 ## iPhone app
 
@@ -72,7 +66,7 @@ To work in Xcode instead — `npm run ios && open ios/BinderBooks.xcodeproj`, th
 ⌘R. Full detail, and the reason for each piece, is in
 [`ios/README.md`](ios/README.md).
 
-## Optional: pokemontcg.io API key (recommended once hosted)
+## Optional: pokemontcg.io API key
 
 The card search uses the free pokemontcg.io API. Without a key it's rate-limited
 and occasionally drops requests. To lift the limits:
@@ -80,7 +74,11 @@ and occasionally drops requests. To lift the limits:
 1. Get a free key at https://dev.pokemontcg.io/
 2. `cp .env.example .env`
 3. Paste your key into `.env` as `VITE_POKEMONTCG_API_KEY=...`
-4. Restart the dev server (and set the same env var in your host's dashboard for production)
+4. Restart the dev server, and re-run `npm run ios:device` for the phone
+
+Vite bakes the key into the bundle at build time, so it is only as private as the
+build. That is fine here — the build goes to one phone. It is also why the keys
+that cost money (pokemonpricetracker.com, Anthropic) live on the Lambda instead.
 
 The app works without a key — it just retries on failure and shows a tappable
 retry if the API doesn't respond.
