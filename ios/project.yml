@@ -1,14 +1,14 @@
 # XcodeGen spec — the Xcode project is GENERATED from this file, never committed.
 #
-# That is the whole reason this approach was picked over Capacitor: there is no .xcodeproj to create
-# or open, so the build needs no Mac in the loop. CI runs `xcodegen generate` on a macOS runner and
-# the project appears. Locally it's `brew install xcodegen && xcodegen generate`.
+# That is the whole reason this approach was picked over Capacitor: there is no .xcodeproj to keep
+# in the repo, and no merge conflicts in one. Run `brew install xcodegen && xcodegen generate` and
+# the project appears.
 #
 # Everything the app is: one Swift file, one asset catalog, and the Vite build in ios/www.
 #
 #   npm run build:ios     → writes ios/www (DO THIS FIRST — the target needs it to exist)
 #   npm run ios:project   → regenerate ios/BinderBooks.xcodeproj
-#   .github/workflows/ios.yml → does both, then archives an unsigned .ipa
+#   npm run ios           → does both
 
 name: BinderBooks
 
@@ -25,9 +25,9 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     # iPhone only. The ledger is a 680px mobile-first column; add "2" here for iPad if you want it.
     TARGETED_DEVICE_FAMILY: "1"
-    # Deliberately NOT setting code-signing here. CI archives with signing switched off on the
-    # command line (SideStore re-signs the .ipa with your Apple ID anyway), and leaving these alone
-    # means opening the project on a Mac still behaves like a normal Xcode project.
+    # Deliberately NOT setting code-signing here. Leaving these alone means the generated project
+    # behaves like a normal Xcode project: Signing & Capabilities → Automatically manage signing →
+    # your Personal Team, and ⌘R installs to a plugged-in phone.
 
 targets:
   BinderBooks:

@@ -8,8 +8,8 @@ import react from "@vitejs/plugin-react";
 //
 // The app shipped a service worker while GitHub Pages hosted it. Pages is off,
 // the iPhone app is the only build that ships, and a custom scheme cannot
-// register a worker. So the worker is deleted. The bundle inside the `.ipa` is
-// the cache, and a new version arrives with a new build.
+// register a worker. So the worker is deleted. The bundle inside the app is the
+// cache, and a new version arrives with a new build.
 export default defineConfig(({ mode }) => ({
   base: mode === "ios" ? "./" : "/binderbooks/",
   plugins: [react()],

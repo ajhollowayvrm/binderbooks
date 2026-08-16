@@ -397,9 +397,11 @@ extension ShellViewController: WKScriptMessageHandler {
 /// app FEELS has to be checked by hand on a device. With it, a tool puts the app into any state,
 /// reads it back, and screenshots the result.
 ///
-/// Three properties keep it out of the product:
-///  1. `#if DEBUG` fences the whole file section. CI archives Release, so no byte of this reaches
-///     an `.ipa`. Deleting the fence is the only way to ship it.
+/// Three properties keep it out of a Release build:
+///  1. `#if DEBUG` fences the whole file section, so no byte of this reaches a Release build.
+///     Deleting the fence is the only way to compile it into one. Nothing verifies this on a
+///     schedule any more — CI archived Release on every push until 2026-08-16, and CI is gone. ⌘R
+///     builds Debug, so pick the Release scheme for a build you intend to keep on a phone.
 ///  2. It binds 127.0.0.1 by name. It is unreachable from another machine, and macOS raises no
 ///     "accept incoming connections" prompt.
 ///  3. It adds no JavaScript API and no user script. The page cannot detect it, so no app code can

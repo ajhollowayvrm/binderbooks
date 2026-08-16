@@ -43,13 +43,13 @@ wanted again.
 
 ## Deploy
 
-Every push to `main` builds the iPhone app. The GitHub Actions workflow in
-`.github/workflows/ios.yml` runs on a macOS runner and uploads an unsigned
-`.ipa` as a build artifact. Install it with SideStore. See
-[`ios/README.md`](ios/README.md).
+Nothing builds or deploys automatically. Build the app in Xcode and install it
+on the phone yourself — see [iPhone app](#iphone-app).
 
 GitHub Pages hosted this app until 2026-08-15. The site is switched off, and the
-deploy workflow is deleted.
+deploy workflow is deleted. A GitHub Actions workflow built an unsigned `.ipa`
+for sideloading from Windows until 2026-08-16. That workflow is deleted too,
+because Xcode on a Mac is the only install path in use.
 
 ## iPhone app
 
@@ -64,9 +64,7 @@ npm run ios                    # build the web bundle + generate the project
 open ios/BinderBooks.xcodeproj # then ⌘R with an iPhone plugged in
 ```
 
-Pushing to `main` also builds an unsigned `.ipa` in GitHub Actions, for installing from Windows
-with SideStore or Sideloadly. Full detail, and the reason for each piece, is in
-[`ios/README.md`](ios/README.md).
+Full detail, and the reason for each piece, is in [`ios/README.md`](ios/README.md).
 
 ## Optional: pokemontcg.io API key (recommended once hosted)
 

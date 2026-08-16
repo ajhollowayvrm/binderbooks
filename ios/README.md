@@ -66,7 +66,7 @@ Two consequences to remember:
 
 ## Getting it on your phone
 
-### On a Mac (the fast path)
+Xcode on a Mac is the only path. Nothing builds this app in CI.
 
 ```sh
 brew install xcodegen
@@ -82,10 +82,11 @@ manage signing* → pick your Personal Team.
 **Debug or Release?** ⌘R installs a **Debug** build, which contains the `DevBridge` automation
 listener. It binds `127.0.0.1`, so nothing off the phone can reach it. For a build you keep, switch
 the scheme to Release — Product → Scheme → Edit Scheme → Run → Build Configuration → *Release* —
-which is what CI archives and carries no byte of the bridge.
+which carries no byte of the bridge. Nothing checks this for you, so make it a habit.
 
 **A free Apple ID expires the signature after 7 days.** The app then refuses to launch until you ⌘R
-again. Your ledger survives that: it belongs to the container, and the container survives anything
+again. You may also hold 3 sideloaded apps at once. A paid account ($99/yr) removes both limits.
+Your ledger survives an expiry: it belongs to the container, and the container survives anything
 short of deleting the app. Cloud sync makes this a non-event.
 
 **Turn on Web Inspector.** `Shell.swift` sets `isInspectable = true`, so:
@@ -94,25 +95,12 @@ short of deleting the app. Cloud sync makes this a non-event.
 2. Mac Safari → Settings → Advanced → **Show features for web developers**
 3. With the app running: Safari → Develop → *[your iPhone]* → **BinderBooks**
 
-### From Windows (no Mac)
-
-Compiling needs macOS + Xcode. **Signing** needs your Apple ID. Only the first belongs in CI.
-
-1. **Push, or run the workflow by hand** — Actions → *iOS ipa* → Run workflow.
-2. **Download the artifact** — the run page → Artifacts → `binderbooks-ipa` → unzip.
-3. **Sign and install it** with [Sideloadly](https://sideloadly.io) or
-   [SideStore](https://sidestore.io) / AltStore. They re-sign with your Apple ID on the way in, which
-   is why there are no certificates or secrets in the workflow.
-
-On a free Apple ID the install expires after 7 days and you may hold 3 sideloaded apps at once. A
-paid account ($99/yr) removes both limits.
-
 ---
 
 ## Updating the app
 
-The bundle inside the `.ipa` **is** the app. There is no service worker, so a change reaches the
-phone when you rebuild and reinstall. The app is the only build that ships, because GitHub Pages is
+The bundle inside the app **is** the app. There is no service worker, so a change reaches the phone
+when you rebuild and reinstall. The app is the only build that ships, because GitHub Pages is
 switched off. No auto-update path exists any more.
 
 ---
@@ -128,8 +116,10 @@ curl -s -X POST --data 'return location.origin' localhost:8788/eval
 xcrun simctl io "iPhone 17 Pro" screenshot shot.png
 ```
 
-Three things keep it out of the product: `#if DEBUG` (CI archives Release), it binds `127.0.0.1` by
-name, and it adds no JavaScript API, so no app code can come to depend on it.
+Three things keep it out of a Release build: `#if DEBUG`, it binds `127.0.0.1` by name, and it adds
+no JavaScript API, so no app code can come to depend on it. Nothing enforces this any more — CI used
+to archive Release on every push, and CI is gone. ⌘R installs Debug, so a phone you install to the
+fast way carries the bridge. Switch the scheme to Release for a build you intend to keep.
 
 ---
 
