@@ -18,7 +18,8 @@ locally (never committed) and as the `SYNC_TOKEN` env var on the
 `binderbooks-sync` Lambda (us-west-2). Conflicts resolve last-write-wins; the
 app re-pulls whenever it regains focus.
 
-**Live site:** https://ajhollowayvrm.github.io/binderbooks/
+**How it ships:** the iPhone app is the only build that is deployed. There is no
+hosted web version. See [iPhone app](#iphone-app).
 
 ## Run locally
 
@@ -36,15 +37,19 @@ npm run build      # outputs static files to ./dist
 npm run preview    # preview the production build locally
 ```
 
-`dist/` is a plain static site — drop it on any static host (Vercel, Netlify,
-Cloudflare Pages, GitHub Pages, S3, etc.). No backend required.
+`dist/` is a plain static site and needs no backend. Nothing hosts it now. The
+`npm run build` script stays for a local preview, and for the day a web host is
+wanted again.
 
-## Deploy to GitHub Pages
+## Deploy
 
-Every push to `main` triggers the GitHub Actions workflow in
-`.github/workflows/deploy.yml`, which builds the app and deploys it to
-https://ajhollowayvrm.github.io/binderbooks/ — live within a minute or two.
-No manual deploy step needed.
+Every push to `main` builds the iPhone app. The GitHub Actions workflow in
+`.github/workflows/ios.yml` runs on a macOS runner and uploads an unsigned
+`.ipa` as a build artifact. Install it with SideStore. See
+[`ios/README.md`](ios/README.md).
+
+GitHub Pages hosted this app until 2026-08-15. The site is switched off, and the
+deploy workflow is deleted.
 
 ## iPhone app
 
@@ -112,10 +117,10 @@ Two standalone helpers that don't need the app running:
   (Munbyn fanfold). Paste a mailing address; it drops the country line and scales
   the type to the largest size that fits along the 6-inch edge, anchored to the
   bottom, with a small return address in the top-left corner — so both blocks cut
-  out cleanly. Live at
-  <https://ajhollowayvrm.github.io/binderbooks/label.html>. The return address is
-  typed once and kept in that browser's localStorage, so it never lands in the
-  repo.
+  out cleanly. The app ships this page: open **Sales → "Print a 4×6 shipping
+  label"**. On a computer, open `public/label.html` from a local checkout. The
+  return address is typed once and kept in that browser's localStorage, so it
+  never lands in the repo.
 
 ## Notes
 

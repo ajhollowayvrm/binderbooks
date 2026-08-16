@@ -111,9 +111,9 @@ paid account ($99/yr) removes both limits.
 
 ## Updating the app
 
-The bundle inside the `.ipa` **is** the app. There is no service worker, so the 30-minute auto-update
-the web version uses does not apply here — a change reaches the phone when you rebuild and reinstall.
-The web app at GitHub Pages keeps auto-updating exactly as before.
+The bundle inside the `.ipa` **is** the app. There is no service worker, so a change reaches the
+phone when you rebuild and reinstall. The app is the only build that ships, because GitHub Pages is
+switched off. No auto-update path exists any more.
 
 ---
 
@@ -152,4 +152,4 @@ name, and it adds no JavaScript API, so no app code can come to depend on it.
 - `downloadFile` in `src/App.jsx` posts to the `saveFile` bridge instead of clicking an `<a download>`.
 - `haptic` in `src/App.jsx` posts to the `haptics` bridge; every other host ignores the call.
 
-Everything is guarded, so the same source still builds and runs for GitHub Pages with no shell.
+Everything is guarded, so the same source still builds and runs in a normal browser with no shell.
