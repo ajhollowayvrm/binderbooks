@@ -2818,7 +2818,14 @@ function Fonts() {
     .cl-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
     .cl-setline{display:flex;gap:8px;align-items:center;}
     .cl-setline>:first-child{flex:1;min-width:0;}
-    .cl-setline-packs{width:78px;flex:none;}
+    /* The packs box carries both cl-in and cl-setline-packs. Each is a single
+       class, and .cl-in sets width:100% further down this sheet, so the later
+       rule wins and a plain width here loses. The box then fills the row, the
+       set menu collapses to its arrows, and the page scrolls sideways.
+       flex-basis sets a flex item's main size ahead of width, so 0 0 78px holds
+       whatever the cascade does. The two-class selector fixes the width too,
+       for the day this stops being a flex row. */
+    .cl-setline .cl-setline-packs{flex:0 0 78px;width:78px;}
     .cl-stat{background:var(--surf);border:1px solid var(--line);border-radius:14px;padding:14px;}
     .cl-stat-label{font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em;}
     .cl-stat-num{font-family:'Space Grotesk';font-weight:600;font-size:24px;margin-top:4px;font-variant-numeric:tabular-nums;letter-spacing:-.02em;}

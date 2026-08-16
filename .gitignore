@@ -12,3 +12,6 @@ ios/BinderBooks.xcodeproj
 # glob, not `ios/build`: a device build uses its own derived-data path
 # (ios/build-device), and an exact match silently let that whole tree into a commit
 ios/build*
+
+# Playwright MCP screenshot output — a tool artifact, not project code
+.playwright-mcp
