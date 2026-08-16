@@ -430,13 +430,16 @@ function useSetCodes() {
   return codes; // null = loading, {} = unavailable, {...} = loaded
 }
 
-const SOURCES = ["Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "TCGplayer", "eBay", "PSA", "Other"];
+const SOURCES = ["Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "TCGplayer", "eBay", "PSA", "CGC", "BGS", "Other"];
 const PRODUCTS = ["Booster Pack", "Booster Bundle", "Booster Box", "Elite Trainer Box", "Collection Box", "Tin", "Blister", "Single Card", "Supplies", "Other"];
 const INV_SOURCES = ["Rip pull", "Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "eBay", "Other"];
 const CHANNELS = ["TCGplayer", "eBay", "LGS consignment", "In-person", "Other"];
 const BUY_CATS = ["Sealed", "Single", "Lot", "Grading", "Supplies"];
 const GRADES = ["Raw", "PSA 10", "PSA 9", "PSA 8", "CGC 10", "CGC 9.5", "BGS 9.5", "Other"];
 const INV_STATUS = ["Kept", "At grading", "Listed", "Sold"];
+// Graders you can send a submission to. Each one is also a buy `source`, because
+// the send-to-grading flow writes the fee and the postage as one Grading buy.
+const GRADERS = ["PSA", "CGC", "BGS"];
 const stCls = (s) => ({ "Kept": "kept", "At grading": "grading", "Listed": "listed", "Sold": "sold" }[s] || "kept");
 
 const TCGP_ORDERS = [
@@ -512,7 +515,7 @@ function migrate(s) {
   if (!s.inventory) s.inventory = [];
   // defaults first so existing values win — this runs on every local and
   // remote load, which is what back-fills `variant` onto pre-scanner cards
-  s.inventory = s.inventory.map((c) => ({ status: "Kept", gradingCost: 0, variant: "", ...c }));
+  s.inventory = s.inventory.map((c) => ({ status: "Kept", gradingCost: 0, gradingShip: 0, variant: "", ...c }));
   if (!s.version || s.version < 2) {
     const idx = s.sales.findIndex((x) => x.item === "TCGplayer orders (31)");
     if (idx >= 0) s.sales = [...tcgpSales(), ...s.sales.filter((_, i) => i !== idx)];
@@ -552,7 +555,7 @@ const ripPL = (r, buys) => ripValue(r) - ripCostOf(r, buys);
 function addHitToState(s, ripId, hit) {
   const h = { id: uid(), ...hit };
   const rip = s.rips.find((r) => r.id === ripId);
-  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", grade: "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, value: Number(h.value) || 0, date: rip?.date || today() };
+  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", grade: "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
   return { rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r)), inventory: [inv, ...(s.inventory || [])] };
 }
 
@@ -562,7 +565,7 @@ function addHitToState(s, ripId, hit) {
    `c.variant` is optional — Lookup results don't carry one and price exactly
    as they always did. */
 const addAsBuy = (c) => (s) => ({ buys: [{ id: uid(), item: `${c.name} ${c.number || ""}`.trim(), category: "Single", source: "Other", cost: cardPrice(c, c.variant) || 0, date: today() }, ...s.buys] });
-const addAsKeep = (c) => (s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", grade: "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, value: cardPrice(c, c.variant) || 0, date: today() }, ...(s.inventory || [])] });
+const addAsKeep = (c) => (s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", grade: "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, gradingShip: 0, value: cardPrice(c, c.variant) || 0, date: today() }, ...(s.inventory || [])] });
 const addAsHit = (c, ripId) => (s) => addHitToState(s, ripId, { name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", value: cardPrice(c, c.variant) || 0 });
 const buyLineSet = (b) => { const s = [...new Set((b?.lines || []).map((l) => l.set).filter(Boolean))]; return s.length === 1 ? s[0] : ""; };
 // which set a rip belongs to: explicit field, else the linked buy's lines,
@@ -652,7 +655,10 @@ const saleSetSplit = (s, inventory, sets) => {
   });
   return shares;
 };
-const invBasis = (c) => (Number(c.cost) || 0) + (Number(c.gradingCost) || 0);
+// True cost of a card: what it cost to get, plus what grading it cost. Postage to
+// the grader is split across the cards in the submission, so a card carries its
+// own share. All three must be here, or a graded card's ROI reads too high.
+const invBasis = (c) => (Number(c.cost) || 0) + (Number(c.gradingCost) || 0) + (Number(c.gradingShip) || 0);
 // a card at the graders carries a value range — min/max of whichever PSA 10–6
 // estimates the user filled in. Everything else just counts its single value.
 const PSA_EST_GRADES = ["10", "9", "8", "7", "6"];
@@ -1847,9 +1853,25 @@ function Inventory({ state, patch }) {
   const [filter, setFilter] = useState("All");
   const [syncMsg, setSyncMsg] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [gradeOpen, setGradeOpen] = useState(false);
   const add = (c) => { patch((s) => ({ inventory: [{ id: uid(), ...c }, ...(s.inventory || [])] })); setAdding(false); };
   const upd = (c) => { patch((s) => ({ inventory: s.inventory.map((x) => (x.id === c.id ? { ...x, ...c } : x)) })); setEditId(null); };
   const del = (id) => patch((s) => ({ inventory: s.inventory.filter((c) => c.id !== id) }));
+  // Send a submission: flip the cards, stamp each one's share of the cost, and
+  // write the single Grading buy that carries the cash. One patch, so the whole
+  // submission syncs as one change.
+  const sendToGrading = ({ ids, grader, fee, ship, date }) => {
+    const shares = splitEvenly(ship, ids.length);
+    const shipBy = new Map(ids.map((id, i) => [id, shares[i]]));
+    const total = fee * ids.length + ship;
+    const label = `${grader} grading (${ids.length} card${ids.length === 1 ? "" : "s"})`;
+    patch((s) => ({
+      inventory: (s.inventory || []).map((c) => (shipBy.has(c.id) ? { ...c, status: "At grading", gradingCost: fee, gradingShip: shipBy.get(c.id) } : c)),
+      buys: [...(s.buys || []), { id: uid(), item: label, name: "", category: "Grading", source: grader, date, cost: total }],
+    }));
+    setGradeOpen(false);
+    setSyncMsg(`Sent ${ids.length} card${ids.length === 1 ? "" : "s"} to ${grader}. Logged ${fmt(total)} in Buys, and split ${fmt(ship)} postage across them.`);
+  };
   // Reconcile against sales: find cards still showing as held that actually sold —
   // either a sale line is already linked to them (invId), or an unlinked sale line
   // matches one by name + number. Each sale line claims at most one card, so a
@@ -2108,6 +2130,7 @@ function Inventory({ state, patch }) {
     setTcgpCache({});
     setSyncMsg("Cleared all cached set exports.");
   };
+  const gradable = inv.filter((c) => c.status === "Kept");
   const live = inv.filter((c) => c.status !== "Sold");
   const val = live.reduce((s, c) => s + (Number(c.value) || 0), 0);
   const basis = live.reduce((s, c) => s + invBasis(c), 0);
@@ -2153,6 +2176,8 @@ function Inventory({ state, patch }) {
           </div>}
           {scanNoData > 0 && <div className="cl-import-msg">{scanNoData} card{scanNoData === 1 ? "" : "s"} had no usable graded-sales data.</div>}
         </div>}
+        {gradable.length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => { setGradeOpen(!gradeOpen); setSyncMsg(""); }}><Sparkles size={14} /> Send cards to grading — log the fee and the postage</button>}
+        {gradeOpen && <GradingForm cards={gradable} onSend={sendToGrading} onCancel={() => setGradeOpen(false)} />}
         <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={toggleTcgp}><Upload size={14} /> Upload to TCGplayer — choose cards for a staged CSV</button>
         <input ref={tcgpFileRef} type="file" accept=".csv" hidden onChange={onTcgpFile} />
         {tcgpOpen && <div className="cl-tcgp-pick">
@@ -2237,11 +2262,65 @@ function Inventory({ state, patch }) {
     </div>
   );
 }
+/* Send a submission to the graders.
+   One flow records the whole trip. Each card flips to "At grading" and takes the
+   per-card fee plus its share of the postage, so its basis tells the truth. The
+   submission also lands in Buys as one Grading entry, because "Spent" and "Net on
+   cards" count buys, not card fields. The money is typed once and counted once:
+   the buy carries the cash, and each card carries its share. */
+const splitEvenly = (total, n) => {
+  // split in cents, so the shares always add back to the total exactly — a naive
+  // divide leaves a stray cent that makes the basis disagree with the buy
+  const cents = Math.round((Number(total) || 0) * 100);
+  const base = Math.floor(cents / n), rem = cents - base * n;
+  return Array.from({ length: n }, (_, i) => (base + (i < rem ? 1 : 0)) / 100);
+};
+function GradingForm({ cards, onSend, onCancel }) {
+  const [sel, setSel] = useState(new Set());
+  const [grader, setGrader] = useState("PSA");
+  const [fee, setFee] = useState("");
+  const [ship, setShip] = useState("");
+  const [date, setDate] = useState(today());
+  const tick = (id) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const ids = cards.filter((c) => sel.has(c.id)).map((c) => c.id);
+  const n = ids.length;
+  const feeEach = Number(fee) || 0, shipTotal = Number(ship) || 0;
+  const total = feeEach * n + shipTotal;
+  const shipEach = n ? shipTotal / n : 0;
+  return (
+    <Form>
+      <div className="cl-tcgp-pick-head">
+        <span>{n} of {cards.length} selected</span>
+        <span>
+          <button className="cl-link" onClick={() => setSel(new Set(cards.map((c) => c.id)))}>All</button>
+          <button className="cl-link" onClick={() => setSel(new Set())}>None</button>
+        </span>
+      </div>
+      <div className="cl-stack sm" style={{ maxHeight: 260, overflowY: "auto" }}>
+        {cards.map((c) => <label key={c.id} className="cl-tcgp-pick-row">
+          <input type="checkbox" checked={sel.has(c.id)} onChange={() => tick(c.id)} />
+          <span className="cl-tcgp-pick-name">{c.name}</span>
+          <span className="cl-row-meta">{c.set}{c.number ? ` · ${c.number}` : ""}</span>
+          <span className="cl-money">{fmt(Number(c.value) || 0)}</span>
+        </label>)}
+      </div>
+      <div className="cl-grid2"><Field label="Grader"><Select opts={GRADERS} value={grader} onChange={setGrader} /></Field><Field label="Sent on"><input className="cl-in" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field></div>
+      <div className="cl-grid2"><Field label="Grading fee (each)"><MoneyInput value={fee} onChange={setFee} /></Field><Field label="Shipping (whole submission)"><MoneyInput value={ship} onChange={setShip} /></Field></div>
+      {n > 0 && <div className="cl-net-preview">
+        <span>{n} card{n === 1 ? "" : "s"} · {fmt(feeEach)} each + {fmt(shipTotal)} postage</span>
+        <span className="cl-money out">{fmt(total)}</span>
+      </div>}
+      {n > 0 && <div className="cl-gradeest-note">Each card takes {fmt(feeEach + shipEach)} onto its basis ({fmt(feeEach)} fee + {fmt(shipEach)} postage). The {fmt(total)} also lands in Buys as one {grader} Grading entry, which is what moves Spent and Net. Any grading cost already on a selected card is replaced.</div>}
+      <Actions onCancel={onCancel} label={n ? `Send ${n} card${n === 1 ? "" : "s"} to ${grader}` : "Send to grading"} disabled={!n || !total}
+        onSave={() => onSend({ ids, grader, fee: feeEach, ship: shipTotal, date })} />
+    </Form>
+  );
+}
 function InvForm({ initial, onSave, onCancel }) {
   const estStr = (e) => Object.fromEntries(PSA_EST_GRADES.map((g) => [g, numStr(e?.[g])]));
   const [f, setF] = useState(initial
-    ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", grade: initial.grade || "Raw", status: initial.status || "Kept", source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst), date: initial.date || today() }
-    : { name: "", set: "", number: "", variant: "", grade: "Raw", status: "Kept", source: "Rip pull", cost: "", gradingCost: "", value: "", gradeEst: estStr(null), date: today() });
+    ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", grade: initial.grade || "Raw", status: initial.status || "Kept", source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), gradingShip: numStr(initial.gradingShip), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst), date: initial.date || today() }
+    : { name: "", set: "", number: "", variant: "", grade: "Raw", status: "Kept", source: "Rip pull", cost: "", gradingCost: "", gradingShip: "", value: "", gradeEst: estStr(null), date: today() });
   const [comps, setComps] = useState("");
   const pullComps = async () => {
     if (comps === "loading") return;
@@ -2275,8 +2354,12 @@ function InvForm({ initial, onSave, onCancel }) {
         <div className="cl-gradeest">{PSA_EST_GRADES.map((g) => <div key={g} className="cl-gradeest-cell"><span className="cl-gradeest-g">PSA {g}</span><MoneyInput placeholder="—" value={f.gradeEst[g]} onChange={(v) => setF({ ...f, gradeEst: { ...f.gradeEst, [g]: v } })} /></div>)}</div>
         {comps && <div className="cl-gradeest-note">{comps === "loading" ? "Pulling eBay sold comps…" : comps}</div>}
       </div>}
-      <div className="cl-grid3"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Grading cost"><MoneyInput value={f.gradingCost} onChange={(v) => setF({ ...f, gradingCost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} /></Field></div>
-      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, variant: f.variant, grade: f.grade, status: f.status, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(PSA_EST_GRADES.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
+      <div className="cl-grid2"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} /></Field></div>
+      {/* Both grading costs count toward the basis. "Send cards to grading" fills
+          them in for a whole submission; these fields correct one card. */}
+      <div className="cl-grid2"><Field label="Grading cost"><MoneyInput value={f.gradingCost} onChange={(v) => setF({ ...f, gradingCost: v })} /></Field><Field label="Grading shipping"><MoneyInput value={f.gradingShip} onChange={(v) => setF({ ...f, gradingShip: v })} /></Field></div>
+      <div className="cl-net-preview"><span>True basis</span><span className="cl-money out">{fmt((Number(f.cost) || 0) + (Number(f.gradingCost) || 0) + (Number(f.gradingShip) || 0))}</span></div>
+      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, variant: f.variant, grade: f.grade, status: f.status, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, gradingShip: Number(f.gradingShip) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(PSA_EST_GRADES.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
     </Form>
   );
 }
