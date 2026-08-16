@@ -143,6 +143,16 @@ Two standalone helpers that don't need the app running:
   exports are listed (with age and size) under *Cached set exports* in the
   same panel, where you can refresh or clear them; they're per-device and
   never synced.
+- **Where a card is graded:** a card at the graders carries a `grader` (PSA /
+  CGC / BGS), set by *Send cards to grading* or on the card's own form. It
+  decides which sold prices value the card, because the same card is worth very
+  different money in each company's slab — eBay solds for a Prismatic Umbreon ex
+  161/131 read **$5,575 in a PSA 10 against $2,575 in a CGC 10**. Each company
+  also has its own scale, so the estimate fields follow it: PSA 10/9/8/7/6, CGC
+  and BGS 10/9.5/9/8.5/8. *Pull eBay comps* and *Refresh market prices* fill
+  each card from its own grader's solds. Changing a card's grader clears its
+  estimates, because they were the other company's prices. Cards sent before
+  this field existed are read as PSA, which is what their numbers already were.
 - A "Reset all data" button lives at the bottom of the Overview tab.
 - The app seeds with example data on first run; edit or delete those rows freely.
 - Card search matches substrings of the **card name** and supports multi-word

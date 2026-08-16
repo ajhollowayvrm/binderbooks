@@ -435,12 +435,43 @@ const PRODUCTS = ["Booster Pack", "Booster Bundle", "Booster Box", "Elite Traine
 const INV_SOURCES = ["Rip pull", "Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "eBay", "Other"];
 const CHANNELS = ["TCGplayer", "eBay", "LGS consignment", "In-person", "Other"];
 const BUY_CATS = ["Sealed", "Single", "Lot", "Grading", "Supplies"];
-const GRADES = ["Raw", "PSA 10", "PSA 9", "PSA 8", "CGC 10", "CGC 9.5", "BGS 9.5", "Other"];
 const INV_STATUS = ["Kept", "At grading", "Listed", "Sold"];
 // Graders you can send a submission to. Each one is also a buy `source`, because
 // the send-to-grading flow writes the fee and the postage as one Grading buy.
 const GRADERS = ["PSA", "CGC", "BGS"];
+/* Each company grades on its own scale, and the same card sells for very
+   different money in each one's slab — eBay solds for a Prismatic Umbreon ex
+   161/131 read $5,575 in a PSA 10 against $2,574 in a CGC 10. So a card at the
+   graders can only be valued against the company it is actually at. That is
+   what `grader` on an inventory card records, and these are the grades worth
+   estimating for each one, highest first. */
+const GRADER_LADDER = {
+  PSA: ["10", "9", "8", "7", "6"],
+  CGC: ["10", "9.5", "9", "8.5", "8"],
+  BGS: ["10", "9.5", "9", "8.5", "8"],
+};
+const DEFAULT_GRADER = "PSA";
+// Cards sent before `grader` existed carry PSA estimates, because PSA was the
+// only ladder the app had. Read every grader through this, never c.grader.
+const cardGrader = (c) => (GRADER_LADDER[c?.grader] ? c.grader : DEFAULT_GRADER);
+const estGrades = (c) => GRADER_LADDER[cardGrader(c)];
+const GRADES = ["Raw", ...GRADERS.flatMap((co) => GRADER_LADDER[co].map((g) => `${co} ${g}`)), "Other"];
+// The /graded route keys every company's sold buckets this way: "cgc9_5", "bgs10", "psa9".
+const bucketKey = (grader, g) => String(grader).toLowerCase() + g.replace(".", "_");
+/* Read one company's ladder out of a /graded body, as { grade: price } for the
+   grades that have sales. byGrade carries every company; `grades` is the
+   PSA-only map the same route returns, kept as the fallback so a card comped
+   against an older Lambda still fills in. */
+const compGrades = (r, grader) => Object.fromEntries(GRADER_LADDER[grader]
+  .map((g) => [g, Number(r?.byGrade?.[bucketKey(grader, g)]?.price ?? (grader === DEFAULT_GRADER ? r?.grades?.[g] : 0)) || 0])
+  .filter(([, p]) => p > 0));
+// how many solds each of those prices came from, for the "filled from eBay" note
+const compCount = (r, grader, g) => r?.byGrade?.[bucketKey(grader, g)]?.count ?? (grader === DEFAULT_GRADER ? r?.sales?.[g] : null) ?? null;
 const stCls = (s) => ({ "Kept": "kept", "At grading": "grading", "Listed": "listed", "Sold": "sold" }[s] || "kept");
+// A card at the graders reads "At CGC", not "At grading" — where it is decides
+// what it is worth, so the list has to show it. The stored status is unchanged,
+// so the status filter still matches.
+const statusLabel = (c) => (c.status === "At grading" && c.grader ? `At ${c.grader}` : c.status);
 
 const TCGP_ORDERS = [
   {o:"3998E",b:"Lee Olson",p:3.47,d:"2026-06-09"},{o:"ABDBA",b:"Shane Davis",p:5.31,d:"2026-05-13"},
@@ -515,7 +546,14 @@ function migrate(s) {
   if (!s.inventory) s.inventory = [];
   // defaults first so existing values win — this runs on every local and
   // remote load, which is what back-fills `variant` onto pre-scanner cards
-  s.inventory = s.inventory.map((c) => ({ status: "Kept", gradingCost: 0, gradingShip: 0, variant: "", ...c }));
+  // a card already at the graders before `grader` existed was estimated against
+  // PSA, because PSA was the only ladder — stamp that, so the ladder it shows
+  // stays the ladder its numbers came from
+  s.inventory = s.inventory.map((c) => {
+    const d = { status: "Kept", gradingCost: 0, gradingShip: 0, variant: "", grader: "", ...c };
+    if (d.status === "At grading" && !d.grader) d.grader = DEFAULT_GRADER;
+    return d;
+  });
   if (!s.version || s.version < 2) {
     const idx = s.sales.findIndex((x) => x.item === "TCGplayer orders (31)");
     if (idx >= 0) s.sales = [...tcgpSales(), ...s.sales.filter((_, i) => i !== idx)];
@@ -659,12 +697,12 @@ const saleSetSplit = (s, inventory, sets) => {
 // the grader is split across the cards in the submission, so a card carries its
 // own share. All three must be here, or a graded card's ROI reads too high.
 const invBasis = (c) => (Number(c.cost) || 0) + (Number(c.gradingCost) || 0) + (Number(c.gradingShip) || 0);
-// a card at the graders carries a value range — min/max of whichever PSA 10–6
-// estimates the user filled in. Everything else just counts its single value.
-const PSA_EST_GRADES = ["10", "9", "8", "7", "6"];
+// a card at the graders carries a value range — min/max of whichever estimates
+// the user filled in, on the ladder of the company the card is at. Everything
+// else just counts its single value.
 const gradeRange = (c) => {
   if (c.status !== "At grading") return null;
-  const vals = PSA_EST_GRADES.map((g) => Number(c.gradeEst?.[g]) || 0).filter((v) => v > 0);
+  const vals = estGrades(c).map((g) => Number(c.gradeEst?.[g]) || 0).filter((v) => v > 0);
   return vals.length ? { lo: Math.min(...vals), hi: Math.max(...vals) } : null;
 };
 const invRange = (cards) => cards.reduce((a, c) => {
@@ -917,7 +955,12 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync, resolv
   const invR = invRange(kept);
   const hasRange = invR.lo !== invR.hi;
   const netLo = earned + invR.lo - spent, netHi = earned + invR.hi - spent;
-  const gradingCount = kept.filter((c) => gradeRange(c)).length;
+  const atGrading = kept.filter((c) => gradeRange(c));
+  const gradingCount = atGrading.length;
+  // name the companies the range actually came from, so the spread is readable
+  // as "CGC grades", not an unattributed guess
+  const gradingCos = [...new Set(atGrading.map(cardGrader))];
+  const gradingWho = gradingCos.length === 1 ? `${gradingCos[0]} grades` : "grades";
 
   const bySource = {};
   state.buys.forEach((b) => { bySource[b.source || "Other"] = (bySource[b.source || "Other"] || 0) + (Number(b.cost) || 0); });
@@ -954,7 +997,7 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync, resolv
               <div><div className="cl-row-meta">Market value</div><div className="cl-stat-num" style={{ color: "var(--holo2)" }}>{hasRange ? <span className="cl-range">{fmtRange(invR)}</span> : fmt(invVal)}</div></div>
               <div><div className="cl-row-meta">Net if liquidated</div><div className="cl-stat-num" style={{ color: netLo >= 0 ? "var(--pos)" : netHi < 0 ? "var(--neg)" : "var(--out)" }}>{hasRange ? <span className="cl-range">{fmtRange({ lo: netLo, hi: netHi })}</span> : fmt(netLo)}</div></div>
             </div>}
-        {hasRange && <div className="cl-note" style={{ marginTop: 10 }}>{gradingCount} card{gradingCount === 1 ? "" : "s"} at grading — depending on how the PSA grades land, you'd end up anywhere from {fmt(netLo)} to {fmt(netHi)} overall.</div>}
+        {hasRange && <div className="cl-note" style={{ marginTop: 10 }}>{gradingCount} card{gradingCount === 1 ? "" : "s"} at grading — depending on how the {gradingWho} land, you'd end up anywhere from {fmt(netLo)} to {fmt(netHi)} overall.</div>}
       </Panel>
       <Panel title="Where the money went" action={<button className="cl-link" onClick={() => go("buys")}>Buys ▸</button>}><BarList data={bySource} tone="out" /></Panel>
       {Object.keys(bySet).length > 0 && <Panel title="Spend by set"><BarList data={bySet} tone="out" /></Panel>}
@@ -1866,11 +1909,17 @@ function Inventory({ state, patch }) {
     const total = fee * ids.length + ship;
     const label = `${grader} grading (${ids.length} card${ids.length === 1 ? "" : "s"})`;
     patch((s) => ({
-      inventory: (s.inventory || []).map((c) => (shipBy.has(c.id) ? { ...c, status: "At grading", gradingCost: fee, gradingShip: shipBy.get(c.id) } : c)),
+      // `grader` is what later values the card: its estimates come from that
+      // company's solds, not PSA's. An estimate carried over from a different
+      // company is the other company's price, so this drops it — the ladders
+      // share grade names like "10", which would hide the mistake.
+      inventory: (s.inventory || []).map((c) => (shipBy.has(c.id)
+        ? { ...c, status: "At grading", grader, gradingCost: fee, gradingShip: shipBy.get(c.id), ...(cardGrader(c) === grader ? {} : { gradeEst: {} }) }
+        : c)),
       buys: [...(s.buys || []), { id: uid(), item: label, name: "", category: "Grading", source: grader, date, cost: total }],
     }));
     setGradeOpen(false);
-    setSyncMsg(`Sent ${ids.length} card${ids.length === 1 ? "" : "s"} to ${grader}. Logged ${fmt(total)} in Buys, and split ${fmt(ship)} postage across them.`);
+    setSyncMsg(`Sent ${ids.length} card${ids.length === 1 ? "" : "s"} to ${grader}. Logged ${fmt(total)} in Buys, split ${fmt(ship)} postage across them, and set them to value against ${grader} solds.`);
   };
   // Reconcile against sales: find cards still showing as held that actually sold —
   // either a sale line is already linked to them (invId), or an unlinked sale line
@@ -1907,13 +1956,14 @@ function Inventory({ state, patch }) {
   // go stale, not just filling blanks. Cards with only a name are skipped (too vague
   // to match safely). Also backfills a missing set/number from the match. Cards that
   // use graded estimates (at grading, or already comped) additionally re-pull their
-  // eBay PSA comps — but those draw a limited daily budget, so we stop once it's gone.
+  // eBay solds for the company they are at — but those draw a limited daily budget,
+  // so we stop once it's gone.
   const refreshPrices = async () => {
     const cands = inv.filter((c) => c.status !== "Sold" && c.name && (c.number || c.set));
     if (!cands.length) { setSyncMsg("Nothing to refresh — held cards need a set or number to match against the database."); return; }
     setRefreshing(true);
     setSyncMsg(`Checking ${cands.length} card${cands.length === 1 ? "" : "s"}…`);
-    const hasEst = (c) => PSA_EST_GRADES.some((g) => Number(c.gradeEst?.[g]) > 0);
+    const hasEst = (c) => estGrades(c).some((g) => Number(c.gradeEst?.[g]) > 0);
     const updates = {};
     let priced = 0, changed = 0, graded = 0, gradedNote = "";
     const applyPrice = (c, price) => {
@@ -1950,14 +2000,16 @@ function Inventory({ state, patch }) {
       if (!gradedNote && (c.status === "At grading" || hasEst(c))) {
         try {
           const r = await fetchGradedComps(c.name, c.set, c.number);
-          const got = PSA_EST_GRADES.filter((g) => Number(r.grades?.[g]) > 0);
-          if (got.length) {
-            updates[c.id] = { ...(updates[c.id] || {}), gradeEst: { ...(c.gradeEst || {}), ...Object.fromEntries(got.map((g) => [g, Number(r.grades[g])])) } };
+          // each card comps against its own grader — a CGC card priced off PSA
+          // solds reads roughly double what it is worth
+          const got = compGrades(r, cardGrader(c));
+          if (Object.keys(got).length) {
+            updates[c.id] = { ...(updates[c.id] || {}), gradeEst: { ...(c.gradeEst || {}), ...got } };
             graded++;
           }
         } catch (e) {
-          if (e.status === 429) gradedNote = " · eBay PSA budget used up, try the rest tomorrow";
-          else if (e.status === 501) gradedNote = " · eBay PSA comps aren't set up";
+          if (e.status === 429) gradedNote = " · eBay comps budget used up, try the rest tomorrow";
+          else if (e.status === 501) gradedNote = " · eBay graded comps aren't set up";
           // 404 / transient: just skip graded comps for this card
         }
       }
@@ -2250,7 +2302,7 @@ function Inventory({ state, patch }) {
           ? <InvForm key={c.id} initial={c} onSave={upd} onCancel={() => setEditId(null)} />
           : <div key={c.id} className={"cl-row click" + (c.status === "Sold" ? " sold" : "")} onClick={() => setViewId(c.id)}>
               <span className="holo-dot" />
-              <div className="cl-row-main"><div className="cl-row-title">{c.name}</div><div className="cl-row-meta"><span className={"cl-st " + stCls(c.status)}>{c.status}</span><span className="cl-chip">{c.grade}</span>{c.variant && <span className="cl-chip">{VARIANT_SHORT[c.variant] || c.variant}</span>}{c.set ? `${c.set}${c.number ? " · " + c.number : ""} · ` : ""}{c.source}</div></div>
+              <div className="cl-row-main"><div className="cl-row-title">{c.name}</div><div className="cl-row-meta"><span className={"cl-st " + stCls(c.status)}>{statusLabel(c)}</span><span className="cl-chip">{c.grade}</span>{c.variant && <span className="cl-chip">{VARIANT_SHORT[c.variant] || c.variant}</span>}{c.set ? `${c.set}${c.number ? " · " + c.number : ""} · ` : ""}{c.source}</div></div>
               <div className="cl-card-num"><div className="cl-money" style={{ color: "var(--holo2)" }}>{gradeRange(c) ? fmtRange(gradeRange(c)) : fmt(Number(c.value) || 0)}</div>{invBasis(c) ? <div className="cl-row-meta">basis {fmt(invBasis(c))}</div> : null}</div>
               <button className="cl-x" onClick={(e) => { e.stopPropagation(); setEditId(c.id); setAdding(false); }}><Pencil size={13} /></button>
               <button className="cl-x" onClick={(e) => { e.stopPropagation(); del(c.id); }}><Trash2 size={13} /></button>
@@ -2310,27 +2362,36 @@ function GradingForm({ cards, onSend, onCancel }) {
         <span>{n} card{n === 1 ? "" : "s"} · {fmt(feeEach)} each + {fmt(shipTotal)} postage</span>
         <span className="cl-money out">{fmt(total)}</span>
       </div>}
-      {n > 0 && <div className="cl-gradeest-note">Each card takes {fmt(feeEach + shipEach)} onto its basis ({fmt(feeEach)} fee + {fmt(shipEach)} postage). The {fmt(total)} also lands in Buys as one {grader} Grading entry, which is what moves Spent and Net. Any grading cost already on a selected card is replaced.</div>}
+      {n > 0 && <div className="cl-gradeest-note">Each card takes {fmt(feeEach + shipEach)} onto its basis ({fmt(feeEach)} fee + {fmt(shipEach)} postage). The {fmt(total)} also lands in Buys as one {grader} Grading entry, which is what moves Spent and Net. Any grading cost already on a selected card is replaced. Each card also records that it is at {grader}, so “Refresh market prices” values it against {grader} solds — {GRADER_LADDER[grader].join(" / ")} — not another company's.</div>}
       <Actions onCancel={onCancel} label={n ? `Send ${n} card${n === 1 ? "" : "s"} to ${grader}` : "Send to grading"} disabled={!n || !total}
         onSave={() => onSend({ ids, grader, fee: feeEach, ship: shipTotal, date })} />
     </Form>
   );
 }
 function InvForm({ initial, onSave, onCancel }) {
-  const estStr = (e) => Object.fromEntries(PSA_EST_GRADES.map((g) => [g, numStr(e?.[g])]));
+  const estStr = (e, grader) => Object.fromEntries(GRADER_LADDER[grader].map((g) => [g, numStr(e?.[g])]));
   const [f, setF] = useState(initial
-    ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", grade: initial.grade || "Raw", status: initial.status || "Kept", source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), gradingShip: numStr(initial.gradingShip), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst), date: initial.date || today() }
-    : { name: "", set: "", number: "", variant: "", grade: "Raw", status: "Kept", source: "Rip pull", cost: "", gradingCost: "", gradingShip: "", value: "", gradeEst: estStr(null), date: today() });
+    ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", grade: initial.grade || "Raw", status: initial.status || "Kept", grader: cardGrader(initial), source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), gradingShip: numStr(initial.gradingShip), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst, cardGrader(initial)), date: initial.date || today() }
+    : { name: "", set: "", number: "", variant: "", grade: "Raw", status: "Kept", grader: DEFAULT_GRADER, source: "Rip pull", cost: "", gradingCost: "", gradingShip: "", value: "", gradeEst: estStr(null, DEFAULT_GRADER), date: today() });
   const [comps, setComps] = useState("");
+  const ladder = GRADER_LADDER[f.grader] || GRADER_LADDER[DEFAULT_GRADER];
+  // Switching grader empties the estimates on purpose. They were the other
+  // company's sold prices, and carrying them over is the exact mistake this
+  // field exists to stop — a PSA 10 figure sitting under a CGC 10 label.
+  const setGrader = (grader) => setF((s) => ({ ...s, grader, gradeEst: estStr(null, grader) }));
   const pullComps = async () => {
     if (comps === "loading") return;
     setComps("loading");
     try {
       const r = await fetchGradedComps(f.name, f.set, f.number);
-      const got = PSA_EST_GRADES.filter((g) => Number(r.grades?.[g]) > 0);
-      setF((s) => ({ ...s, gradeEst: { ...s.gradeEst, ...Object.fromEntries(got.map((g) => [g, String(r.grades[g])])) } }));
+      const got = compGrades(r, f.grader);
+      // read off the ladder, not Object.keys — JS sorts "10" and "9" ahead of
+      // "9.5", which would print the grades out of order
+      const grades = ladder.filter((g) => got[g] > 0);
+      if (!grades.length) { setComps(`No recent ${f.grader} sales found for this card — fill the values in manually.`); return; }
+      setF((s) => ({ ...s, gradeEst: { ...s.gradeEst, ...Object.fromEntries(grades.map((g) => [g, String(got[g])])) } }));
       const label = r.number && !String(r.card).includes(r.number) ? `${r.card} ${r.number}` : r.card;
-      setComps(`PSA ${got.join(" / ")} filled from eBay solds (${got.map((g) => r.sales?.[g] || "–").join(" / ")} sales) — ${label}.`);
+      setComps(`${f.grader} ${grades.join(" / ")} filled from eBay solds (${grades.map((g) => compCount(r, f.grader, g) || "–").join(" / ")} sales) — ${label}.`);
     } catch (e) {
       setComps(e.status === 501 ? "Not set up yet — the sync Lambda needs a pokemonpricetracker.com API key (see aws/deploy.ps1)."
         : e.status === 429 ? "Daily eBay-comps budget is used up — try again tomorrow, or fill the values in manually."
@@ -2349,17 +2410,25 @@ function InvForm({ initial, onSave, onCancel }) {
           unset option can carry a label instead of rendering blank. */}
       <div className="cl-grid2"><Field label="Printing"><select className="cl-in" value={f.variant} onChange={(e) => setF({ ...f, variant: e.target.value })}><option value="">— not set —</option>{VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}</select></Field><Field label="Grade"><Select opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field></div>
       <div className="cl-grid2"><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => setF({ ...f, status: v })} /></Field><Field label="Source"><Select opts={INV_SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field></div>
-      {f.status === "At grading" && <div className="cl-field">
-        <div className="cl-gradeest-head"><span>If it grades — what you think it's worth at each PSA grade</span><button className="cl-link" disabled={!f.name || comps === "loading"} onClick={pullComps}>{comps === "loading" ? "Pulling…" : "Pull eBay comps"}</button></div>
-        <div className="cl-gradeest">{PSA_EST_GRADES.map((g) => <div key={g} className="cl-gradeest-cell"><span className="cl-gradeest-g">PSA {g}</span><MoneyInput placeholder="—" value={f.gradeEst[g]} onChange={(v) => setF({ ...f, gradeEst: { ...f.gradeEst, [g]: v } })} /></div>)}</div>
-        {comps && <div className="cl-gradeest-note">{comps === "loading" ? "Pulling eBay sold comps…" : comps}</div>}
-      </div>}
+      {f.status === "At grading" && <>
+        {/* Where the card is decides what it is worth — the same card sells for
+            very different money in a PSA slab and a CGC one, so the estimates
+            below follow this field. */}
+        <Field label="At which grader"><Select opts={GRADERS} value={f.grader} onChange={setGrader} /></Field>
+        <div className="cl-field">
+          <div className="cl-gradeest-head"><span>If it grades — what you think it's worth at each {f.grader} grade</span><button className="cl-link" disabled={!f.name || comps === "loading"} onClick={pullComps}>{comps === "loading" ? "Pulling…" : "Pull eBay comps"}</button></div>
+          <div className="cl-gradeest">{ladder.map((g) => <div key={g} className="cl-gradeest-cell"><span className="cl-gradeest-g">{f.grader} {g}</span><MoneyInput placeholder="—" value={f.gradeEst[g] || ""} onChange={(v) => setF({ ...f, gradeEst: { ...f.gradeEst, [g]: v } })} /></div>)}</div>
+          {comps && <div className="cl-gradeest-note">{comps === "loading" ? `Pulling eBay ${f.grader} sold comps…` : comps}</div>}
+        </div>
+      </>}
       <div className="cl-grid2"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} /></Field></div>
       {/* Both grading costs count toward the basis. "Send cards to grading" fills
           them in for a whole submission; these fields correct one card. */}
       <div className="cl-grid2"><Field label="Grading cost"><MoneyInput value={f.gradingCost} onChange={(v) => setF({ ...f, gradingCost: v })} /></Field><Field label="Grading shipping"><MoneyInput value={f.gradingShip} onChange={(v) => setF({ ...f, gradingShip: v })} /></Field></div>
       <div className="cl-net-preview"><span>True basis</span><span className="cl-money out">{fmt((Number(f.cost) || 0) + (Number(f.gradingCost) || 0) + (Number(f.gradingShip) || 0))}</span></div>
-      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, variant: f.variant, grade: f.grade, status: f.status, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, gradingShip: Number(f.gradingShip) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(PSA_EST_GRADES.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
+      {/* gradeEst is written on the saved card's ladder only, so a card that
+          moved graders can never keep a stale grade from the old scale */}
+      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, variant: f.variant, grade: f.grade, status: f.status, grader: f.grader, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, gradingShip: Number(f.gradingShip) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(ladder.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
     </Form>
   );
 }
@@ -2374,7 +2443,6 @@ function InvForm({ initial, onSave, onCancel }) {
    form auto-pull that was removed for draining the budget. */
 const CM_COMPANIES = [["psa", "PSA"], ["cgc", "CGC"], ["tag", "TAG"]];
 const CM_GRADES = ["10", "9.5", "9", "8"];
-const cmKey = (co, g) => co + g.replace(".", "_");
 const cmTrend = (t) => (t === "up" ? <span className="cl-cm-tr up">▲</span> : t === "down" ? <span className="cl-cm-tr down">▼</span> : null);
 // PPT writes numbers like "SVP 176" where the ledger has "176" (or "161/131");
 // compare just the tail token so equal cards don't warn
@@ -2433,7 +2501,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
   const unreal = value - basis;
   const rarity = match?.rarity || data?.rarity || "";
   const held = card.date ? Math.max(0, Math.round((Date.now() - new Date(card.date + "T12:00:00").getTime()) / 864e5)) : null;
-  const shownKeys = new Set(CM_COMPANIES.flatMap(([co]) => CM_GRADES.map((g) => cmKey(co, g))));
+  const shownKeys = new Set(CM_COMPANIES.flatMap(([co]) => CM_GRADES.map((g) => bucketKey(co, g))));
   const extras = Object.entries(data?.byGrade || {})
     .flatMap(([k, b]) => {
       if (shownKeys.has(k)) return [];
@@ -2443,7 +2511,8 @@ function CardModal({ card, onClose, onEdit, onValue }) {
     .sort((a, b) => b.price - a.price);
   const anyGraded = Object.keys(data?.byGrade || {}).length > 0;
   const mismatch = data && card.number && data.number && numTail(data.number) !== numTail(card.number);
-  const ests = PSA_EST_GRADES.filter((g) => Number(card.gradeEst?.[g]) > 0);
+  const grader = cardGrader(card);
+  const ests = estGrades(card).filter((g) => Number(card.gradeEst?.[g]) > 0);
   const tcgpUrl = data?.url || `https://www.tcgplayer.com/search/pokemon/product?q=${encodeURIComponent(`${card.name} ${card.number || ""}`.trim())}`;
   const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(`pokemon ${card.name} ${card.number || ""}`.trim())}&LH_Sold=1&LH_Complete=1`;
   const rawMeta = data?.raw ? [
@@ -2463,7 +2532,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
           <div className="cl-cm-head">
             <div className="cl-cm-name">{card.name}</div>
             <div className="cl-row-meta">{card.set || match?.set?.name || data?.set || "set unknown"}{(card.number || match?.number || data?.number) ? ` · ${card.number || match?.number || data?.number}` : ""}{rarity ? ` · ${rarity}` : ""}</div>
-            <div className="cl-row-meta"><span className={"cl-st " + stCls(card.status)}>{card.status}</span><span className="cl-chip">{card.grade}</span>{card.variant && <span className="cl-chip">{VARIANT_SHORT[card.variant] || card.variant}</span>}</div>
+            <div className="cl-row-meta"><span className={"cl-st " + stCls(card.status)}>{statusLabel(card)}</span><span className="cl-chip">{card.grade}</span>{card.variant && <span className="cl-chip">{VARIANT_SHORT[card.variant] || card.variant}</span>}</div>
             <div className="cl-cm-mkt">
               <div className="cl-cm-mkt-num">{market != null ? fmt(market) : "—"}</div>
               {/* name the printing this price is for — the button below writes
@@ -2499,7 +2568,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
                 <React.Fragment key={g}>
                   <span className="cl-cm-g">{g}</span>
                   {CM_COMPANIES.map(([co]) => {
-                    const b = data.byGrade?.[cmKey(co, g)];
+                    const b = data.byGrade?.[bucketKey(co, g)];
                     return (
                       <span key={co} className="cl-cm-cell">
                         {b ? <><span className="cl-money">{fmt(b.price)}{cmTrend(b.trend)}</span><span className="cl-cm-cnt">{b.count} sold</span></> : <span className="cl-cm-none">—</span>}
@@ -2513,7 +2582,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
           {mismatch && <div className="cl-cm-note warn">Sold data matched “{data.card} · {data.number}” — double-check it's the same card.</div>}
           {data.window?.from && <div className="cl-cm-foot">Sold data {String(data.window.from).slice(0, 10)} → {String(data.window.to).slice(0, 10)} · pokemonpricetracker.com</div>}
         </>}
-        {ests.length > 0 && <div className="cl-cm-foot">Your PSA estimates: {ests.map((g) => `${g} → ${fmt(Number(card.gradeEst[g]))}`).join(" · ")}</div>}
+        {ests.length > 0 && <div className="cl-cm-foot">Your {grader} estimates: {ests.map((g) => `${g} → ${fmt(Number(card.gradeEst[g]))}`).join(" · ")}</div>}
 
         <div className="cl-cm-sec">Details</div>
         <div className="cl-cm-meta">{card.source}{card.date ? ` · added ${card.date}` : ""}{held != null ? ` · held ${held} day${held === 1 ? "" : "s"}` : ""}{Number(card.gradingCost) > 0 ? ` · grading ${fmt(Number(card.gradingCost))}` : ""}</div>
