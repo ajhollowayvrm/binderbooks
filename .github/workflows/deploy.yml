@@ -1,0 +1,48 @@
+name: Deploy to GitHub Pages
+
+# The hosted web build. It is the desk half of the app: uploading a TCGplayer or
+# eBay sales export, pasting an order off the bookmarklet, printing a label —
+# all of which are painful on a phone. The iPhone app is unaffected and is still
+# built by hand on a Mac (`npm run ios:device`); nothing here touches it.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# a queued deploy replaces an older one rather than racing it
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # plain `vite build`, so `base` is /binderbooks/ and the Scan tab is left
+      # out of the bundle — see vite.config.js
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -35,7 +35,9 @@ a native shell, and two of them are silent:
   origin — so the ledger survives app updates and `window.isSecureContext` is true.
 - **The camera.** `<input type="file" capture="environment">` works by itself, but iOS terminates the
   app if `NSCameraUsageDescription` is missing. The two usage strings in `project.yml` are the whole
-  camera integration.
+  camera integration. This is the one thing the two builds do not share: the Scan tab ships in this
+  app and on the dev server, and the hosted web build leaves it out entirely (`__BB_SCAN__` in
+  `vite.config.js`), because scanning wants the card in your hand.
 
 ---
 
@@ -145,6 +147,12 @@ That was designed and then rejected on 2026-08-16. Recorded here so it is not re
 `npm run ios:device` costs one command and about a minute, updates native and web together, and has
 none of those problems. Revisit only if the app ever needs to update on a phone that is nowhere near
 this Mac.
+
+**GitHub Pages being back changes none of this.** There is a live `https://` copy of the bundle
+again, which makes "just point the web view at it" look free — it is not. It is the fourth bullet
+above: a different origin, and the ledger on every phone that already has the app lives under
+`binderbooks://local`. The hosted build is a second client of the same sync backend, not an update
+channel for this one.
 
 ---
 

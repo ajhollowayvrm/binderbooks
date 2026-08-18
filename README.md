@@ -18,8 +18,17 @@ locally (never committed) and as the `SYNC_TOKEN` env var on the
 `binderbooks-sync` Lambda (us-west-2). Conflicts resolve last-write-wins; the
 app re-pulls whenever it regains focus.
 
-**How it ships:** the iPhone app is the only build that is deployed. There is no
-hosted web version. See [iPhone app](#iphone-app).
+**Live site:** https://ajhollowayvrm.github.io/binderbooks/
+
+**How it ships:** two builds, one ledger. The hosted web build is the desk half
+— uploading a sales export, pasting a TCGplayer order, printing a label — and
+deploys itself on every push to `main`. The [iPhone app](#iphone-app) is the
+pocket half and is built by hand on a Mac. Both talk to the same sync backend,
+so the ledger is the same on both; each browser and the app are separate
+`localStorage` origins, so the sync token is pasted once in each.
+
+The web build ships **without the Scan tab** — see
+[Card scanner](#card-scanner-scan-tab).
 
 ## Run locally
 
@@ -32,18 +41,24 @@ Then open the printed URL (usually http://localhost:5173).
 
 ## Build & ship
 
-`npm run ios:device` builds, signs and installs onto a connected iPhone. That is
-the only thing that ships — see [iPhone app](#iphone-app).
-
 ```bash
-npm run build      # a plain static site in ./dist, if a web host is ever wanted
+npm run build      # the web build — a plain static site in ./dist, no backend
 npm run preview    # preview that build locally
+npm run ios:device # build, sign and install onto a connected iPhone
 ```
 
-Nothing hosts `dist/`, and nothing builds automatically. GitHub Pages hosted this
-app until 2026-08-15, and a GitHub Actions workflow built an unsigned `.ipa` for
-sideloading from Windows until 2026-08-16. Both are switched off and deleted,
-because a Mac is the only install path in use.
+**Web.** Every push to `main` runs `.github/workflows/deploy.yml`, which builds
+`dist/` and publishes it to https://ajhollowayvrm.github.io/binderbooks/ — live
+within a minute or two, no manual step. (Pages must be set to deploy from
+**GitHub Actions** under Settings → Pages; it was switched off between
+2026-08-15 and the commit that restored this workflow.) `dist/` is an ordinary
+static site, so any other host would serve it just as well — but `base` is
+`/binderbooks/`, which is the repo-name path Pages serves from.
+
+**iPhone.** `npm run ios:device` is the whole delivery path and needs a Mac —
+see [iPhone app](#iphone-app). Nothing builds it in CI. A GitHub Actions
+workflow built an unsigned `.ipa` for sideloading from Windows until
+2026-08-16; it is deleted, because a Mac is the only install path in use.
 
 ## iPhone app
 
@@ -110,6 +125,14 @@ Scans run on Claude Haiku 4.5 at roughly **$2.40 per 1,000 cards**. Photograph
 one card at a time, straight on and filling the frame — the collector number in
 the bottom corner is what pins the match down.
 
+**The hosted web build has no Scan tab.** Scanning wants the back camera and the
+card in your hand, which is the phone; the browser is where the desk work
+happens. `vite.config.js` bakes a `__BB_SCAN__` flag per build, so the tab, the
+`CardSnap` component and the `/identify` call are all absent from the web bundle
+rather than merely hidden — about 10 KB of it. `npm run dev` keeps the tab, so
+it is still workable on a laptop: "Use a photo you already took" is the way in
+without a camera.
+
 ## Tools
 
 Two standalone helpers that don't need the app running:
@@ -124,10 +147,11 @@ Two standalone helpers that don't need the app running:
   (Munbyn fanfold). Paste a mailing address; it drops the country line and scales
   the type to the largest size that fits along the 6-inch edge, anchored to the
   bottom, with a small return address in the top-left corner — so both blocks cut
-  out cleanly. The app ships this page: open **Sales → "Print a 4×6 shipping
-  label"**. On a computer, open `public/label.html` from a local checkout. The
-  return address is typed once and kept in that browser's localStorage, so it
-  never lands in the repo.
+  out cleanly. Both builds ship this page: open **Sales → "Print a 4×6 shipping
+  label"**, or go straight to
+  <https://ajhollowayvrm.github.io/binderbooks/label.html>. The return address is
+  typed once and kept in that browser's localStorage, so it never lands in the
+  repo.
 
 ## Notes
 

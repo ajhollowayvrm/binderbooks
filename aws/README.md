@@ -103,4 +103,6 @@ curl -s -D - -X OPTIONS -H "Origin: binderbooks://local" \
 ```
 
 A correct answer echoes `access-control-allow-origin` for the origin you sent. No such header means
-that client is blocked.
+that client is blocked. There are three clients to check now, not one: `binderbooks://local` (the
+iOS app), `https://ajhollowayvrm.github.io` (the hosted web build, live again since Pages was
+switched back on) and `http://localhost:5173` (the dev server).
