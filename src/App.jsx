@@ -326,6 +326,17 @@ const snapErrMsg = (e) =>
   : e.status === 413 ? "That photo was too large to send — try again."
   : e.name === "NotReadableError" || /createImageBitmap|decode/i.test(e.message || "") ? "That image format isn't supported — photograph the card directly instead of picking a HEIC from the library."
   : "The scanner is unavailable right now — try again in a moment.";
+/* The slab label as one of the app's grades. The scanner reports the company
+   and the number separately and free-form, because an SGC or an ACE slab still
+   says something worth showing — but only a grade on a ladder the app can comp
+   survives as a grade. Anything else lands on "Other", where nothing will try
+   to price it off a bucket that doesn't exist. */
+const readGrade = (hit) => {
+  if (!hit?.grader || !hit?.grade) return "Raw";
+  const co = String(hit.grader).toUpperCase().trim();
+  const g = String(hit.grade).trim();
+  return SLAB_GRADES[co]?.includes(g) ? `${co} ${g}` : "Other";
+};
 /* what Claude read -> a real catalog card. Set first (the printed code is the
    strongest signal), then the card, with the same two fallbacks the rest of
    the app uses: pokemontcg.io, then TCGplayer's catalog for sets it doesn't
@@ -493,6 +504,23 @@ const slabOf = (grade) => {
 };
 // that one bucket out of a /graded body: { price, count, median, min, max, trend }
 const slabComp = (r, grade) => { const s = slabOf(grade); return (s && r?.byGrade?.[bucketKey(s.grader, s.grade)]) || null; };
+// PPT writes numbers like "SVP 176" where the ledger has "176" (or "161/131");
+// compare just the tail token so equal cards don't read as different ones
+const numTail = (x) => normNum(String(x || "").trim().split(/\s+/).pop());
+const alnumKey = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+/* Does this /graded body actually describe the card we asked for? PPT's search
+   is fuzzy, so a lookup can come back holding a near miss — the VMAX, the
+   promo, the same Pokémon from another set. Writing that card's solds onto this
+   one's value is silent and sticks, so every automatic use of a body is gated
+   on this. The card detail view shows a near miss instead of dropping it,
+   because a person looking at the screen can tell what happened. */
+const wrongCardMsg = (r) => `The sold data came back for “${r?.card || "another card"}${r?.number ? ` · ${r.number}` : ""}”, which isn't this card — check the set and number, then try again.`;
+const compsMatch = (r, c) => {
+  if (!r) return false;
+  if (c.number && r.number && numTail(r.number) !== numTail(c.number)) return false;
+  const a = alnumKey(r.card), b = alnumKey(c.name);
+  return !!a && !!b && (a === b || a.startsWith(b) || b.startsWith(a));
+};
 /* Japanese cards are their own print run with their own market, and both
    English price sources here — the tcgcsv TCGplayer dump and pokemontcg.io —
    carry English cards only. Matching a JP card against them finds the English
@@ -626,12 +654,16 @@ const fmt = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-US"
 const ripValue = (r) => (r.hits || []).reduce((s, h) => s + (Number(h.value) || 0), 0);
 const ripCostOf = (r, buys) => (r.buyId ? (Number((buys || []).find((b) => b.id === r.buyId)?.cost) || 0) : (Number(r.cost) || 0));
 const ripPL = (r, buys) => ripValue(r) - ripCostOf(r, buys);
-// a logged hit is a card you now hold — mirror it into inventory as a rip
-// pull. Basis stays 0 because the rip already carries the cost.
+/* a logged hit is a card you now hold — mirror it into inventory as a rip pull.
+   Basis stays 0 because the rip already carries the cost, which is the whole
+   point of logging one: a lot of slabs bought together is one cost against the
+   cards it produced, the same shape as packs against what came out of them.
+   `lang` and `grade` ride along, because a JP booster box yields JP cards and a
+   lot of slabs yields graded ones — neither is priced like an English raw. */
 function addHitToState(s, ripId, hit) {
   const h = { id: uid(), ...hit };
   const rip = s.rips.find((r) => r.id === ripId);
-  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", lang: "en", grade: "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
+  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", lang: cardLang(h), grade: h.grade || "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
   return { rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r)), inventory: [inv, ...(s.inventory || [])] };
 }
 
@@ -640,9 +672,16 @@ function addHitToState(s, ripId, hit) {
    add cards through the same code instead of two copies that drift.
    `c.variant` is optional — Lookup results don't carry one and price exactly
    as they always did. */
-const addAsBuy = (c) => (s) => ({ buys: [{ id: uid(), item: `${c.name} ${c.number || ""}`.trim(), category: "Single", source: "Other", cost: cardPrice(c, c.variant) || 0, date: today() }, ...s.buys] });
-const addAsKeep = (c) => (s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", lang: "en", grade: "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, gradingShip: 0, value: cardPrice(c, c.variant) || 0, date: today() }, ...(s.inventory || [])] });
-const addAsHit = (c, ripId) => (s) => addHitToState(s, ripId, { name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", value: cardPrice(c, c.variant) || 0 });
+/* `cardPrice` is the English TCGplayer market price, which is the right opening
+   value for an English raw single and the wrong one for anything else. A JP card
+   or a slab starts at 0 — an empty field asks to be filled, where a plausible
+   wrong number does not. Callers that pass a bare pokemontcg.io card (Lookup)
+   carry no language or grade and price exactly as they always did. */
+const entryValue = (c) => (tcgPriceable(c) ? cardPrice(c, c.variant) || 0 : 0);
+const entryLabel = (c) => `${c.name} ${c.number || ""} ${isJP(c) ? "JP" : ""} ${c.grade && c.grade !== "Raw" ? c.grade : ""}`.replace(/\s+/g, " ").trim();
+const addAsBuy = (c) => (s) => ({ buys: [{ id: uid(), item: entryLabel(c), category: "Single", source: "Other", cost: entryValue(c), date: today() }, ...s.buys] });
+const addAsKeep = (c) => (s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", lang: cardLang(c), grade: c.grade || "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, gradingShip: 0, value: entryValue(c), date: today() }, ...(s.inventory || [])] });
+const addAsHit = (c, ripId) => (s) => addHitToState(s, ripId, { name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", lang: cardLang(c), grade: c.grade || "Raw", value: entryValue(c) });
 const buyLineSet = (b) => { const s = [...new Set((b?.lines || []).map((l) => l.set).filter(Boolean))]; return s.length === 1 ? s[0] : ""; };
 // which set a rip belongs to: explicit field, else the linked buy's lines,
 // else a set name found in the product text, else the majority set of the hits
@@ -1224,7 +1263,7 @@ function Rips({ state, patch }) {
               {isOpen && <div className="cl-card-body">
                 <div className="cl-hits">
                   {(r.hits || []).length === 0 && <Empty>No hits added.</Empty>}
-                  {(r.hits || []).map((h) => (<div key={h.id} className="cl-hit"><span className="holo-dot" /><div className="cl-hit-main"><div className="cl-hit-name">{h.name}</div>{h.set && <div className="cl-row-meta">{h.set}{h.number ? ` · ${h.number}` : ""}</div>}</div><div className="cl-money">{fmt(Number(h.value) || 0)}</div><button className="cl-x" onClick={() => delHit(r.id, h.id)}><X size={13} /></button></div>))}
+                  {(r.hits || []).map((h) => (<div key={h.id} className="cl-hit"><span className="holo-dot" /><div className="cl-hit-main"><div className="cl-hit-name">{h.name}</div><div className="cl-row-meta">{h.grade && h.grade !== "Raw" && <span className="cl-chip">{h.grade}</span>}{isJP(h) && <span className="cl-chip">JP</span>}{h.set ? `${h.set}${h.number ? ` · ${h.number}` : ""}` : ""}</div></div><div className="cl-money">{fmt(Number(h.value) || 0)}</div><button className="cl-x" onClick={() => delHit(r.id, h.id)}><X size={13} /></button></div>))}
                 </div>
                 <HitForm onAdd={(h) => addHit(r.id, h)} />
                 <div className="cl-card-foot"><span>Pulled value {fmt(ripValue(r))}</span><button className="cl-del" onClick={() => delRip(r.id)}><Trash2 size={13} /> Delete rip</button></div>
@@ -1380,14 +1419,28 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
     </div>
   );
 }
+/* The language and the grade stick between adds. A rip is one box or one lot,
+   so its cards are nearly always all the same on both counts — retyping
+   "Japanese, CGC 9" eight times is the kind of thing that gets skipped, and a
+   slab logged as an English raw is then priced as one. */
 function HitForm({ onAdd }) {
-  const [f, setF] = useState({ name: "", set: "", number: "", value: "" });
-  const add = () => { if (!f.name) return; onAdd({ ...f, value: Number(f.value) || 0 }); setF({ name: "", set: "", number: "", value: "" }); };
-  const pick = (c) => setF({ name: c.name, set: c.set?.name || "", number: c.number || "", value: cardPrice(c) != null ? String(cardPrice(c)) : "" });
+  const blank = (keep) => ({ name: "", set: "", number: "", value: "", lang: keep?.lang || "en", grade: keep?.grade || "Raw" });
+  const [f, setF] = useState(blank);
+  const add = () => { if (!f.name) return; onAdd({ ...f, value: Number(f.value) || 0 }); setF(blank(f)); };
+  // the autocomplete searches English raw singles, so its price is one. Name,
+  // set and number are still worth taking for a slab or a JP card; the price
+  // is not, and silently filling it is the mistake the grade field prevents.
+  const priceable = f.grade === "Raw" && f.lang === "en";
+  const pick = (c) => setF({ ...f, name: c.name, set: c.set?.name || "", number: c.number || "", value: priceable && cardPrice(c) != null ? String(cardPrice(c)) : "" });
   return (
     <div className="cl-hitform">
       <CardAutocomplete value={f.name} onChange={(v) => setF({ ...f, name: v })} onSelect={pick} placeholder="Add a hit — try “Dedenne Perfect Order” or “Dedenne 143”" />
       <div className="cl-grid3"><input className="cl-in" placeholder="Set" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /><input className="cl-in" placeholder="No." value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} placeholder="Value" /></div>
+      <div className="cl-grid2">
+        <select className="cl-in" value={f.lang} onChange={(e) => setF({ ...f, lang: e.target.value })}>{LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+        <select className="cl-in" value={f.grade} onChange={(e) => setF({ ...f, grade: e.target.value })}>{GRADES.map((g) => <option key={g} value={g}>{g === "Raw" ? "Raw (ungraded)" : g}</option>)}</select>
+      </div>
+      {!priceable && <div className="cl-gradeest-note">Value these by hand — the card search prices English raw singles. Each one lands in Inventory {f.grade === "Raw" ? "as a Japanese card" : `as a ${f.grade} slab`}, where “Pull slab price” and “Refresh market prices” comp it properly.</div>}
       <button className="cl-add-hit" onClick={add}><Plus size={14} /> Add hit</button>
     </div>
   );
@@ -2011,7 +2064,7 @@ function Inventory({ state, patch }) {
     setRefreshing(true);
     setSyncMsg(`Checking ${total} card${total === 1 ? "" : "s"}…`);
     const updates = {};
-    let priced = 0, changed = 0, graded = 0, ownComps = 0, gradedNote = "";
+    let priced = 0, changed = 0, graded = 0, ownComps = 0, wrongCard = 0, gradedNote = "";
     const applyPrice = (c, price) => {
       updates[c.id] = { ...(updates[c.id] || {}), value: price };
       priced++;
@@ -2054,6 +2107,9 @@ function Inventory({ state, patch }) {
         else if (e.status === 501) gradedNote = " · eBay graded comps aren't set up";
         continue; // 404 / transient: just skip comps for this card
       }
+      // comps for a near miss are worse than none — they overwrite a good value
+      // with a different card's, and nothing on the screen would say so
+      if (!compsMatch(r, c)) { wrongCard++; continue; }
       if (!tcgPriceable(c)) {
         /* A raw card takes the ungraded sold price; a slab takes the price of its
            own grade and nothing else. No bucket means nobody has sold one lately,
@@ -2079,7 +2135,7 @@ function Inventory({ state, patch }) {
     setRefreshing(false);
     const missed = cands.length - (priced - ownComps);
     setSyncMsg(priced || graded
-      ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${ownComps ? `, ${ownComps} from their own eBay solds` : ""}${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the database yet` : ""}${gradedNote}.`
+      ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${ownComps ? `, ${ownComps} from their own eBay solds` : ""}${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the database yet` : ""}${wrongCard ? `; ${wrongCard} skipped — the sold data came back for a different card, check their set and number` : ""}${gradedNote}.`
       : `None of those ${total} card${total === 1 ? "" : "s"} are in the database yet — check back later${gradedNote}.`);
   };
   // Grading-candidate scan: pull eBay graded comps for every held raw card at
@@ -2102,13 +2158,14 @@ function Inventory({ state, patch }) {
     setScanning(true);
     const updates = {};
     const isFresh = (c) => c.grading && Date.now() - c.grading.t < 3 * 864e5;
-    let pulled = 0, failed = 0, outOfBudget = false, i = 0;
+    let pulled = 0, failed = 0, skipped = 0, outOfBudget = false, i = 0;
     for (const c of scanCands) {
       i++;
       if (isFresh(c)) continue; // fresh enough from a previous run
       setScanMsg(`Pulling eBay comps… ${i}/${scanCands.length} (${c.name})`);
       try {
         const r = await fetchGradedComps(c.name, c.set, c.number, cardLang(c));
+        if (!compsMatch(r, c)) { skipped++; continue; } // solds for a different card rank nothing
         const slim = (k) => (r.byGrade?.[k] ? { p: r.byGrade[k].price, n: r.byGrade[k].count } : null);
         updates[c.id] = { grading: { t: Date.now(), raw: r.raw ? { p: r.raw.price, n: r.raw.count } : null, psa10: slim("psa10"), psa9: slim("psa9"), cgc10: slim("cgc10"), tag10: slim("tag10") } };
         pulled++;
@@ -2124,8 +2181,8 @@ function Inventory({ state, patch }) {
     const waiting = outOfBudget ? 1 + scanCands.slice(i).filter((c) => !isFresh(c)).length : 0;
     setScanMsg(outOfBudget
       ? `Daily eBay-comps budget ran out — ${pulled} pulled this run, ${waiting} still waiting. Run it again after the daily reset to continue.`
-      : failed
-      ? `Done — ${pulled} pulled fresh, ${failed} lookup${failed === 1 ? "" : "s"} failed. Run it again to retry those.`
+      : failed || skipped
+      ? `Done — ${pulled} pulled fresh${failed ? `, ${failed} lookup${failed === 1 ? "" : "s"} failed` : ""}${skipped ? `, ${skipped} came back for a different card and were skipped` : ""}.${failed ? " Run it again to retry those." : ""}`
       : `Done — ${pulled} pulled fresh${pulled < scanCands.length ? ", the rest were already current" : ""}.`);
   };
   const scanFeeN = Number(scanFee) || 0;
@@ -2450,7 +2507,8 @@ function InvForm({ initial, onSave, onCancel }) {
     if (comps === "loading") return;
     setComps("loading");
     try {
-      const r = await fetchGradedComps(f.name, f.set, f.number);
+      const r = await fetchGradedComps(f.name, f.set, f.number, f.lang);
+      if (!compsMatch(r, f)) { setComps(wrongCardMsg(r)); return; }
       const got = compGrades(r, f.grader);
       // read off the ladder, not Object.keys — JS sorts "10" and "9" ahead of
       // "9.5", which would print the grades out of order
@@ -2475,6 +2533,7 @@ function InvForm({ initial, onSave, onCancel }) {
     setSlabMsg("loading");
     try {
       const r = await fetchGradedComps(f.name, f.set, f.number, f.lang);
+      if (!compsMatch(r, f)) { setSlabMsg(wrongCardMsg(r)); return; }
       const b = slabComp(r, f.grade);
       if (!b) { setSlabMsg(`No recent ${f.grade} sales found for this card — the other grades it did sell in are on the card's detail view. Fill the value in manually.`); return; }
       setF((x) => ({ ...x, value: String(b.price) }));
@@ -2538,9 +2597,6 @@ function InvForm({ initial, onSave, onCancel }) {
 const CM_COMPANIES = [["psa", "PSA"], ["cgc", "CGC"], ["tag", "TAG"]];
 const CM_GRADES = ["10", "9.5", "9", "8"];
 const cmTrend = (t) => (t === "up" ? <span className="cl-cm-tr up">▲</span> : t === "down" ? <span className="cl-cm-tr down">▼</span> : null);
-// PPT writes numbers like "SVP 176" where the ledger has "176" (or "161/131");
-// compare just the tail token so equal cards don't warn
-const numTail = (x) => normNum(String(x || "").trim().split(/\s+/).pop());
 const cmErrMsg = (s) => (s === 501 ? "eBay comps aren't set up on the sync Lambda."
   : s === 429 ? "Daily eBay-comps budget is used up — sold data comes back tomorrow."
   : s === 404 ? "No recent eBay solds found for this card."
@@ -2619,7 +2675,9 @@ function CardModal({ card, onClose, onEdit, onValue }) {
     })
     .sort((a, b) => b.price - a.price);
   const anyGraded = Object.keys(data?.byGrade || {}).length > 0;
-  const mismatch = data && card.number && data.number && numTail(data.number) !== numTail(card.number);
+  // shown, not dropped: on a screen someone is looking at, naming the near miss
+  // beats hiding it — they can fix the set or number and pull again
+  const mismatch = data && !compsMatch(data, card);
   const grader = cardGrader(card);
   const ests = estGrades(card).filter((g) => Number(card.gradeEst?.[g]) > 0);
   const tcgpUrl = data?.url || `https://www.tcgplayer.com/search/pokemon/product?q=${encodeURIComponent(`${card.name} ${card.number || ""}`.trim())}`;
@@ -2693,7 +2751,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
             </div>
             {extras.length > 0 && <div className="cl-cm-extra">{extras.map((x) => <span key={x.label} className="cl-chip">{x.label} {fmt(x.price)} · {x.count} sold</span>)}</div>}
           </> : <div className="cl-cm-note">No graded sales recorded for this card.</div>}
-          {mismatch && <div className="cl-cm-note warn">Sold data matched “{data.card} · {data.number}” — double-check it's the same card.</div>}
+          {mismatch && <div className="cl-cm-note warn">Sold data matched “{data.card}{data.number ? ` · ${data.number}` : ""}” — that isn't this card, so these prices are for something else. Correcting this card's set and number will pull the right ones.</div>}
           {data.window?.from && <div className="cl-cm-foot">Sold data {String(data.window.from).slice(0, 10)} → {String(data.window.to).slice(0, 10)} · pokemonpricetracker.com</div>}
         </>}
         {ests.length > 0 && <div className="cl-cm-foot">Your {grader} estimates: {ests.map((g) => `${g} → ${fmt(Number(card.gradeEst[g]))}`).join(" · ")}</div>}
@@ -2840,14 +2898,25 @@ function CardSnap({ state, patch }) {
       const hit = cards?.[0];
       if (!hit) { const x = new Error("nothing found"); x.status = 422; throw x; }
       setBusy("matching");
-      const r = await resolveScan(hit, sets, codes);
-      setD({ id: r.card?.id || "snap-" + uid(), card: r.card, name: r.card?.name || hit.name || "", set: r.setName, number: r.number, variant: r.variant, confidence: hit.confidence, notes: hit.notes });
+      const lang = hit.language === "japanese" ? "jp" : "en";
+      // the catalogue behind resolveScan is English, so a JP card is left with
+      // what was read off it rather than matched to the English card that
+      // shares its name — that match would bring the wrong set and price
+      // the printing and the number were read off the card itself, so they hold
+      // for a JP card; only the catalogue match is dropped
+      const r = lang === "jp"
+        ? { card: null, setName: hit.setName || "", variant: hit.variant && hit.variant !== "Unknown" ? hit.variant : "", number: hit.number || "" }
+        : await resolveScan(hit, sets, codes);
+      setD({ id: r.card?.id || "snap-" + uid(), card: r.card, name: r.card?.name || hit.name || "", set: r.setName, number: r.number, variant: r.variant, lang, grade: readGrade(hit), confidence: hit.confidence, notes: hit.notes });
     } catch (e2) { setErr(snapErrMsg(e2)); dropShot(); }
     finally { setBusy(""); }
   };
 
-  // re-run the match after the set or number is corrected by hand
+  // re-run the match after the set or number is corrected by hand. There is
+  // nothing to re-match a JP card against — the catalogue is English, and the
+  // card it would find is the English printing, not this one.
   const rematch = async () => {
+    if (d.lang === "jp") return;
     setBusy("matching");
     try {
       const r = await resolveScan({ name: d.name, number: d.number, setName: d.set, setCode: null, variant: d.variant || "Unknown" }, sets, codes);
@@ -2859,8 +2928,11 @@ function CardSnap({ state, patch }) {
   // what the add-paths actually receive. Edits flow straight through, so the
   // price re-derives the moment the printing changes — which is the whole
   // point of asking for it.
-  const card = d && { ...(d.card || { images: {} }), id: d.id, name: d.name, number: d.number, set: { name: d.set }, variant: d.variant };
-  const price = card ? cardPrice(card, d.variant) : null;
+  const card = d && { ...(d.card || { images: {} }), id: d.id, name: d.name, number: d.number, set: { name: d.set }, variant: d.variant, lang: d.lang, grade: d.grade };
+  // the catalogue price is the English raw one, so it is shown only for a card
+  // that is one — a slab or a JP card is comped in Inventory, not here
+  const price = card && tcgPriceable(card) ? cardPrice(card, d.variant) : null;
+  const priceable = !!card && tcgPriceable(card);
   const clear = () => { setD(null); dropShot(); };
   const add = (slice, msg) => { patch(slice); setDone(msg); clear(); };
 
@@ -2886,7 +2958,7 @@ function CardSnap({ state, patch }) {
           {err && <Empty>{err}</Empty>}
           {done && <div className="cl-flash">{done}</div>}
           {!d && !busy && !err && <div className="cl-note">Fill the frame with one card, straight on, in even light. The collector number in the bottom corner is what pins the match down.</div>}
-          {d && <Panel title="Is this right?" action={<button className="cl-link" disabled={!!busy} onClick={rematch}>Re-match</button>}>
+          {d && <Panel title="Is this right?" action={d.lang === "jp" ? null : <button className="cl-link" disabled={!!busy} onClick={rematch}>Re-match</button>}>
             <div className="cl-cm-top">
               {shot ? <img className="cl-cm-img" src={shot} alt="the card you photographed" /> : <div className="cl-cm-img ph">no photo</div>}
               <div className="cl-cm-head">
@@ -2894,23 +2966,41 @@ function CardSnap({ state, patch }) {
                 <div className="cl-row-meta">{d.set || "set unknown"}{d.number ? ` · ${d.number}` : ""}</div>
                 <div className="cl-cm-mkt">
                   <div className="cl-cm-mkt-num">{price != null ? fmt(price) : "—"}</div>
-                  <div className="cl-cm-mkt-lab">TCGplayer market{d.variant ? ` · ${d.variant}` : ""}{price == null ? " — no data" : ""}</div>
+                  <div className="cl-cm-mkt-lab">{!priceable
+                    ? `${d.grade !== "Raw" ? d.grade : "Japanese"} — comped in Inventory`
+                    : `TCGplayer market${d.variant ? ` · ${d.variant}` : ""}${price == null ? " — no data" : ""}`}</div>
                 </div>
               </div>
             </div>
             {(d.confidence !== "high" || d.notes) && <div className="cl-note" style={{ marginTop: 10 }}>{d.notes || "Parts of this were hard to read — check them before adding."}</div>}
-            {!d.card && <div className="cl-note" style={{ marginTop: 10 }}>No catalog match, so there's no market price yet. Correct the set or number and hit Re-match, or add it as-is and set the value by hand.</div>}
+            {!d.card && d.lang !== "jp" && <div className="cl-note" style={{ marginTop: 10 }}>No catalog match, so there's no market price yet. Correct the set or number and hit Re-match, or add it as-is and set the value by hand.</div>}
             <Field label="Card"><input className="cl-in" value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} /></Field>
             <div className="cl-grid2">
               <Field label="Set"><SetPicker sets={sets} value={d.set} onChange={(v) => setD({ ...d, set: v })} allowEmpty /></Field>
               <Field label="Number"><input className="cl-in" value={d.number} onChange={(e) => setD({ ...d, number: e.target.value })} /></Field>
             </div>
-            <Field label="Printing">
-              <select className="cl-in" value={d.variant} onChange={(e) => setD({ ...d, variant: e.target.value })}>
-                <option value="">— not set —</option>
-                {VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}
+            <div className="cl-grid2">
+              <Field label="Language">
+                <select className="cl-in" value={d.lang} onChange={(e) => setD({ ...d, lang: e.target.value })}>
+                  {LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </Field>
+              <Field label="Printing">
+                <select className="cl-in" value={d.variant} onChange={(e) => setD({ ...d, variant: e.target.value })}>
+                  <option value="">— not set —</option>
+                  {VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </Field>
+            </div>
+            <Field label="Grade">
+              <select className="cl-in" value={d.grade} onChange={(e) => setD({ ...d, grade: e.target.value })}>
+                {GRADES.map((g) => <option key={g} value={g}>{g === "Raw" ? "Raw (ungraded)" : g}</option>)}
               </select>
             </Field>
+            {!priceable && <div className="cl-note" style={{ marginTop: 0 }}>
+              {d.grade !== "Raw" ? `Read as a ${d.grade} slab. ` : "Read as a Japanese card. "}
+              It goes in at no value — open it in Inventory and hit {d.grade !== "Raw" ? "“Pull slab price”" : "“Refresh market prices”"} to comp it against its own eBay solds.
+            </div>}
             {state.rips.length > 0 && <Field label="Add a hit to"><select className="cl-in" value={ripId} onChange={(e) => setRipId(e.target.value)}><option value="">latest rip</option>{state.rips.map((r) => <option key={r.id} value={r.id}>{r.product || "Rip"}</option>)}</select></Field>}
             <div className="cl-snap-go">
               <button className="cl-mini" disabled={!d.name} onClick={() => add(addAsBuy(card), "Added to Buys.")}>+ Buy</button>

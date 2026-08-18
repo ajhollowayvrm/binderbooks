@@ -87,7 +87,12 @@ retry if the API doesn't respond.
 
 Photograph a card and the **Scan** tab fills in its name, collector number, set
 and printing, then hands it to the same *+ Buy / + Keep / + Hit* actions the
-Lookup tab uses. The photo is read by Claude via the `/identify` route on the
+Lookup tab uses. It also reads the card's **language** and, when the card is in
+a slab, the **company and grade off the label** — so photographing a CGC 9.5
+Japanese card enters it as one, rather than as an English raw single that would
+then be priced like one. Both are editable on the confirm sheet before you add
+it. A card read as Japanese skips the catalogue match entirely, because that
+catalogue is English and the card it would find is the English printing. The photo is read by Claude via the `/identify` route on the
 `binderbooks-sync` Lambda, which needs an Anthropic API key:
 
 ```powershell
@@ -177,6 +182,23 @@ Two standalone helpers that don't need the app running:
   the JP card's own image and set rather than the English one's, and it is left
   out of the TCGplayer bulk-listing CSV, which is keyed on English SKUs. Cards
   from before this field existed read as English.
+- **Rips hold lots, not just packs:** a rip is one cost against the cards that
+  came out of it, which is the same shape as a lot of slabs bought together for
+  one price — log the lot as the rip, then add each card as a hit. Hits carry a
+  language and a grade of their own, and both stick between adds, because one
+  box or one lot is nearly always all the same on both counts. Each hit becomes
+  an Inventory card carrying them, with its basis on the rip rather than on the
+  card, so the cost is counted once.
+- **When sold data comes back for the wrong card:** pokemonpricetracker's search
+  is fuzzy — ask for "Umbreon ex 161" and it also offers the VMAX, the promo and
+  last year's Umbreon. The `/graded` route used to fall back to the first result
+  whenever the collector number matched nothing, and promos matched nothing by
+  construction ("SVP 176" against a ledger's "176"), so they always took it.
+  Now a lookup that can't be pinned down to one card returns nothing, and the
+  app checks the answer again before writing it: a body naming a different card
+  is dropped by "Refresh market prices" and the grading scan, reported in their
+  summary line, and named on the card's detail view where you can fix the set or
+  number and pull again. No comps says so; wrong comps doesn't.
 - A "Reset all data" button lives at the bottom of the Overview tab.
 - The app seeds with example data on first run; edit or delete those rows freely.
 - Card search matches substrings of the **card name** and supports multi-word
