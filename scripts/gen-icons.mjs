@@ -4,8 +4,10 @@
 //   node scripts/gen-icons.mjs
 //
 // It used to emit icon-192, icon-512 and apple-touch-icon as well. Those existed
-// for the web app manifest, which went when GitHub Pages did — nothing installs
-// this to a home screen any more. Add them back here if a web host ever returns.
+// for the web app manifest and the home-screen install it enabled. GitHub Pages
+// is back, but that install path is not: the hosted build is the desk half of
+// the app, and the phone runs the real iOS app. Add them back here if the web
+// build is ever meant to be installed to a home screen again.
 import { deflateSync } from "node:zlib";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";

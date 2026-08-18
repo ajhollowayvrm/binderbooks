@@ -987,11 +987,15 @@ export default function App() {
   const reset = useCallback(() => { const fresh = seed(); storage.set(KEY, JSON.stringify(fresh)).catch(() => {}); setState(fresh); }, []);
   if (!state) return <div className="cl-root"><Fonts /><div className="cl-center">Loading your ledger…</div></div>;
 
+  // `__BB_SCAN__` is baked in at build time (vite.config.js): the Scan tab is a
+  // camera feature, so it ships in the phone app and on the dev server, and the
+  // hosted web build leaves it out. Hence a built list rather than a fixed one.
   const TABS = [
     ["dash", "Overview", LayoutDashboard], ["month", "Monthly", CalendarRange],
     ["rips", "Rips", PackageOpen], ["buys", "Buys", ShoppingCart],
     ["sales", "Sales", Tags], ["inv", "Inventory", Archive],
-    ["look", "Lookup", Search], ["snap", "Scan", Camera],
+    ["look", "Lookup", Search],
+    ...(__BB_SCAN__ ? [["snap", "Scan", Camera]] : []),
   ];
 
   return (
@@ -1012,7 +1016,7 @@ export default function App() {
         {tab === "sales" && <Sales state={state} patch={patch} />}
         {tab === "inv" && <Inventory state={state} patch={patch} />}
         {tab === "look" && <Lookup state={state} patch={patch} />}
-        {tab === "snap" && <CardSnap state={state} patch={patch} />}
+        {__BB_SCAN__ && tab === "snap" && <CardSnap state={state} patch={patch} />}
       </main>
     </div>
   );
