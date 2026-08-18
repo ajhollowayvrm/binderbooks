@@ -357,13 +357,18 @@ async function resolveScan(hit, sets, codes) {
   return { card, setName, variant, number: card?.number || printed };
 }
 
-/* PSA comps for the grading-estimate fields: eBay sold averages per grade,
+/* eBay sold comps: averages per graded bucket plus the raw ungraded average,
    proxied through the Lambda (see /graded in aws/index.mjs) so the
-   pokemonpricetracker.com key stays server-side. */
+   pokemonpricetracker.com key stays server-side. `lang` picks which print run
+   is being asked about — "jp" reaches PPT's Japanese catalogue, which is a
+   different card with different sold prices, never a translation of the same
+   listing. */
 const GRADED_KEY = "cardledger:graded:v2"; // v2: entries carry byGrade/raw/image for the card modal
 try { localStorage.removeItem("cardledger:graded:v1"); } catch {}
-async function fetchGradedComps(name, set, number) {
-  const key = `${name}|${set}|${number}`.toLowerCase();
+async function fetchGradedComps(name, set, number, lang = "en") {
+  // English keeps the old key shape, so an existing 24h cache still hits and the
+  // daily PPT budget isn't re-spent on every card the moment this ships
+  const key = `${name}|${set}|${number}`.toLowerCase() + (lang === "jp" ? "|jp" : "");
   const writeCache = (r) => {
     try {
       const all = JSON.parse(localStorage.getItem(GRADED_KEY)) || {};
@@ -382,6 +387,7 @@ async function fetchGradedComps(name, set, number) {
   const qs = new URLSearchParams({ name });
   if (set) qs.set("set", set);
   if (number) qs.set("number", number);
+  if (lang === "jp") qs.set("lang", "jp");
   const r = await fetch(`${SYNC_URL}graded?${qs}`);
   if (!r.ok) {
     // remember "no comps for this card" so auto-pull doesn't re-spend the daily
@@ -430,9 +436,9 @@ function useSetCodes() {
   return codes; // null = loading, {} = unavailable, {...} = loaded
 }
 
-const SOURCES = ["Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "TCGplayer", "eBay", "PSA", "CGC", "BGS", "Other"];
+const SOURCES = ["Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "Whatnot", "TCGplayer", "eBay", "PSA", "CGC", "BGS", "Other"];
 const PRODUCTS = ["Booster Pack", "Booster Bundle", "Booster Box", "Elite Trainer Box", "Collection Box", "Tin", "Blister", "Single Card", "Supplies", "Other"];
-const INV_SOURCES = ["Rip pull", "Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "eBay", "Other"];
+const INV_SOURCES = ["Rip pull", "Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "Whatnot", "eBay", "Other"];
 const CHANNELS = ["TCGplayer", "eBay", "LGS consignment", "In-person", "Other"];
 const BUY_CATS = ["Sealed", "Single", "Lot", "Grading", "Supplies"];
 const INV_STATUS = ["Kept", "At grading", "Listed", "Sold"];
@@ -455,7 +461,17 @@ const DEFAULT_GRADER = "PSA";
 // only ladder the app had. Read every grader through this, never c.grader.
 const cardGrader = (c) => (GRADER_LADDER[c?.grader] ? c.grader : DEFAULT_GRADER);
 const estGrades = (c) => GRADER_LADDER[cardGrader(c)];
-const GRADES = ["Raw", ...GRADERS.flatMap((co) => GRADER_LADDER[co].map((g) => `${co} ${g}`)), "Other"];
+/* GRADER_LADDER is the handful of grades worth *estimating* while a card is
+   still at the graders. A slab you already own is whatever the company actually
+   put on the label, so the Grade picker offers the full scale each one issues —
+   and a grade off this list is a grade the app can't price, which is a different
+   thing from a grade it can't guess. */
+const SLAB_GRADES = {
+  PSA: ["10", "9", "8", "7", "6", "5", "4", "3", "2", "1"],
+  CGC: ["10", "9.5", "9", "8.5", "8", "7.5", "7", "6.5", "6", "5", "4", "3", "2", "1"],
+  BGS: ["10", "9.5", "9", "8.5", "8", "7.5", "7", "6.5", "6", "5", "4", "3", "2", "1"],
+};
+const GRADES = ["Raw", ...GRADERS.flatMap((co) => SLAB_GRADES[co].map((g) => `${co} ${g}`)), "Other"];
 // The /graded route keys every company's sold buckets this way: "cgc9_5", "bgs10", "psa9".
 const bucketKey = (grader, g) => String(grader).toLowerCase() + g.replace(".", "_");
 /* Read one company's ladder out of a /graded body, as { grade: price } for the
@@ -467,6 +483,28 @@ const compGrades = (r, grader) => Object.fromEntries(GRADER_LADDER[grader]
   .filter(([, p]) => p > 0));
 // how many solds each of those prices came from, for the "filled from eBay" note
 const compCount = (r, grader, g) => r?.byGrade?.[bucketKey(grader, g)]?.count ?? (grader === DEFAULT_GRADER ? r?.sales?.[g] : null) ?? null;
+/* A grade off the GRADES list ("CGC 9.5") split back into the company and the
+   number, or null for "Raw"/"Other". That pair names the card's own sold
+   bucket, which is the only honest price for a card already in a slab — what a
+   CGC 9.5 sells for, not what the raw card underneath would fetch. */
+const slabOf = (grade) => {
+  const m = /^(\S+)\s+([\d.]+)$/.exec(String(grade || ""));
+  return m && SLAB_GRADES[m[1]]?.includes(m[2]) ? { grader: m[1], grade: m[2] } : null;
+};
+// that one bucket out of a /graded body: { price, count, median, min, max, trend }
+const slabComp = (r, grade) => { const s = slabOf(grade); return (s && r?.byGrade?.[bucketKey(s.grader, s.grade)]) || null; };
+/* Japanese cards are their own print run with their own market, and both
+   English price sources here — the tcgcsv TCGplayer dump and pokemontcg.io —
+   carry English cards only. Matching a JP card against them finds the English
+   card of the same name and number and prices it as that, which is why a card's
+   language decides which sources are allowed to touch its value. */
+const LANGS = [["en", "English"], ["jp", "Japanese"]];
+const cardLang = (c) => (c?.lang === "jp" ? "jp" : "en");
+const isJP = (c) => cardLang(c) === "jp";
+// English raw singles are the only cards the TCGplayer path can price. Everything
+// else — slabs, Japanese cards, an "Other" grade we can't read — is priced from
+// its own eBay solds, or left alone when there are none.
+const tcgPriceable = (c) => !isJP(c) && (c?.grade || "Raw") === "Raw";
 const stCls = (s) => ({ "Kept": "kept", "At grading": "grading", "Listed": "listed", "Sold": "sold" }[s] || "kept");
 // A card at the graders reads "At CGC", not "At grading" — where it is decides
 // what it is worth, so the list has to show it. The stored status is unchanged,
@@ -550,7 +588,7 @@ function migrate(s) {
   // PSA, because PSA was the only ladder — stamp that, so the ladder it shows
   // stays the ladder its numbers came from
   s.inventory = s.inventory.map((c) => {
-    const d = { status: "Kept", gradingCost: 0, gradingShip: 0, variant: "", grader: "", ...c };
+    const d = { status: "Kept", gradingCost: 0, gradingShip: 0, variant: "", grader: "", lang: "en", ...c };
     if (d.status === "At grading" && !d.grader) d.grader = DEFAULT_GRADER;
     return d;
   });
@@ -593,7 +631,7 @@ const ripPL = (r, buys) => ripValue(r) - ripCostOf(r, buys);
 function addHitToState(s, ripId, hit) {
   const h = { id: uid(), ...hit };
   const rip = s.rips.find((r) => r.id === ripId);
-  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", grade: "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
+  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", lang: "en", grade: "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
   return { rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r)), inventory: [inv, ...(s.inventory || [])] };
 }
 
@@ -603,7 +641,7 @@ function addHitToState(s, ripId, hit) {
    `c.variant` is optional — Lookup results don't carry one and price exactly
    as they always did. */
 const addAsBuy = (c) => (s) => ({ buys: [{ id: uid(), item: `${c.name} ${c.number || ""}`.trim(), category: "Single", source: "Other", cost: cardPrice(c, c.variant) || 0, date: today() }, ...s.buys] });
-const addAsKeep = (c) => (s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", grade: "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, gradingShip: 0, value: cardPrice(c, c.variant) || 0, date: today() }, ...(s.inventory || [])] });
+const addAsKeep = (c) => (s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", lang: "en", grade: "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, gradingShip: 0, value: cardPrice(c, c.variant) || 0, date: today() }, ...(s.inventory || [])] });
 const addAsHit = (c, ripId) => (s) => addHitToState(s, ripId, { name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", value: cardPrice(c, c.variant) || 0 });
 const buyLineSet = (b) => { const s = [...new Set((b?.lines || []).map((l) => l.set).filter(Boolean))]; return s.length === 1 ? s[0] : ""; };
 // which set a rip belongs to: explicit field, else the linked buy's lines,
@@ -1954,18 +1992,26 @@ function Inventory({ state, patch }) {
   // Pull current market prices from pokemontcg.io for every held card we can pin
   // down (name + number, or name + set) — refreshing existing prices too, since they
   // go stale, not just filling blanks. Cards with only a name are skipped (too vague
-  // to match safely). Also backfills a missing set/number from the match. Cards that
-  // use graded estimates (at grading, or already comped) additionally re-pull their
-  // eBay solds for the company they are at — but those draw a limited daily budget,
-  // so we stop once it's gone.
+  // to match safely). Also backfills a missing set/number from the match.
+  //
+  // That path is English raw singles only. A slab is not worth the raw market price
+  // of the card inside it, and a Japanese card is not the English card of the same
+  // name — so both are priced from their own eBay solds instead, a slab at the exact
+  // grade on its label. Cards that use graded estimates (at grading, or already
+  // comped) re-pull their ladder in the same pass. All of that draws a limited daily
+  // budget, so we stop once it's gone.
   const refreshPrices = async () => {
-    const cands = inv.filter((c) => c.status !== "Sold" && c.name && (c.number || c.set));
-    if (!cands.length) { setSyncMsg("Nothing to refresh — held cards need a set or number to match against the database."); return; }
-    setRefreshing(true);
-    setSyncMsg(`Checking ${cands.length} card${cands.length === 1 ? "" : "s"}…`);
+    const held = inv.filter((c) => c.status !== "Sold" && c.name);
+    const cands = held.filter((c) => tcgPriceable(c) && (c.number || c.set));
     const hasEst = (c) => estGrades(c).some((g) => Number(c.gradeEst?.[g]) > 0);
+    // a slab or a JP card needs no set/number — the comps route can search on a name
+    const compCands = held.filter((c) => !tcgPriceable(c) || c.status === "At grading" || hasEst(c));
+    const total = new Set([...cands, ...compCands]).size;
+    if (!total) { setSyncMsg("Nothing to refresh — held cards need a set or number to match against the database."); return; }
+    setRefreshing(true);
+    setSyncMsg(`Checking ${total} card${total === 1 ? "" : "s"}…`);
     const updates = {};
-    let priced = 0, changed = 0, graded = 0, gradedNote = "";
+    let priced = 0, changed = 0, graded = 0, ownComps = 0, gradedNote = "";
     const applyPrice = (c, price) => {
       updates[c.id] = { ...(updates[c.id] || {}), value: price };
       priced++;
@@ -1996,30 +2042,45 @@ function Inventory({ state, patch }) {
         updates[c.id] = { ...updates[c.id], ...(c.set ? {} : { set: m.set?.name || "" }), ...(c.number ? {} : { number: m.number || "" }) };
       }
     }
-    for (const c of cands) {
-      if (!gradedNote && (c.status === "At grading" || hasEst(c))) {
-        try {
-          const r = await fetchGradedComps(c.name, c.set, c.number);
-          // each card comps against its own grader — a CGC card priced off PSA
-          // solds reads roughly double what it is worth
-          const got = compGrades(r, cardGrader(c));
-          if (Object.keys(got).length) {
-            updates[c.id] = { ...(updates[c.id] || {}), gradeEst: { ...(c.gradeEst || {}), ...got } };
-            graded++;
-          }
-        } catch (e) {
-          if (e.status === 429) gradedNote = " · eBay comps budget used up, try the rest tomorrow";
-          else if (e.status === 501) gradedNote = " · eBay graded comps aren't set up";
-          // 404 / transient: just skip graded comps for this card
+    // one /graded pull per card serves both jobs below, and the fetch caches for
+    // 24h, so a card that needs a slab price and a ladder costs one lookup
+    for (const c of compCands) {
+      if (gradedNote) break; // budget gone or route unavailable — the rest would fail the same way
+      let r;
+      try {
+        r = await fetchGradedComps(c.name, c.set, c.number, cardLang(c));
+      } catch (e) {
+        if (e.status === 429) gradedNote = " · eBay comps budget used up, try the rest tomorrow";
+        else if (e.status === 501) gradedNote = " · eBay graded comps aren't set up";
+        continue; // 404 / transient: just skip comps for this card
+      }
+      if (!tcgPriceable(c)) {
+        /* A raw card takes the ungraded sold price; a slab takes the price of its
+           own grade and nothing else. No bucket means nobody has sold one lately,
+           and an unreadable grade ("Other", a company we don't know) means we
+           can't tell what would have sold — both leave the value alone rather
+           than fall back to the raw price, which undercounts every slab it
+           touches. */
+        const b = slabComp(r, c.grade);
+        const v = b ? b.price : c.grade === "Raw" ? r.raw?.price ?? r.market ?? null : null;
+        if (Number(v) > 0) { applyPrice(c, Math.round(Number(v) * 100) / 100); ownComps++; }
+      }
+      if (c.status === "At grading" || hasEst(c)) {
+        // each card comps against its own grader — a CGC card priced off PSA
+        // solds reads roughly double what it is worth
+        const got = compGrades(r, cardGrader(c));
+        if (Object.keys(got).length) {
+          updates[c.id] = { ...(updates[c.id] || {}), gradeEst: { ...(c.gradeEst || {}), ...got } };
+          graded++;
         }
       }
     }
     if (Object.keys(updates).length) patch((s) => ({ inventory: (s.inventory || []).map((c) => (updates[c.id] ? { ...c, ...updates[c.id] } : c)) }));
     setRefreshing(false);
-    const missed = cands.length - priced;
+    const missed = cands.length - (priced - ownComps);
     setSyncMsg(priced || graded
-      ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the database yet` : ""}${gradedNote}.`
-      : `None of those ${cands.length} card${cands.length === 1 ? "" : "s"} are in the database yet — check back later${gradedNote}.`);
+      ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${ownComps ? `, ${ownComps} from their own eBay solds` : ""}${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the database yet` : ""}${gradedNote}.`
+      : `None of those ${total} card${total === 1 ? "" : "s"} are in the database yet — check back later${gradedNote}.`);
   };
   // Grading-candidate scan: pull eBay graded comps for every held raw card at
   // or above a value floor (highest value first, so the budget goes to the
@@ -2047,7 +2108,7 @@ function Inventory({ state, patch }) {
       if (isFresh(c)) continue; // fresh enough from a previous run
       setScanMsg(`Pulling eBay comps… ${i}/${scanCands.length} (${c.name})`);
       try {
-        const r = await fetchGradedComps(c.name, c.set, c.number);
+        const r = await fetchGradedComps(c.name, c.set, c.number, cardLang(c));
         const slim = (k) => (r.byGrade?.[k] ? { p: r.byGrade[k].price, n: r.byGrade[k].count } : null);
         updates[c.id] = { grading: { t: Date.now(), raw: r.raw ? { p: r.raw.price, n: r.raw.count } : null, psa10: slim("psa10"), psa9: slim("psa9"), cgc10: slim("cgc10"), tag10: slim("tag10") } };
         pulled++;
@@ -2087,8 +2148,10 @@ function Inventory({ state, patch }) {
   const [tcgpSel, setTcgpSel] = useState(() => new Set());
   const [tcgpCache, setTcgpCache] = useState(tcgpCacheRead);
   const [tcgpCacheOpen, setTcgpCacheOpen] = useState(false);
+  // TCGplayer's CSV is keyed on English product SKUs, so a JP card would list
+  // against the English printing of the same name — the wrong card, at the wrong price
   const tcgpEligible = inv
-    .filter((c) => c.status === "Kept" && c.grade === "Raw" && c.name && c.set)
+    .filter((c) => c.status === "Kept" && c.grade === "Raw" && !isJP(c) && c.name && c.set)
     .sort((a, b) => (a.set || "").localeCompare(b.set || "") || (a.name || "").localeCompare(b.name || ""));
   const tcgpExcluded = inv.filter((c) => c.status === "Kept" && c.name).length - tcgpEligible.length;
   const toggleTcgp = () => {
@@ -2182,7 +2245,9 @@ function Inventory({ state, patch }) {
     setTcgpCache({});
     setSyncMsg("Cleared all cached set exports.");
   };
-  const gradable = inv.filter((c) => c.status === "Kept");
+  // a card already in someone's slab cannot be sent to a grader — offering it
+  // here is how a CGC 9 ends up logged as a fresh submission with a second fee
+  const gradable = inv.filter((c) => c.status === "Kept" && c.grade === "Raw");
   const live = inv.filter((c) => c.status !== "Sold");
   const val = live.reduce((s, c) => s + (Number(c.value) || 0), 0);
   const basis = live.reduce((s, c) => s + invBasis(c), 0);
@@ -2237,7 +2302,7 @@ function Inventory({ state, patch }) {
             ? <div className="cl-import-msg" style={{ marginTop: 0 }}>No raw Kept cards with a set name to list — the CSV import only takes raw singles, not slabs.</div>
             : <>
               <div className="cl-tcgp-pick-head">
-                <span>{tcgpSel.size} of {tcgpEligible.length} selected{tcgpExcluded ? ` · ${tcgpExcluded} not listable (graded or no set)` : ""}</span>
+                <span>{tcgpSel.size} of {tcgpEligible.length} selected{tcgpExcluded ? ` · ${tcgpExcluded} not listable (graded, Japanese or no set)` : ""}</span>
                 <span>
                   <button className="cl-link" onClick={() => setTcgpSel(new Set(tcgpEligible.map((c) => c.id)))}>All</button>
                   <button className="cl-link" onClick={() => setTcgpSel(new Set())}>None</button>
@@ -2302,7 +2367,7 @@ function Inventory({ state, patch }) {
           ? <InvForm key={c.id} initial={c} onSave={upd} onCancel={() => setEditId(null)} />
           : <div key={c.id} className={"cl-row click" + (c.status === "Sold" ? " sold" : "")} onClick={() => setViewId(c.id)}>
               <span className="holo-dot" />
-              <div className="cl-row-main"><div className="cl-row-title">{c.name}</div><div className="cl-row-meta"><span className={"cl-st " + stCls(c.status)}>{statusLabel(c)}</span><span className="cl-chip">{c.grade}</span>{c.variant && <span className="cl-chip">{VARIANT_SHORT[c.variant] || c.variant}</span>}{c.set ? `${c.set}${c.number ? " · " + c.number : ""} · ` : ""}{c.source}</div></div>
+              <div className="cl-row-main"><div className="cl-row-title">{c.name}</div><div className="cl-row-meta"><span className={"cl-st " + stCls(c.status)}>{statusLabel(c)}</span><span className="cl-chip">{c.grade}</span>{isJP(c) && <span className="cl-chip">JP</span>}{c.variant && <span className="cl-chip">{VARIANT_SHORT[c.variant] || c.variant}</span>}{c.set ? `${c.set}${c.number ? " · " + c.number : ""} · ` : ""}{c.source}</div></div>
               <div className="cl-card-num"><div className="cl-money" style={{ color: "var(--holo2)" }}>{gradeRange(c) ? fmtRange(gradeRange(c)) : fmt(Number(c.value) || 0)}</div>{invBasis(c) ? <div className="cl-row-meta">basis {fmt(invBasis(c))}</div> : null}</div>
               <button className="cl-x" onClick={(e) => { e.stopPropagation(); setEditId(c.id); setAdding(false); }}><Pencil size={13} /></button>
               <button className="cl-x" onClick={(e) => { e.stopPropagation(); del(c.id); }}><Trash2 size={13} /></button>
@@ -2371,9 +2436,11 @@ function GradingForm({ cards, onSend, onCancel }) {
 function InvForm({ initial, onSave, onCancel }) {
   const estStr = (e, grader) => Object.fromEntries(GRADER_LADDER[grader].map((g) => [g, numStr(e?.[g])]));
   const [f, setF] = useState(initial
-    ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", grade: initial.grade || "Raw", status: initial.status || "Kept", grader: cardGrader(initial), source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), gradingShip: numStr(initial.gradingShip), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst, cardGrader(initial)), date: initial.date || today() }
-    : { name: "", set: "", number: "", variant: "", grade: "Raw", status: "Kept", grader: DEFAULT_GRADER, source: "Rip pull", cost: "", gradingCost: "", gradingShip: "", value: "", gradeEst: estStr(null, DEFAULT_GRADER), date: today() });
+    ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", lang: cardLang(initial), grade: initial.grade || "Raw", status: initial.status || "Kept", grader: cardGrader(initial), source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), gradingShip: numStr(initial.gradingShip), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst, cardGrader(initial)), date: initial.date || today() }
+    : { name: "", set: "", number: "", variant: "", lang: "en", grade: "Raw", status: "Kept", grader: DEFAULT_GRADER, source: "Rip pull", cost: "", gradingCost: "", gradingShip: "", value: "", gradeEst: estStr(null, DEFAULT_GRADER), date: today() });
   const [comps, setComps] = useState("");
+  const [slabMsg, setSlabMsg] = useState("");
+  const slab = slabOf(f.grade);
   const ladder = GRADER_LADDER[f.grader] || GRADER_LADDER[DEFAULT_GRADER];
   // Switching grader empties the estimates on purpose. They were the other
   // company's sold prices, and carrying them over is the exact mistake this
@@ -2399,6 +2466,27 @@ function InvForm({ initial, onSave, onCancel }) {
         : "Comps unavailable right now — fill the values in manually.");
     }
   };
+  /* A card already in a slab has one honest market value: what that slab sells
+     for. This reads the bucket for the exact grade on the label — never a
+     neighbouring grade, and never the raw price, which is what the card would
+     be worth cracked out. */
+  const pullSlab = async () => {
+    if (slabMsg === "loading" || !slab) return;
+    setSlabMsg("loading");
+    try {
+      const r = await fetchGradedComps(f.name, f.set, f.number, f.lang);
+      const b = slabComp(r, f.grade);
+      if (!b) { setSlabMsg(`No recent ${f.grade} sales found for this card — the other grades it did sell in are on the card's detail view. Fill the value in manually.`); return; }
+      setF((x) => ({ ...x, value: String(b.price) }));
+      const spread = b.min != null && b.max != null && b.min !== b.max ? `, ${fmt(b.min)} – ${fmt(b.max)}` : "";
+      setSlabMsg(`${f.grade} · ${fmt(b.price)} from ${b.count} eBay sold${b.count === 1 ? "" : "s"}${spread}.`);
+    } catch (e) {
+      setSlabMsg(e.status === 501 ? "Not set up yet — the sync Lambda needs a pokemonpricetracker.com API key (see aws/deploy.ps1)."
+        : e.status === 429 ? "Daily eBay-comps budget is used up — try again tomorrow, or fill the value in manually."
+        : e.status === 404 ? "No recent sales found for this card — fill the value in manually."
+        : "Comps unavailable right now — fill the value in manually.");
+    }
+  };
   // comps are pulled only on the "Pull eBay comps" button below — auto-pull
   // burned through pokemonpricetracker.com's daily credit budget too fast.
   return (
@@ -2408,8 +2496,10 @@ function InvForm({ initial, onSave, onCancel }) {
       {/* "Printing" is what TCGplayer calls it on the listing form; the field
           is `variant` in the ledger. Raw select rather than <Select> so the
           unset option can carry a label instead of rendering blank. */}
-      <div className="cl-grid2"><Field label="Printing"><select className="cl-in" value={f.variant} onChange={(e) => setF({ ...f, variant: e.target.value })}><option value="">— not set —</option>{VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}</select></Field><Field label="Grade"><Select opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field></div>
-      <div className="cl-grid2"><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => setF({ ...f, status: v })} /></Field><Field label="Source"><Select opts={INV_SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field></div>
+      <div className="cl-grid2"><Field label="Language"><select className="cl-in" value={f.lang} onChange={(e) => setF({ ...f, lang: e.target.value })}>{LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field><Field label="Printing"><select className="cl-in" value={f.variant} onChange={(e) => setF({ ...f, variant: e.target.value })}><option value="">— not set —</option>{VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}</select></Field></div>
+      {f.lang === "jp" && <div className="cl-gradeest-note">Japanese cards are priced from their own eBay solds. “Refresh market prices” leaves them out of the English TCGplayer data, so a JP card can never pick up the price of the English card with the same name and number.</div>}
+      <div className="cl-grid2"><Field label="Grade"><Select opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => setF({ ...f, status: v })} /></Field></div>
+      <Field label="Source"><Select opts={INV_SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field>
       {f.status === "At grading" && <>
         {/* Where the card is decides what it is worth — the same card sells for
             very different money in a PSA slab and a CGC one, so the estimates
@@ -2422,13 +2512,17 @@ function InvForm({ initial, onSave, onCancel }) {
         </div>
       </>}
       <div className="cl-grid2"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} /></Field></div>
+      {slab && <div className="cl-field">
+        <div className="cl-gradeest-head"><span>Value it at what a {f.grade} slab sells for</span><button className="cl-link" disabled={!f.name || slabMsg === "loading"} onClick={pullSlab}>{slabMsg === "loading" ? "Pulling…" : "Pull slab price"}</button></div>
+        {slabMsg && <div className="cl-gradeest-note">{slabMsg === "loading" ? `Pulling eBay ${f.grade} sold comps…` : slabMsg}</div>}
+      </div>}
       {/* Both grading costs count toward the basis. "Send cards to grading" fills
           them in for a whole submission; these fields correct one card. */}
       <div className="cl-grid2"><Field label="Grading cost"><MoneyInput value={f.gradingCost} onChange={(v) => setF({ ...f, gradingCost: v })} /></Field><Field label="Grading shipping"><MoneyInput value={f.gradingShip} onChange={(v) => setF({ ...f, gradingShip: v })} /></Field></div>
       <div className="cl-net-preview"><span>True basis</span><span className="cl-money out">{fmt((Number(f.cost) || 0) + (Number(f.gradingCost) || 0) + (Number(f.gradingShip) || 0))}</span></div>
       {/* gradeEst is written on the saved card's ladder only, so a card that
           moved graders can never keep a stale grade from the old scale */}
-      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, variant: f.variant, grade: f.grade, status: f.status, grader: f.grader, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, gradingShip: Number(f.gradingShip) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(ladder.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
+      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, variant: f.variant, lang: f.lang, grade: f.grade, status: f.status, grader: f.grader, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, gradingShip: Number(f.gradingShip) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(ladder.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
     </Form>
   );
 }
@@ -2459,14 +2553,18 @@ function CardModal({ card, onClose, onEdit, onValue }) {
     let ok = true;
     setMatch(null); setLive(null); setComps({ state: "loading" });
     // three independent sources, fired together — each fills its slot as it
-    // lands (the first market value to arrive wins; the rest keep theirs)
+    // lands (the first market value to arrive wins; the rest keep theirs).
+    // Two of the three are English-only databases, so a Japanese card takes
+    // neither: it would match the English card of the same name and show its
+    // image, its set and its price. PPT's own record fills all three instead.
     (async () => {
-      if (!card.set || !card.number) return;
+      if (isJP(card) || !card.set || !card.number) return;
       const m = await fetchSetPrices(card.set);
       const v = subPrice(m?.[normNum(card.number)], card.variant);
       if (ok && v != null) setLive((p) => (p != null ? p : v));
     })();
     (async () => {
+      if (isJP(card)) { setMatch(false); return; }
       const hit = await lookupCardMatch(card);
       if (!ok) return;
       setMatch(hit || false);
@@ -2480,7 +2578,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
       if (ok && v != null) setLive((p) => (p != null ? p : v));
     })();
     (async () => {
-      try { const r = await fetchGradedComps(card.name, card.set, card.number); if (ok) setComps({ state: "ok", data: r }); }
+      try { const r = await fetchGradedComps(card.name, card.set, card.number, cardLang(card)); if (ok) setComps({ state: "ok", data: r }); }
       catch (e) { if (ok) setComps({ state: "err", status: e.status || 0 }); }
     })();
     return () => { ok = false; };
@@ -2500,6 +2598,17 @@ function CardModal({ card, onClose, onEdit, onValue }) {
   const basis = invBasis(card);
   const unreal = value - basis;
   const rarity = match?.rarity || data?.rarity || "";
+  /* What this card is worth, and it is not always the TCGplayer market price.
+     A card in a slab is worth what that slab sells for, so it reads its own
+     grade's sold bucket — and if no one has sold one lately there is no honest
+     number to offer, which is a better answer than the raw price of the card
+     sealed inside it. */
+  const slabbed = !!slabOf(card.grade);
+  const slabB = slabComp(data, card.grade);
+  const headline = slabB ? { v: slabB.price, lab: `${card.grade} · ${slabB.count} eBay sold${slabB.count === 1 ? "" : "s"}` }
+    : slabbed ? null
+    : market != null ? { v: market, lab: `TCGplayer market${card.variant ? ` · ${card.variant}` : ""}` }
+    : null;
   const held = card.date ? Math.max(0, Math.round((Date.now() - new Date(card.date + "T12:00:00").getTime()) / 864e5)) : null;
   const shownKeys = new Set(CM_COMPANIES.flatMap(([co]) => CM_GRADES.map((g) => bucketKey(co, g))));
   const extras = Object.entries(data?.byGrade || {})
@@ -2514,7 +2623,9 @@ function CardModal({ card, onClose, onEdit, onValue }) {
   const grader = cardGrader(card);
   const ests = estGrades(card).filter((g) => Number(card.gradeEst?.[g]) > 0);
   const tcgpUrl = data?.url || `https://www.tcgplayer.com/search/pokemon/product?q=${encodeURIComponent(`${card.name} ${card.number || ""}`.trim())}`;
-  const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(`pokemon ${card.name} ${card.number || ""}`.trim())}&LH_Sold=1&LH_Complete=1`;
+  // the search that finds this exact card: a slab's grade and a JP printing both
+  // pull a different set of listings, so both belong in the terms
+  const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(`pokemon ${isJP(card) ? "japanese " : ""}${card.name} ${card.number || ""} ${slabbed ? card.grade : ""}`.replace(/\s+/g, " ").trim())}&LH_Sold=1&LH_Complete=1`;
   const rawMeta = data?.raw ? [
     `${data.raw.count} sale${data.raw.count === 1 ? "" : "s"}`,
     data.raw.median != null ? `median ${fmt(data.raw.median)}` : null,
@@ -2532,16 +2643,19 @@ function CardModal({ card, onClose, onEdit, onValue }) {
           <div className="cl-cm-head">
             <div className="cl-cm-name">{card.name}</div>
             <div className="cl-row-meta">{card.set || match?.set?.name || data?.set || "set unknown"}{(card.number || match?.number || data?.number) ? ` · ${card.number || match?.number || data?.number}` : ""}{rarity ? ` · ${rarity}` : ""}</div>
-            <div className="cl-row-meta"><span className={"cl-st " + stCls(card.status)}>{statusLabel(card)}</span><span className="cl-chip">{card.grade}</span>{card.variant && <span className="cl-chip">{VARIANT_SHORT[card.variant] || card.variant}</span>}</div>
+            <div className="cl-row-meta"><span className={"cl-st " + stCls(card.status)}>{statusLabel(card)}</span><span className="cl-chip">{card.grade}</span>{isJP(card) && <span className="cl-chip">JP</span>}{card.variant && <span className="cl-chip">{VARIANT_SHORT[card.variant] || card.variant}</span>}</div>
             <div className="cl-cm-mkt">
-              <div className="cl-cm-mkt-num">{market != null ? fmt(market) : "—"}</div>
-              {/* name the printing this price is for — the button below writes
-                  it into the ledger, and silently applying a normal price to a
-                  reverse holo is exactly what the variant field exists to stop */}
-              <div className="cl-cm-mkt-lab">TCGplayer market{card.variant ? ` · ${card.variant}` : ""}{market == null ? " — no data" : ""}</div>
+              <div className="cl-cm-mkt-num">{headline ? fmt(headline.v) : "—"}</div>
+              {/* name what this price is for — the button below writes it into
+                  the ledger, and silently applying a normal price to a reverse
+                  holo, or a raw price to a slab, is exactly what the variant and
+                  grade fields exist to stop */}
+              <div className="cl-cm-mkt-lab">{headline ? headline.lab
+                : slabbed ? `${card.grade} — no recent solds`
+                : `TCGplayer market${card.variant ? ` · ${card.variant}` : ""} — no data`}</div>
             </div>
-            {market != null && Math.abs(market - value) > 0.005 && card.status !== "Sold" &&
-              <button className="cl-mini cl-cm-apply" onClick={() => onValue(Math.round(market * 100) / 100)}>Set ledger value to {fmt(market)}</button>}
+            {headline && Math.abs(headline.v - value) > 0.005 && card.status !== "Sold" &&
+              <button className="cl-mini cl-cm-apply" onClick={() => onValue(Math.round(headline.v * 100) / 100)}>Set ledger value to {fmt(headline.v)}</button>}
           </div>
         </div>
 

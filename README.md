@@ -155,6 +155,28 @@ Two standalone helpers that don't need the app running:
   each card from its own grader's solds. Changing a card's grader clears its
   estimates, because they were the other company's prices. Cards sent before
   this field existed are read as PSA, which is what their numbers already were.
+- **Slabs you bought already graded:** set the card's `grade` to the grade on
+  the label and leave the status on *Kept* — *At grading* is for a card in
+  transit, and swaps the card's value for a range across the whole ladder.
+  Leave grading cost and shipping at 0 too: you paid for a slab, not for a
+  submission, so the grading is already in what the card cost you. A slab is
+  never valued off the raw TCGplayer price of the card sealed inside it —
+  *Pull slab price* on the card's form, the card's detail view, and *Refresh
+  market prices* all read the eBay solds for that exact grade, and leave the
+  value alone when nobody has sold one lately rather than fall back to a
+  neighbouring grade. The grade picker carries each company's full scale for
+  this; the shorter ladder in the note above is only what's worth *estimating*
+  for a card still at the graders.
+- **Japanese cards:** inventory cards carry a `lang` (English / Japanese). A JP
+  card is a different print run with its own market, and both English price
+  sources — the tcgcsv TCGplayer dump and pokemontcg.io — carry English cards
+  only, so matching a JP card against them finds the English card of the same
+  name and number and prices it as that. Setting the language keeps a JP card
+  out of those sources entirely: it prices from its own eBay solds through
+  pokemonpricetracker.com's Japanese catalogue instead, its detail view shows
+  the JP card's own image and set rather than the English one's, and it is left
+  out of the TCGplayer bulk-listing CSV, which is keyed on English SKUs. Cards
+  from before this field existed read as English.
 - A "Reset all data" button lives at the bottom of the Overview tab.
 - The app seeds with example data on first run; edit or delete those rows freely.
 - Card search matches substrings of the **card name** and supports multi-word

@@ -129,10 +129,12 @@ async function setCatalog(setName) {
   return { set: setName, group: d.group, cards: d.products.map((p) => ({ name: p.name, num: p.num, rarity: p.rarity, market: p.market, subs: p.subs })) };
 }
 
-/* GET /graded?name=<card>&number=<num>&set=<set> — eBay-sold comps for PSA
-   grades from pokemonpricetracker.com (Bearer key in PPT_KEY env var; free
-   tier is 100 credits/day and a 5-card lookup with eBay data costs 10, so
-   results are cached hard). Returns { card, set, number, market, grades }
+/* GET /graded?name=<card>&number=<num>&set=<set>&lang=<en|jp> — eBay-sold comps
+   for PSA grades from pokemonpricetracker.com (Bearer key in PPT_KEY env var;
+   free tier is 100 credits/day and a 5-card lookup with eBay data costs 10, so
+   results are cached hard). `lang=jp` asks PPT's Japanese catalogue, which is a
+   separate card with separate sold prices — not a translation of the English
+   one. Returns { card, set, number, market, grades }
    where grades is { "10": avg, "9": avg, ... } for whatever grades have
    recorded sales, plus the card-detail extras the app's card modal shows:
    byGrade (every company+grade bucket, e.g. "cgc9_5"), raw (ungraded solds),
@@ -147,14 +149,18 @@ const slimBucket = (e) => {
   const r2 = (n) => (Number(n) > 0 ? Math.round(Number(n) * 100) / 100 : null);
   return { price: r2(v), count: Number(e.count) || 0, median: r2(e.medianPrice), min: r2(e.minPrice), max: r2(e.maxPrice), trend: e.marketTrend || null };
 };
-async function gradedPrices(name, number, set) {
-  const key = `${name}|${number}|${set}`.toLowerCase();
+async function gradedPrices(name, number, set, lang = "en") {
+  const jp = lang === "jp";
+  // the language is part of the identity of the card, so it is part of the key —
+  // an English and a Japanese Umbreon are two cards with two sets of solds
+  const key = `${name}|${number}|${set}|${lang}`.toLowerCase();
   const hit = gradedCache.get(key);
   if (hit && Date.now() - hit.t < GRADED_TTL) return hit.body;
   const ppt = async (params) => {
     const u = new URL("https://www.pokemonpricetracker.com/api/v2/cards");
     for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
     u.searchParams.set("includeEbay", "true");
+    if (jp) u.searchParams.set("language", "japanese");
     const r = await fetch(u, { headers: { authorization: `Bearer ${process.env.PPT_KEY}` } });
     if (!r.ok) { const e = new Error(`ppt HTTP ${r.status}`); e.status = r.status; throw e; }
     const data = await r.json();
@@ -166,9 +172,11 @@ async function gradedPrices(name, number, set) {
   // cheapest path first: resolve the card to its TCGplayer product id via the
   // set dump we already cache, then ask PPT for exactly that card — 2 credits
   // (one card with eBay data) instead of a 3-candidate name search's 6, and
-  // no chance of comps from the wrong printing
+  // no chance of comps from the wrong printing. That dump is TCGplayer's English
+  // catalogue, so it can only resolve English products: a JP card skips straight
+  // to the name search, which PPT scopes by the language param above.
   let cards = [];
-  if (set && number) {
+  if (!jp && set && number) {
     let tcgpId = null;
     try {
       const d = await setData(set);
@@ -356,10 +364,10 @@ export const handler = async (event) => {
   // also public market data, same deal as /prices
   if (method === "GET" && event.rawPath?.endsWith("/graded")) {
     if (!process.env.PPT_KEY) return res(501, { error: "graded prices not configured" });
-    const { name, number, set } = event.queryStringParameters || {};
+    const { name, number, set, lang } = event.queryStringParameters || {};
     if (!name) return res(400, { error: "name required" });
     try {
-      const body = await gradedPrices(name, number || "", set || "");
+      const body = await gradedPrices(name, number || "", set || "", lang === "jp" ? "jp" : "en");
       // any sales signal counts — a card with only CGC/TAG or raw solds is
       // still worth returning even when no PSA grade has data
       const hasData = body && (Object.keys(body.grades).length || Object.keys(body.byGrade).length || body.raw);
