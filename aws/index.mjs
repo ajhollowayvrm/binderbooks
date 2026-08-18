@@ -129,10 +129,12 @@ async function setCatalog(setName) {
   return { set: setName, group: d.group, cards: d.products.map((p) => ({ name: p.name, num: p.num, rarity: p.rarity, market: p.market, subs: p.subs })) };
 }
 
-/* GET /graded?name=<card>&number=<num>&set=<set> — eBay-sold comps for PSA
-   grades from pokemonpricetracker.com (Bearer key in PPT_KEY env var; free
-   tier is 100 credits/day and a 5-card lookup with eBay data costs 10, so
-   results are cached hard). Returns { card, set, number, market, grades }
+/* GET /graded?name=<card>&number=<num>&set=<set>&lang=<en|jp> — eBay-sold comps
+   for PSA grades from pokemonpricetracker.com (Bearer key in PPT_KEY env var;
+   free tier is 100 credits/day and a 5-card lookup with eBay data costs 10, so
+   results are cached hard). `lang=jp` asks PPT's Japanese catalogue, which is a
+   separate card with separate sold prices — not a translation of the English
+   one. Returns { card, set, number, market, grades }
    where grades is { "10": avg, "9": avg, ... } for whatever grades have
    recorded sales, plus the card-detail extras the app's card modal shows:
    byGrade (every company+grade bucket, e.g. "cgc9_5"), raw (ungraded solds),
@@ -147,14 +149,18 @@ const slimBucket = (e) => {
   const r2 = (n) => (Number(n) > 0 ? Math.round(Number(n) * 100) / 100 : null);
   return { price: r2(v), count: Number(e.count) || 0, median: r2(e.medianPrice), min: r2(e.minPrice), max: r2(e.maxPrice), trend: e.marketTrend || null };
 };
-async function gradedPrices(name, number, set) {
-  const key = `${name}|${number}|${set}`.toLowerCase();
+async function gradedPrices(name, number, set, lang = "en") {
+  const jp = lang === "jp";
+  // the language is part of the identity of the card, so it is part of the key —
+  // an English and a Japanese Umbreon are two cards with two sets of solds
+  const key = `${name}|${number}|${set}|${lang}`.toLowerCase();
   const hit = gradedCache.get(key);
   if (hit && Date.now() - hit.t < GRADED_TTL) return hit.body;
   const ppt = async (params) => {
     const u = new URL("https://www.pokemonpricetracker.com/api/v2/cards");
     for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
     u.searchParams.set("includeEbay", "true");
+    if (jp) u.searchParams.set("language", "japanese");
     const r = await fetch(u, { headers: { authorization: `Bearer ${process.env.PPT_KEY}` } });
     if (!r.ok) { const e = new Error(`ppt HTTP ${r.status}`); e.status = r.status; throw e; }
     const data = await r.json();
@@ -166,9 +172,11 @@ async function gradedPrices(name, number, set) {
   // cheapest path first: resolve the card to its TCGplayer product id via the
   // set dump we already cache, then ask PPT for exactly that card — 2 credits
   // (one card with eBay data) instead of a 3-candidate name search's 6, and
-  // no chance of comps from the wrong printing
-  let cards = [];
-  if (set && number) {
+  // no chance of comps from the wrong printing. That dump is TCGplayer's English
+  // catalogue, so it can only resolve English products: a JP card skips straight
+  // to the name search, which PPT scopes by the language param above.
+  let cards = [], byId = false;
+  if (!jp && set && number) {
     let tcgpId = null;
     try {
       const d = await setData(set);
@@ -183,6 +191,7 @@ async function gradedPrices(name, number, set) {
       const got = await ppt({ tcgPlayerId: String(tcgpId) });
       // trust but verify: if PPT ever ignores the filter, don't accept arbitrary cards
       cards = got.filter((c) => String(c.tcgPlayerId ?? "") === String(tcgpId));
+      byId = cards.length > 0;
       // a shape/field mismatch here silently triples the lookup cost — make it visible
       if (!cards.length) console.log(`graded: id lookup ${tcgpId} unusable, falling back to name search:`, JSON.stringify(got).slice(0, 300));
     }
@@ -194,9 +203,35 @@ async function gradedPrices(name, number, set) {
     // a set name PPT doesn't recognize shouldn't sink the lookup
     if (!cards.length && set) cards = await ppt({ search: name, limit: "3" });
   }
-  const cardNum = (c) => normNum(c.number ?? c.cardNumber ?? "");
-  const want = number ? normNum(number) : null;
-  const match = (want && cards.find((c) => cardNum(c) === want)) || cards[0];
+  /* Which of the search results is actually the card we were asked about.
+     PPT's `search` is fuzzy by design: ask for "Umbreon ex 161" and it also
+     offers the VMAX, the promo and last year's Umbreon. This used to end
+     `|| cards[0]`, so any lookup whose number didn't match took the first
+     result — and the caller writes that straight onto a ledger card's value.
+     Comps for a different card are worse than no comps at all, because no
+     comps says so and wrong comps doesn't. So nothing is returned unless it
+     can be pinned down. */
+  // "SVP 176" against a ledger's "176": compare the last token. normNum alone
+  // never matched a promo, which is why promos always fell through to cards[0].
+  const numTail = (x) => normNum(String(x ?? "").trim().split(/\s+/).pop() || "");
+  const alnum = (x) => String(x ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const setOf = (c) => c.setName ?? c.set?.name ?? (typeof c.set === "string" ? c.set : "");
+  const near = (a, b) => a && b && (a === b || a.startsWith(b) || b.startsWith(a));
+  let match;
+  if (byId) {
+    match = cards[0]; // resolved through the TCGplayer product id — already exact
+  } else {
+    // narrow by name, then by set, keeping the wider pool when a filter empties it
+    const named = cards.filter((c) => near(alnum(c.name), alnum(name)));
+    let pool = named.length ? named : cards;
+    if (set) { const inSet = pool.filter((c) => near(alnum(setOf(c)), alnum(set))); if (inSet.length) pool = inSet; }
+    // the number is the card's identity: given one, only that card will do.
+    // Without one, only an unambiguous single candidate is safe to accept.
+    const want = number ? numTail(number) : null;
+    match = want ? pool.find((c) => numTail(c.number ?? c.cardNumber) === want) || null
+      : pool.length === 1 ? pool[0] : null;
+    if (!match) console.log(`graded: no confident match for "${name}" ${number || "(no number)"} ${set || ""} — ${cards.length} candidate(s):`, cards.map((c) => `${c.name} ${c.number ?? c.cardNumber ?? "?"}`).join(" | "));
+  }
   if (!match) return null;
   // salesByGrade.psaN: smartMarketPrice is their recency-filtered market
   // price; raw averages skew low because they include months-old sales
@@ -244,9 +279,11 @@ const MAX_IMAGE_B64 = 5 * 1024 * 1024; // Lambda caps the whole request at 6MB
 const MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const IDENTIFY_SYSTEM = `You identify Pokémon trading cards from photographs for a collector's inventory app.
 
-Report only what is actually visible on the card. Never infer a collector number or a set from the card's name.
+The card may be loose or sealed in a grading company's slab. A slab is a rigid plastic case with a printed label along the top carrying the company's name, a grade, and usually a certification number; read that label as well as the card inside it.
 
-- name: the card name exactly as printed, without the set, the number, or any variant wording.
+Report only what is actually visible. Never infer a collector number or a set from the card's name.
+
+- name: the card name exactly as printed, without the set, the number, or any variant wording. Give the English name when the card is Japanese and you recognise the Pokémon; report the printed Japanese name only if you cannot.
 - number: the collector number exactly as printed, including the denominator when one is shown ("095/086", "TG12/TG30", "SV107"). null if unreadable.
 - setName: the full English expansion name, if you recognise it. null otherwise.
 - setCode: the short expansion code printed beside the collector number or in a bottom corner ("ME4", "PRE", "SVI"). null if not visible. Do not derive it from the set name.
@@ -256,6 +293,9 @@ Report only what is actually visible on the card. Never infer a collector number
     * "Normal" - no foil anywhere.
     * "Unknown" - the photograph doesn't show enough to tell.
   Full-art, illustration-rare and secret-rare cards have no reverse printing; report those as "Holofoil".
+- language: "japanese" when the card's own text is in Japanese, "english" when it is in English, "unknown" when the photograph doesn't show enough text to tell. Judge this from the card, not from the slab label, which is in English either way.
+- grader: the grading company named on the slab label - "PSA", "CGC", "BGS", or the name as printed for any other company. null when the card is not in a slab.
+- grade: the numeric grade printed on that label, as a string ("10", "9.5"). Report the number alone, without the company or the adjective beside it, so a "GEM MT 10" is "10" and a "CGC Pristine 10" is "10". null when the card is not in a slab, or when the label is not legible.
 - confidence: "high" only when the name and the number are both plainly legible.
 - notes: one short sentence, only when something is ambiguous or unreadable. null otherwise.`;
 const IDENTIFY_SCHEMA = {
@@ -265,13 +305,18 @@ const IDENTIFY_SCHEMA = {
       type: "array",
       items: {
         type: "object", additionalProperties: false,
-        required: ["name", "number", "setName", "setCode", "variant", "confidence", "notes"],
+        required: ["name", "number", "setName", "setCode", "variant", "language", "grader", "grade", "confidence", "notes"],
         properties: {
           name: { type: "string" },
           number: { type: ["string", "null"] },
           setName: { type: ["string", "null"] },
           setCode: { type: ["string", "null"] },
           variant: { type: "string", enum: ["Normal", "Holofoil", "Reverse Holofoil", "Unknown"] },
+          language: { type: "string", enum: ["english", "japanese", "unknown"] },
+          // the company is a free string so an SGC or an ACE slab still reports
+          // what it says; the app maps the ones it knows and shows the rest
+          grader: { type: ["string", "null"] },
+          grade: { type: ["string", "null"] },
           confidence: { type: "string", enum: ["high", "medium", "low"] },
           notes: { type: ["string", "null"] },
         },
@@ -356,10 +401,10 @@ export const handler = async (event) => {
   // also public market data, same deal as /prices
   if (method === "GET" && event.rawPath?.endsWith("/graded")) {
     if (!process.env.PPT_KEY) return res(501, { error: "graded prices not configured" });
-    const { name, number, set } = event.queryStringParameters || {};
+    const { name, number, set, lang } = event.queryStringParameters || {};
     if (!name) return res(400, { error: "name required" });
     try {
-      const body = await gradedPrices(name, number || "", set || "");
+      const body = await gradedPrices(name, number || "", set || "", lang === "jp" ? "jp" : "en");
       // any sales signal counts — a card with only CGC/TAG or raw solds is
       // still worth returning even when no PSA grade has data
       const hasData = body && (Object.keys(body.grades).length || Object.keys(body.byGrade).length || body.raw);
