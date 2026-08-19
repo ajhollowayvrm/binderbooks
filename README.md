@@ -160,20 +160,52 @@ Two standalone helpers that don't need the app running:
   setting it changes what "Refresh market prices" writes and which SKU the
   TCGplayer upload CSV picks. Cards from before this field existed are left
   unset and price exactly as they did before.
-- **TCGplayer bulk listing:** the Inventory tab can build a staged-upload CSV.
-  The first time you list from a set, add its export from the TCGplayer Seller
-  Portal (Pricing → Export Filtered CSV with out-of-stock rows included, or a
-  Live Inventory export — those exports carry the per-condition SKU in
-  "TCGplayer Id", which is what the importer matches on). BinderBooks caches
-  the SKU rows for that set on the device, so later runs are just tick the
-  cards and *Export CSV* — no file picker. Before you export it tells you
-  which selected cards' sets aren't cached yet. It fills Add to Quantity and
-  TCG Marketplace Price for every raw Kept card it can match, downloads
-  `TCGP-Staged-Upload-<date>.csv`, and offers to flip the exported cards to
-  Listed. Upload it via Seller Portal → Inventory → Import to Staged. Cached
-  exports are listed (with age and size) under *Cached set exports* in the
-  same panel, where you can refresh or clear them; they're per-device and
-  never synced.
+- **The catalog is TCGplayer's, not ours:** BinderBooks used to describe a card
+  as a name plus a set plus a number, then guess which TCGplayer SKU that meant
+  when it built an upload. That guess cannot express a Prize Pack stamp or a
+  Master Ball pattern, because TCGplayer files those as separate *products*
+  rather than as attributes of one — `Air Balloon - 079/086 (Cosmos Holo)` and
+  `Fezandipiti (Master Ball Pattern)` each have their own id. So the app stores
+  TCGplayer's own rows instead. Import a **Pricing Custom Export** (Seller
+  Portal → Pricing → Export Filtered CSV, out-of-stock rows included) under
+  *Inventory → Upload to TCGplayer*. That file is the same 16 columns the
+  upload takes, so download and upload share one schema and nothing is mapped
+  between them. Three facts about it drive the rest:
+  - **`TCGplayer Id` is text, not a number.** Catalog SKUs are numeric, but the
+    seller's own graded listings are prefixed `C-`. They import, they carry a
+    title and a photo, and they are flagged so nothing ever adds quantity to
+    one — a `C-` row is a single slab, and listing two of it would sell the
+    same card twice.
+  - **Set plus number is not unique.** In ME: Ascended Heroes, number `091/217`
+    is three different products. The search shows the full product name,
+    parenthetical and all, because that parenthetical is the only difference.
+  - **`Condition` holds two things.** "Near Mint Reverse Holofoil" is a grade
+    and a printing in one field. Import splits it; the upload puts it back.
+    Only Near Mint is kept — the seller rips what he sells, so stock is
+    pack-fresh.
+
+  The catalog lives in IndexedDB on the device. It never syncs (the ledger is
+  one DynamoDB item with a 400 KB cap, and a catalog is tens of MB), importing
+  the same file twice changes nothing, and a product missing from a later
+  export is never deleted — it just was not in that pull. Re-import to refresh
+  prices; they anchor the manual pricing pass and are not history.
+- **Entering a card from the catalog:** the Lookup tab's top panel is the fast
+  path for a stack. Pick the set once — it sticks, because a stack is nearly
+  always one set — then type the collector number or a few letters of the name.
+  It answers offline while you type. Tap *+ Buy*, *+ Keep* or *+ Hit* and the
+  card enters already carrying that exact SKU and printing; there is nothing to
+  confirm afterwards. The panel is absent until a catalog is imported.
+- **TCGplayer bulk listing:** the Inventory tab builds the staged-upload CSV.
+  A card entered from the catalog knows its SKU, so it needs no matching at
+  all. A card that predates the catalog still goes through the old name
+  matcher, which now reads the catalog rather than a second cache — so nothing
+  in an existing ledger has to be re-entered. `Add to Quantity` carries the
+  count and `Total Quantity` is left blank, which is what stops an upload
+  zeroing out live inventory; copies of one SKU merge into a single row with
+  the quantity added up. `TCG Marketplace Price` comes from the card's own
+  value in the ledger, not from market — pricing stays manual. It downloads
+  `TCGP-Staged-Upload-<date>.csv` and offers to flip the exported cards to
+  Listed. Upload it via Seller Portal → Inventory → Import to Staged.
 - **Where a card is graded:** a card at the graders carries a `grader` (PSA /
   CGC / BGS), set by *Send cards to grading* or on the card's own form. It
   decides which sold prices value the card, because the same card is worth very

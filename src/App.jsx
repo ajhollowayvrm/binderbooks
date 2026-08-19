@@ -3,8 +3,12 @@ import Papa from "papaparse";
 import {
   LayoutDashboard, PackageOpen, ShoppingCart, Tags, Search, Archive,
   Plus, Trash2, Pencil, ChevronDown, ChevronRight, Sparkles, Upload, X,
-  CalendarRange, ChevronLeft, RefreshCw, ExternalLink, Camera,
+  CalendarRange, ChevronLeft, RefreshCw, ExternalLink, Camera, Library,
 } from "lucide-react";
+import {
+  CSV_COLUMNS, importCatalogFile, catalogSets, catalogStats, searchCatalog,
+  getCatalogRecords, catalogRowsForSets, recordToRow, clearCatalog,
+} from "./catalog.js";
 
 /* ------------------------------------------------------------------ */
 /* hosted-app glue: localStorage persistence + optional API key       */
@@ -615,8 +619,11 @@ function migrate(s) {
   // a card already at the graders before `grader` existed was estimated against
   // PSA, because PSA was the only ladder — stamp that, so the ladder it shows
   // stays the ladder its numbers came from
+  // `tcgplayerId` is the per-condition SKU a card was entered as. Cards from
+  // before the catalog existed have none and keep exporting through the name
+  // matcher, so nothing in an existing ledger has to be re-entered.
   s.inventory = s.inventory.map((c) => {
-    const d = { status: "Kept", gradingCost: 0, gradingShip: 0, variant: "", grader: "", lang: "en", ...c };
+    const d = { status: "Kept", gradingCost: 0, gradingShip: 0, variant: "", grader: "", lang: "en", tcgplayerId: "", ...c };
     if (d.status === "At grading" && !d.grader) d.grader = DEFAULT_GRADER;
     return d;
   });
@@ -663,7 +670,7 @@ const ripPL = (r, buys) => ripValue(r) - ripCostOf(r, buys);
 function addHitToState(s, ripId, hit) {
   const h = { id: uid(), ...hit };
   const rip = s.rips.find((r) => r.id === ripId);
-  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", lang: cardLang(h), grade: h.grade || "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
+  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", tcgplayerId: h.tcgplayerId || "", lang: cardLang(h), grade: h.grade || "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
   return { rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r)), inventory: [inv, ...(s.inventory || [])] };
 }
 
@@ -680,8 +687,37 @@ function addHitToState(s, ripId, hit) {
 const entryValue = (c) => (tcgPriceable(c) ? cardPrice(c, c.variant) || 0 : 0);
 const entryLabel = (c) => `${c.name} ${c.number || ""} ${isJP(c) ? "JP" : ""} ${c.grade && c.grade !== "Raw" ? c.grade : ""}`.replace(/\s+/g, " ").trim();
 const addAsBuy = (c) => (s) => ({ buys: [{ id: uid(), item: entryLabel(c), category: "Single", source: "Other", cost: entryValue(c), date: today() }, ...s.buys] });
-const addAsKeep = (c) => (s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", lang: cardLang(c), grade: c.grade || "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, gradingShip: 0, value: entryValue(c), date: today() }, ...(s.inventory || [])] });
-const addAsHit = (c, ripId) => (s) => addHitToState(s, ripId, { name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", lang: cardLang(c), grade: c.grade || "Raw", value: entryValue(c) });
+const addAsKeep = (c) => (s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", tcgplayerId: c.tcgplayerId || "", lang: cardLang(c), grade: c.grade || "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, gradingShip: 0, value: entryValue(c), date: today() }, ...(s.inventory || [])] });
+const addAsHit = (c, ripId) => (s) => addHitToState(s, ripId, { name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", tcgplayerId: c.tcgplayerId || "", lang: cardLang(c), grade: c.grade || "Raw", value: entryValue(c) });
+/* ------------------------------------------------------------------ */
+/* A catalog row entering the ledger.
+
+   TCGplayer writes the collector number into the product name — "Banette
+   - 091/217 (Dusk Ball)" — but the ledger already has a `number` field,
+   and a name carrying the number matches nothing on pokemontcg.io. Strip
+   the " - <number>" tail and keep the parenthetical, because that
+   parenthetical is often the only thing separating two products that
+   share a number, and it has to stay visible in the inventory list. */
+const catalogCardName = (productName) => String(productName || "").replace(/ - [\w/.]+(?= \(|$)/, "").trim();
+/* Present a catalog record in pokemontcg.io shape, so + Buy / + Keep /
+   + Hit take it through exactly the same code as a Lookup result. The
+   price is the export's own snapshot: market first, then the low columns,
+   and nothing at all when the row has no price — which is every C- custom
+   listing, and is why those never enter this way. */
+const catalogEntryCard = (rec) => {
+  const market = rec.market_price ?? rec.low_price ?? rec.low_with_ship ?? null;
+  return {
+    id: `tcgp:${rec.tcgplayer_id}`,
+    tcgplayerId: rec.tcgplayer_id,
+    name: catalogCardName(rec.product_name),
+    set: { name: rec.set_name },
+    number: rec.number || "",
+    rarity: rec.rarity || "",
+    variant: rec.printing,
+    ...(market == null ? {} : { tcgplayer: { prices: { [PTCG_VARIANT_KEY[rec.printing]]: { market } } } }),
+  };
+};
+
 const buyLineSet = (b) => { const s = [...new Set((b?.lines || []).map((l) => l.set).filter(Boolean))]; return s.length === 1 ? s[0] : ""; };
 // which set a rip belongs to: explicit field, else the linked buy's lines,
 // else a set name found in the product text, else the majority set of the hits
@@ -2074,14 +2110,32 @@ function Inventory({ state, patch }) {
       priced++;
       if (price !== (Number(c.value) || 0)) changed++;
     };
+    /* fastest path: a card entered from the catalog already names its SKU,
+       so its price is a local read of the row we imported. It also has to
+       come first — a catalog card carries TCGplayer's product name and set
+       name, which the pokemontcg.io paths below would either fail to match
+       or, worse, match to a different printing of the same card. */
+    const bySku = cands.filter((c) => c.tcgplayerId);
+    if (bySku.length) {
+      try {
+        const recs = await getCatalogRecords(bySku.map((c) => c.tcgplayerId));
+        const found = new Map(recs.map((r) => [r.tcgplayer_id, r]));
+        for (const c of bySku) {
+          const rec = found.get(c.tcgplayerId);
+          const v = rec ? (rec.market_price ?? rec.low_price ?? null) : null;
+          if (v != null) applyPrice(c, v);
+        }
+      } catch { /* no catalog on this device — fall through to the old paths */ }
+    }
     // fast path: one TCGplayer daily-dump pull per distinct set (via the
     // Lambda) prices every card with a set + number in a few requests total —
     // the old card-by-card pokemontcg.io walk took minutes and died mid-way
-    const setNames = [...new Set(cands.filter((c) => c.set && c.number).map((c) => c.set))];
+    const setNames = [...new Set(cands.filter((c) => c.set && c.number && !updates[c.id]).map((c) => c.set))];
     const maps = {};
     await Promise.all(setNames.map(async (s) => { const m = await fetchSetPrices(s, true); if (m) maps[s] = m; }));
     const leftovers = [];
     for (const c of cands) {
+      if (updates[c.id]?.value != null) continue; // already priced off its SKU
       // subPrice, never the raw entry — these are per-printing maps now, and
       // this value is written straight onto the card and then synced
       const v = c.set && c.number ? subPrice(maps[c.set]?.[normNum(c.number)], c.variant) : null;
@@ -2209,6 +2263,19 @@ function Inventory({ state, patch }) {
   const [tcgpSel, setTcgpSel] = useState(() => new Set());
   const [tcgpCache, setTcgpCache] = useState(tcgpCacheRead);
   const [tcgpCacheOpen, setTcgpCacheOpen] = useState(false);
+  /* The catalog is the SKU source now. It holds whole sets rather than
+     only the rows one export happened to carry, so a card entered from
+     it already knows its SKU and needs no matching at export time. */
+  const catFileRef = useRef();
+  const [cat, setCat] = useState({ rows: 0, sets: [], lastImport: null });
+  const [catBusy, setCatBusy] = useState("");
+  const loadCatalog = useCallback(async () => {
+    try {
+      const [stats, sets] = await Promise.all([catalogStats(), catalogSets()]);
+      setCat({ rows: stats.rows, sets, lastImport: stats.lastImport });
+    } catch { /* no IndexedDB: the old cached-export path still works */ }
+  }, []);
+  useEffect(() => { loadCatalog(); }, [loadCatalog]);
   // TCGplayer's CSV is keyed on English product SKUs, so a JP card would list
   // against the English printing of the same name — the wrong card, at the wrong price
   const tcgpEligible = inv
@@ -2221,49 +2288,151 @@ function Inventory({ state, patch }) {
     setSyncMsg("");
   };
   const tcgpTick = (id) => setTcgpSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  // Preflight coverage: which of the ticked cards we already hold SKUs for.
-  // Reuses tcgpSetMatch so the promo aliases apply to cache keys too.
+  // Preflight coverage: which of the ticked cards we can put a SKU on.
+  // A card carrying a tcgplayerId is covered outright — that is the point
+  // of the catalog. Everything else still needs rows for its set, from the
+  // catalog or from an older cached export, so the name matcher can work.
+  // Reuses tcgpSetMatch so the promo aliases apply to both key lists.
   const tcgpCacheKeys = Object.keys(tcgpCache);
+  const catKeys = cat.sets.map((s) => s.key);
+  const skuKeys = [...new Set([...catKeys, ...tcgpCacheKeys])];
   const tcgpPicked = tcgpEligible.filter((c) => tcgpSel.has(c.id));
   const tcgpKeysFor = (cards) => tcgpCacheKeys.filter((k) => cards.some((c) => tcgpSetMatch(k, c.set)));
-  const tcgpCovered = tcgpPicked.filter((c) => tcgpCacheKeys.some((k) => tcgpSetMatch(k, c.set)));
+  const tcgpCovered = tcgpPicked.filter((c) => c.tcgplayerId || skuKeys.some((k) => tcgpSetMatch(k, c.set)));
   // name the sets the way the user does, not the TCGplayer-prefixed way
   const tcgpMissingSets = [...new Set(tcgpPicked.filter((c) => !tcgpCovered.includes(c)).map((c) => c.set))].sort();
   const tcgpCoveredSets = new Set(tcgpCovered.map((c) => c.set)).size;
+  const tcgpDirect = tcgpCovered.filter((c) => c.tcgplayerId).length;
   const tcgpCoverage = !tcgpPicked.length
     ? "No cards selected."
     : !tcgpMissingSets.length
-      ? `${tcgpPicked.length} card${tcgpPicked.length === 1 ? "" : "s"} across ${tcgpCoveredSets} set${tcgpCoveredSets === 1 ? "" : "s"} — ready to export.`
+      ? `${tcgpPicked.length} card${tcgpPicked.length === 1 ? "" : "s"} across ${tcgpCoveredSets} set${tcgpCoveredSets === 1 ? "" : "s"} — ready to export.${tcgpDirect ? ` ${tcgpDirect} carr${tcgpDirect === 1 ? "ies" : "y"} an exact SKU.` : ""}`
       : tcgpCovered.length
-        ? `${tcgpCovered.length} of ${tcgpPicked.length} cards ready. Missing set export${tcgpMissingSets.length === 1 ? "" : "s"}: ${tcgpMissingSets.join(", ")}.`
-        : `No cached export covers ${tcgpMissingSets.length === 1 ? "that set" : "those sets"}: ${tcgpMissingSets.join(", ")}.`;
-  const tcgpBuild = (rows, fields, cands) => {
-    const skipped = [];
-    const { out, exportedIds, unmatched, needPrice } = buildTcgpUpload(rows, cands);
-    if (unmatched.length) {
-      const names = [...new Set(unmatched.map((c) => `${c.name} (${c.set})`))];
-      skipped.push(`${unmatched.length} not in the cached export${names.length === 1 ? "" : "s"}: ${names.slice(0, 6).join(", ")}${names.length > 6 ? ", …" : ""} — refresh those sets from Seller Portal → Pricing with out-of-stock rows included and rerun`);
-    }
-    if (needPrice.length) skipped.push(`${needPrice.length} with no price anywhere (give them a market value first): ${needPrice.slice(0, 4).join(", ")}`);
-    if (!out.length) { setSyncMsg(`No cards matched. ${skipped.join(" · ")}`); return; }
-    const csv = Papa.unparse({ fields, data: out.map((r) => fields.map((f) => r[f] ?? "")) }, { quotes: true });
-    const fname = `TCGP-Staged-Upload-${today()}.csv`;
-    downloadFile(fname, csv);
-    setTcgpOpen(false);
-    setSyncMsg(`Saved ${fname}: ${out.length} listing${out.length === 1 ? "" : "s"} covering ${exportedIds.length} card${exportedIds.length === 1 ? "" : "s"}. Upload it in Seller Portal → Inventory → Import to Staged, then push live.${skipped.length ? " Skipped " + skipped.join(" · ") + "." : ""}`);
-    if (typeof window !== "undefined" && window.confirm(`CSV saved. Mark the ${exportedIds.length} exported card${exportedIds.length === 1 ? "" : "s"} as Listed?\n(Cancel if you're not going to upload this file.)`)) {
-      const ids = new Set(exportedIds);
-      patch((s) => ({ inventory: (s.inventory || []).map((c) => (ids.has(c.id) ? { ...c, status: "Listed" } : c)) }));
-    }
+        ? `${tcgpCovered.length} of ${tcgpPicked.length} cards ready. No SKUs for: ${tcgpMissingSets.join(", ")}.`
+        : `Nothing covers ${tcgpMissingSets.length === 1 ? "that set" : "those sets"}: ${tcgpMissingSets.join(", ")}.`;
+  /* Merge one listing into the upload. Two cards can land on the same SKU
+     from different paths — one entered from the catalog, one matched by
+     name — and TCGplayer reads a repeated id as two listings, so the
+     quantities have to add up in one row. Price follows the rule the
+     matcher has always used: the lowest across the copies being listed. */
+  const mergeRow = (into, row) => {
+    const id = String(row["TCGplayer Id"]).trim();
+    const prev = into.get(id);
+    if (!prev) { into.set(id, row); return; }
+    const qty = (Number(prev["Add to Quantity"]) || 0) + (Number(row["Add to Quantity"]) || 0);
+    const prices = [prev, row].map((r) => Number(r["TCG Marketplace Price"])).filter((v) => v > 0);
+    into.set(id, { ...prev, "Add to Quantity": String(qty), "TCG Marketplace Price": (prices.length ? Math.min(...prices) : 0).toFixed(2) });
   };
-  const tcgpExport = () => {
-    if (!tcgpCovered.length) { setSyncMsg("None of the selected cards' sets are cached yet — add a set export first."); return; }
-    const used = tcgpKeysFor(tcgpCovered);
-    const rows = used.flatMap((k) => tcgpCache[k]?.rows || []);
-    // exports of the same vintage share a header; take it from the entry that
-    // contributed most rows (ties broken by key) so the header is deterministic
-    const src = used.slice().sort((a, b) => (tcgpCache[b].rows?.length || 0) - (tcgpCache[a].rows?.length || 0) || a.localeCompare(b))[0];
-    tcgpBuild(rows, tcgpCache[src]?.fields || [], tcgpCovered);
+
+  /* The direct path: a card that knows its SKU needs no matching at all.
+     This is what the catalog buys us — no set aliasing, no name scoring,
+     no five-products-share-a-number tie to lose. */
+  const tcgpDirectRows = async (cards) => {
+    const byId = new Map();
+    for (const c of cards) {
+      const p = byId.get(c.tcgplayerId) || { qty: 0, values: [], ids: [] };
+      p.qty++; p.ids.push(c.id);
+      if (Number(c.value) > 0) p.values.push(Number(c.value));
+      byId.set(c.tcgplayerId, p);
+    }
+    const recs = await getCatalogRecords([...byId.keys()]);
+    const found = new Map(recs.map((r) => [r.tcgplayer_id, r]));
+    const rows = [], exportedIds = [], needPrice = [], stale = [], custom = [];
+    for (const [id, p] of byId) {
+      const rec = found.get(id);
+      // the SKU was entered from a catalog this device no longer holds
+      if (!rec) { stale.push(...cards.filter((c) => c.tcgplayerId === id).map((c) => c.name)); continue; }
+      // a C- listing is one physical slab the seller already owns; adding
+      // quantity to it would sell that single card twice
+      if (rec.is_custom) { custom.push(rec.product_name); continue; }
+      const price = p.values.length
+        ? Math.min(...p.values)
+        : [rec.market_price, rec.low_with_ship, rec.low_price].find((v) => v > 0);
+      if (!(price > 0)) { needPrice.push(rec.product_name); continue; }
+      rows.push(recordToRow(rec, { addQty: p.qty, price }));
+      exportedIds.push(...p.ids);
+    }
+    return { rows, exportedIds, needPrice, stale, custom };
+  };
+
+  const tcgpExport = async () => {
+    if (!tcgpCovered.length) { setSyncMsg("No SKUs for the selected cards yet — import a TCGplayer export first."); return; }
+    setCatBusy("Building the upload…");
+    try {
+      const direct = tcgpCovered.filter((c) => c.tcgplayerId);
+      const byName = tcgpCovered.filter((c) => !c.tcgplayerId);
+      const skipped = [];
+      const merged = new Map();
+      const exportedIds = [];
+
+      const needPrice = [];   // both paths report these together, in one line
+
+      const d = await tcgpDirectRows(direct);
+      for (const row of d.rows) mergeRow(merged, row);
+      exportedIds.push(...d.exportedIds);
+      needPrice.push(...d.needPrice);
+      if (d.stale.length) skipped.push(`${d.stale.length} whose SKU is not in this device's catalog (re-import the export): ${d.stale.slice(0, 4).join(", ")}`);
+      if (d.custom.length) skipped.push(`${d.custom.length} listed as a custom C- slab, which needs its own listing: ${d.custom.slice(0, 4).join(", ")}`);
+
+      /* Cards from before the catalog existed keep the name matcher.
+         It reads the catalog now instead of a second cache — the old
+         cached exports still feed it so nothing breaks before the first
+         catalog import. */
+      if (byName.length) {
+        const wantedCatKeys = catKeys.filter((k) => byName.some((c) => tcgpSetMatch(k, c.set)));
+        const rows = [
+          ...(wantedCatKeys.length ? await catalogRowsForSets(wantedCatKeys) : []),
+          ...tcgpKeysFor(byName).flatMap((k) => tcgpCache[k]?.rows || []),
+        ];
+        const m = buildTcgpUpload(rows, byName);
+        for (const row of m.out) mergeRow(merged, row);
+        exportedIds.push(...m.exportedIds);
+        if (m.unmatched.length) {
+          const names = [...new Set(m.unmatched.map((c) => `${c.name} (${c.set})`))];
+          skipped.push(`${m.unmatched.length} the matcher could not pin down — re-add them from the catalog to give them a SKU: ${names.slice(0, 6).join(", ")}${names.length > 6 ? ", …" : ""}`);
+        }
+        needPrice.push(...m.needPrice);
+      }
+      if (needPrice.length) skipped.push(`${needPrice.length} with no price anywhere (give them a market value first): ${needPrice.slice(0, 4).join(", ")}`);
+
+      const out = [...merged.values()].sort((a, b) =>
+        String(a["Set Name"]).localeCompare(String(b["Set Name"])) || String(a["Product Name"]).localeCompare(String(b["Product Name"])));
+      if (!out.length) { setSyncMsg(`No cards matched. ${skipped.join(" · ")}`); return; }
+
+      // always the export's own 16 columns, in order — download and upload
+      // share one schema, so the file we build is the file we were given
+      const csv = Papa.unparse({ fields: CSV_COLUMNS, data: out.map((r) => CSV_COLUMNS.map((f) => r[f] ?? "")) }, { quotes: true });
+      const fname = `TCGP-Staged-Upload-${today()}.csv`;
+      downloadFile(fname, csv);
+      setTcgpOpen(false);
+      setSyncMsg(`Saved ${fname}: ${out.length} listing${out.length === 1 ? "" : "s"} covering ${exportedIds.length} card${exportedIds.length === 1 ? "" : "s"}. Upload it in Seller Portal → Inventory → Import to Staged, then push live.${skipped.length ? " Skipped " + skipped.join(" · ") + "." : ""}`);
+      if (typeof window !== "undefined" && exportedIds.length && window.confirm(`CSV saved. Mark the ${exportedIds.length} exported card${exportedIds.length === 1 ? "" : "s"} as Listed?\n(Cancel if you're not going to upload this file.)`)) {
+        const ids = new Set(exportedIds);
+        patch((s) => ({ inventory: (s.inventory || []).map((c) => (ids.has(c.id) ? { ...c, status: "Listed" } : c)) }));
+      }
+    } catch (e) {
+      setSyncMsg(`Could not build the upload: ${e.message}`);
+    } finally { setCatBusy(""); }
+  };
+
+  const onCatalogFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (e.target) e.target.value = "";
+    if (!file) return;
+    setSyncMsg("");
+    setCatBusy("Reading the export…");
+    try {
+      const r = await importCatalogFile(file, { onProgress: ({ kept }) => setCatBusy(`Imported ${kept.toLocaleString()} rows…`) });
+      await loadCatalog();
+      setSyncMsg(`Catalog updated: ${r.kept.toLocaleString()} Near Mint SKU${r.kept === 1 ? "" : "s"} across ${r.sets.length} set${r.sets.length === 1 ? "" : "s"}${r.skipped ? `, ${r.skipped.toLocaleString()} other rows left out` : ""}.`);
+    } catch (err) {
+      setSyncMsg(err.message || "Could not read that file.");
+    } finally { setCatBusy(""); }
+  };
+  const onCatalogClear = async () => {
+    if (typeof window !== "undefined" && !window.confirm("Delete every catalog row on this device?\nCards already entered keep their SKU, and a re-import restores the catalog.")) return;
+    try { await clearCatalog(); await loadCatalog(); setSyncMsg("Catalog cleared."); }
+    catch (e) { setSyncMsg(`Could not clear the catalog: ${e.message}`); }
   };
   // The picker now feeds the cache instead of building one file and forgetting
   // it — same validation and messages, but the rows survive the run.
@@ -2358,6 +2527,7 @@ function Inventory({ state, patch }) {
         {gradeOpen && <GradingForm cards={gradable} onSend={sendToGrading} onCancel={() => setGradeOpen(false)} />}
         <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={toggleTcgp}><Upload size={14} /> Upload to TCGplayer — choose cards for a staged CSV</button>
         <input ref={tcgpFileRef} type="file" accept=".csv" hidden onChange={onTcgpFile} />
+        <input ref={catFileRef} type="file" accept=".csv" hidden onChange={onCatalogFile} />
         {tcgpOpen && <div className="cl-tcgp-pick">
           {tcgpEligible.length === 0
             ? <div className="cl-import-msg" style={{ marginTop: 0 }}>No raw Kept cards with a set name to list — the CSV import only takes raw singles, not slabs.</div>
@@ -2376,20 +2546,35 @@ function Inventory({ state, patch }) {
                 <span className="cl-money">{fmt(Number(c.value) || 0)}</span>
               </label>)}
               <div className="cl-import-msg">
-                {tcgpCacheKeys.length
+                {skuKeys.length
                   ? tcgpCoverage
-                  : "Export a set from Seller Portal → Pricing → Export Filtered CSV, with out-of-stock rows included. BinderBooks remembers it after the first time."}
+                  : "Import a TCGplayer Pricing Custom Export first — Seller Portal → Pricing → Export Filtered CSV, with out-of-stock rows included."}
               </div>
-              {(!tcgpCacheKeys.length || tcgpMissingSets.length > 0) && <>
-                <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => tcgpFileRef.current?.click()}>
-                  <Upload size={14} /> Add a set export
-                </button>
-                <div className="cl-import-msg" style={{ marginTop: 3 }}>Your set export from Seller Portal → Pricing</div>
-              </>}
-              {tcgpCovered.length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={tcgpExport}>
-                <Upload size={14} /> Export CSV ({tcgpCovered.length} card{tcgpCovered.length === 1 ? "" : "s"})
+              {tcgpCovered.length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} disabled={!!catBusy} onClick={tcgpExport}>
+                <Upload size={14} /> {catBusy || `Export CSV (${tcgpCovered.length} card${tcgpCovered.length === 1 ? "" : "s"})`}
               </button>}
             </>}
+          {/* The catalog is reference data, not the ledger: it lives only on
+              this device, never syncs, and a re-import rebuilds it. Importing
+              has to stay reachable with an empty inventory — the catalog is
+              what you enter the first card from. */}
+          <div className="cl-tcgp-cache">
+            <div className="cl-row-main">
+              <div className="cl-tcgp-pick-name">Catalog</div>
+              <div className="cl-row-meta">
+                {cat.rows
+                  ? `${cat.rows.toLocaleString()} Near Mint SKUs · ${cat.sets.length} set${cat.sets.length === 1 ? "" : "s"}${cat.lastImport ? ` · ${tcgpAge(Date.parse(cat.lastImport.at))}` : ""}`
+                  : "Empty — import an export to give new cards an exact SKU."}
+              </div>
+            </div>
+            {cat.rows > 0 && <button className="cl-link" onClick={onCatalogClear}><Trash2 size={12} /> Clear</button>}
+          </div>
+          <button className="cl-import-btn" style={{ marginTop: 8 }} disabled={!!catBusy} onClick={() => catFileRef.current?.click()}>
+            <Library size={14} /> {catBusy || (cat.rows ? "Import another TCGplayer export" : "Import a TCGplayer export")}
+          </button>
+          <div className="cl-import-msg" style={{ marginTop: 3 }}>
+            Pricing Custom Export from Seller Portal → Pricing, with out-of-stock rows included. Near Mint rows are kept; the rest are left out.
+          </div>
           {tcgpCacheKeys.length > 0 && <div className="cl-tcgp-cache">
             <button className="cl-link" onClick={() => setTcgpCacheOpen(!tcgpCacheOpen)}>
               {tcgpCacheOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Cached set exports ({tcgpCacheKeys.length})
@@ -2773,6 +2958,113 @@ function CardModal({ card, onClose, onEdit, onValue }) {
 }
 
 /* ================================================================== */
+/* ================================================================== */
+/* Catalog entry: the fast path for a stack of cards on a phone.
+
+   Pick the set once — it sticks, because a stack is nearly always one
+   set — then type the collector number or a few letters of the name.
+   The search is local, so it answers while you type instead of after a
+   network round trip, and it returns TCGplayer's own products: each row
+   is a SKU, the parenthetical variant is on it, and tapping one enters
+   the card already carrying that SKU. Nothing to confirm afterwards. */
+const CATSET_KEY = "cardledger:catset:v1";
+
+function CatalogEntry({ state, patch }) {
+  const [sets, setSets] = useState([]);
+  const [set, setSet] = useState(() => { try { return localStorage.getItem(CATSET_KEY) || ""; } catch { return ""; } });
+  const [q, setQ] = useState("");
+  const [res, setRes] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [ripId, setRipId] = useState("");
+  const [flashes, setFlashes] = useState({});
+  const flash = (id, t) => { setFlashes((f) => ({ ...f, [id]: t })); setTimeout(() => setFlashes((f) => ({ ...f, [id]: null })), 1600); };
+
+  useEffect(() => { catalogSets().then(setSets, () => setSets([])); }, []);
+  const pickSet = (s) => { setSet(s); try { localStorage.setItem(CATSET_KEY, s); } catch {} };
+
+  /* Debounced so a fast typist runs one query, not one per keystroke.
+     `live` guards the late answer of a query the user has already typed
+     past, which would otherwise overwrite the newer results. */
+  useEffect(() => {
+    if (!set) { setRes([]); return; }
+    let live = true;
+    setBusy(true);
+    const t = setTimeout(() => {
+      searchCatalog({ set, q, limit: 40 })
+        .then((r) => { if (live) { setRes(r); setBusy(false); } },
+              () => { if (live) { setRes([]); setBusy(false); } });
+    }, 120);
+    return () => { live = false; clearTimeout(t); };
+  }, [set, q]);
+
+  if (!sets.length) return null;
+
+  const rip = ripId || state.rips[0]?.id;
+  const asBuy = (rec) => { patch(addAsBuy(catalogEntryCard(rec))); flash(rec.tcgplayer_id, "Added to Buys"); };
+  const asKeep = (rec) => { patch(addAsKeep(catalogEntryCard(rec))); flash(rec.tcgplayer_id, "Kept in inventory"); };
+  const asHit = (rec) => {
+    if (!rip) { flash(rec.tcgplayer_id, "Make a rip first"); return; }
+    patch(addAsHit(catalogEntryCard(rec), rip));
+    flash(rec.tcgplayer_id, "Added as hit");
+  };
+
+  return (
+    <div className="cl-import">
+      <div className="cl-tcgp-pick-head" style={{ marginBottom: 8 }}>
+        <span>Enter from the catalog</span>
+        <span>{sets.reduce((a, s) => a + s.count, 0).toLocaleString()} SKUs on this device</span>
+      </div>
+      <select className="cl-in" value={set} onChange={(e) => pickSet(e.target.value)}>
+        <option value="">Pick a set…</option>
+        {sets.map((s) => <option key={s.key} value={s.name}>{s.name} ({s.count})</option>)}
+      </select>
+      {set && <>
+        <div className="cl-search" style={{ marginTop: 8 }}>
+          <input
+            className="cl-in"
+            inputMode="search"
+            placeholder="Number or name — e.g. 091, or banette dusk"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          {q && <button className="cl-search-btn" onClick={() => setQ("")}><X size={15} /></button>}
+        </div>
+        {state.rips.length > 0 && <select className="cl-rip-sel" style={{ width: "100%" }} value={ripId} onChange={(e) => setRipId(e.target.value)}>
+          <option value="">+ Hit goes to the latest rip</option>
+          {state.rips.map((r) => <option key={r.id} value={r.id}>+ Hit → {r.product || "Rip"}</option>)}
+        </select>}
+        <div className="cl-catrows">
+          {res.map((rec) => {
+            /* The full Product Name, parenthetical and all: on a set where
+               five products share a number, that parenthetical is the only
+               thing telling them apart. */
+            const price = rec.market_price ?? rec.low_price ?? null;
+            return (
+              <div key={rec.tcgplayer_id} className="cl-catrow">
+                <div className="cl-row-main">
+                  <div className="cl-tcgp-pick-name" title={rec.product_name}>{rec.product_name}</div>
+                  <div className="cl-row-meta">
+                    <span className="cl-chip">{VARIANT_SHORT[rec.printing] || rec.printing}</span>
+                    {rec.number ? `${rec.number} · ` : ""}{rec.rarity || "—"}
+                    {price != null ? ` · ${fmt(price)}` : " · no price"}
+                  </div>
+                </div>
+                <div className="cl-lk-actions" style={{ marginTop: 0 }}>
+                  <button className="cl-mini" onClick={() => asBuy(rec)}>+ Buy</button>
+                  <button className="cl-mini" onClick={() => asKeep(rec)}>+ Keep</button>
+                  <button className="cl-mini holo-border" onClick={() => asHit(rec)}>+ Hit</button>
+                </div>
+                {flashes[rec.tcgplayer_id] && <div className="cl-flash">{flashes[rec.tcgplayer_id]}</div>}
+              </div>
+            );
+          })}
+        </div>
+        {!busy && !res.length && <div className="cl-import-msg">{q ? `Nothing in ${set} matches “${q}”.` : "Type a number or a few letters of the name."}</div>}
+      </>}
+    </div>
+  );
+}
+
 function Lookup({ state, patch }) {
   const [q, setQ] = useState("");
   const [res, setRes] = useState([]);
@@ -2837,6 +3129,10 @@ function Lookup({ state, patch }) {
   return (
     <div className="cl-stack">
       <Header title="Card lookup" sub="Live TCGplayer market prices · pokemontcg.io" />
+      {/* The catalog answers offline and gives the card an exact SKU, so it
+          comes first. It renders nothing until an export is imported, which
+          leaves this tab exactly as it was for anyone who has not. */}
+      <CatalogEntry state={state} patch={patch} />
       <div className="cl-search"><input className="cl-in" placeholder="Search a card — e.g. Froakie" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} /><button className="cl-search-btn" onClick={search}><Search size={15} /></button></div>
       {loading && <div className="cl-center">Searching…</div>}
       {err && <Empty>{err}</Empty>}
@@ -3211,6 +3507,14 @@ function Fonts() {
     .cl-import-msg .cl-link{color:#c4b5fd;display:inline-flex;align-items:center;gap:4px;vertical-align:-2px;}
     .cl-scan-ctl{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px;}
     .cl-scan-go{padding:11px 14px;font-size:13px;}
+    /* catalog entry rows: the product name gets the whole width, because
+       the parenthetical variant at the end of it is what tells two
+       otherwise identical rows apart */
+    .cl-catrows{display:flex;flex-direction:column;gap:7px;margin-top:9px;}
+    .cl-catrow{border:1px solid var(--line);border-radius:10px;padding:8px 9px;}
+    .cl-catrow .cl-tcgp-pick-name{white-space:normal;font-size:13px;}
+    .cl-catrow .cl-row-meta{margin-top:3px;display:flex;align-items:center;gap:6px;}
+    .cl-catrow .cl-lk-actions{margin-top:7px;}
     .cl-cat{background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px;display:flex;flex-direction:column;gap:8px;}
     .cl-cat .cl-row-meta{margin-top:0;}
     .cl-import-btn:disabled{opacity:.6;cursor:default;}
