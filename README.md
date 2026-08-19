@@ -189,12 +189,31 @@ Two standalone helpers that don't need the app running:
   the same file twice changes nothing, and a product missing from a later
   export is never deleted — it just was not in that pull. Re-import to refresh
   prices; they anchor the manual pricing pass and are not history.
-- **Entering a card from the catalog:** the Lookup tab's top panel is the fast
-  path for a stack. Pick the set once — it sticks, because a stack is nearly
-  always one set — then type the collector number or a few letters of the name.
-  It answers offline while you type. Tap *+ Buy*, *+ Keep* or *+ Hit* and the
-  card enters already carrying that exact SKU and printing; there is nothing to
-  confirm afterwards. The panel is absent until a catalog is imported.
+- **One card search, everywhere.** Rips, Sales, Inventory and Lookup all mount
+  the same search. It reads two sources and shows one ranked list:
+  - the **local TCGplayer catalog** first — offline, instant, and the only
+    source carrying the exact SKU, the printing, and stamped prints at all;
+  - the **card database** behind it — slower and online-only, but it covers
+    cards the seller's own export never included, and it brings the images.
+
+  A row from the catalog wears its printing as a chip, which is also how you
+  see it carries a SKU. Picking one fills the whole form — name, set, number,
+  printing and SKU — so a card entered on any screen lists on TCGplayer with
+  no name matching afterwards. Leave the set picker on **All sets** to search
+  everything; that needs two characters, because one character with no set is
+  a scan of the whole catalog. Picking a set narrows the search, sticks across
+  screens, and on the Lookup tab an empty box then browses that whole set.
+  Before this each screen searched differently: Rips and Sales asked the card
+  database alone, Inventory had no search at all, and only Lookup could read
+  the catalog.
+- **Stamped prints live in another set.** TCGplayer sells a prerelease stamp as
+  its own product and files it under **Miscellaneous Cards & Products**, not
+  under the set printed on the card: `Reshiram (Stellar Crown Stamped)` is
+  number `022/142` and is not in Stellar Crown. So import that set's export as
+  well, and search with the set on *All sets*. The card database has no stamped
+  print at all, so a query naming one never reaches it — answering with the
+  unstamped card would hand back a different SKU that prices several times
+  lower.
 - **TCGplayer bulk listing:** the Inventory tab builds the staged-upload CSV.
   A card entered from the catalog knows its SKU, so it needs no matching at
   all. A card that predates the catalog still goes through the old name

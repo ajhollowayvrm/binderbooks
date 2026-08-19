@@ -1,14 +1,20 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Papa from "papaparse";
 import {
   LayoutDashboard, PackageOpen, ShoppingCart, Tags, Search, Archive,
   Plus, Trash2, Pencil, ChevronDown, ChevronRight, Sparkles, Upload, X,
   CalendarRange, ChevronLeft, RefreshCw, ExternalLink, Camera, Library,
+  LayoutGrid,
 } from "lucide-react";
 import {
   CSV_COLUMNS, importCatalogFile, catalogSets, catalogStats, searchCatalog,
   getCatalogRecords, catalogRowsForSets, recordToRow, clearCatalog,
 } from "./catalog.js";
+import BuyRow from "./components/BuyRow.jsx";
+import InventoryRow from "./components/InventoryRow.jsx";
+import SaleRow from "./components/SaleRow.jsx";
+import RipCard from "./components/RipCard.jsx";
+import BinderCard from "./components/BinderCard.jsx";
 
 /* ------------------------------------------------------------------ */
 /* hosted-app glue: localStorage persistence + optional API key       */
@@ -188,7 +194,7 @@ const VARIANTS = ["Normal", "Holofoil", "Reverse Holofoil"];
 const PTCG_VARIANT_KEY = { "Normal": "normal", "Holofoil": "holofoil", "Reverse Holofoil": "reverseHolofoil" };
 // list rows are tight on a phone — "Reverse Holofoil" doesn't fit next to a
 // status and a grade chip
-const VARIANT_SHORT = { "Normal": "Normal", "Holofoil": "Holo", "Reverse Holofoil": "Reverse" };
+export const VARIANT_SHORT = { "Normal": "Normal", "Holofoil": "Holo", "Reverse Holofoil": "Reverse" };
 // preference order per printing. The "" row is the Lambda's own collapse, so a
 // card with no variant set prices exactly as it did before variants existed;
 // the fallbacks keep Normal-only cards working when asked for a holo.
@@ -251,6 +257,45 @@ async function fillMissingPrices(list) {
     return p ? { ...c, tcgplayer: { prices: p } } : c;
   });
 }
+/* Card images, consolidated the same way fillMissingPrices consolidates
+   prices above: pokemontcg.io hands back a whole set — images included — in
+   one call, so every card in a set costs one request total instead of one
+   per card. Images never change once a card is printed, so the cache lives
+   a month; a stale entry just means a routine refetch, never a wrong
+   picture. */
+const SETIMG_KEY = "cardledger:setimages:v1";
+const SETIMG_TTL = 30 * 24 * 3600 * 1000;
+const setImagesGet = (set) => { try { const c = (JSON.parse(localStorage.getItem(SETIMG_KEY)) || {})[set]; return c && Date.now() - c.t < SETIMG_TTL ? c.l : null; } catch { return null; } };
+const setImagesPut = (set, list) => {
+  try {
+    const all = JSON.parse(localStorage.getItem(SETIMG_KEY)) || {};
+    all[set] = { t: Date.now(), l: list };
+    const keys = Object.keys(all);
+    if (keys.length > 10) keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - 10).forEach((k) => delete all[k]);
+    localStorage.setItem(SETIMG_KEY, JSON.stringify(all));
+  } catch {}
+};
+const setImagesInFlight = new Map(); // dedupes concurrent fetches for the same set
+function fetchSetImages(setName) {
+  const cached = setImagesGet(setName);
+  if (cached) return Promise.resolve(cached);
+  if (setImagesInFlight.has(setName)) return setImagesInFlight.get(setName);
+  const esc = String(setName).replace(/["\\]/g, "");
+  const p = ptcgFetch(`cards?q=${encodeURIComponent(`set.name:"${esc}"`)}&pageSize=250&select=name,number,images`)
+    .then((data) => {
+      const list = (data.data || []).map((c) => ({ name: c.name, number: c.number, images: c.images }));
+      setImagesPut(setName, list);
+      return list;
+    })
+    .catch(() => [])
+    .finally(() => setImagesInFlight.delete(setName));
+  setImagesInFlight.set(setName, p);
+  return p;
+}
+const imageInSet = (list, card) => (list && (
+  (card.number && list.find((c) => normNum(c.number) === normNum(card.number))) ||
+  list.find((c) => c.name.toLowerCase() === card.name.toLowerCase())
+)) || null;
 // a tcgcsv per-printing map as pokemontcg.io-shaped price blocks. This used to
 // force every price under `holofoil` regardless of its real subtype, which
 // left a card's displayed price unrelated to the printing it came from.
@@ -532,16 +577,16 @@ const compsMatch = (r, c) => {
    language decides which sources are allowed to touch its value. */
 const LANGS = [["en", "English"], ["jp", "Japanese"]];
 const cardLang = (c) => (c?.lang === "jp" ? "jp" : "en");
-const isJP = (c) => cardLang(c) === "jp";
+export const isJP = (c) => cardLang(c) === "jp";
 // English raw singles are the only cards the TCGplayer path can price. Everything
 // else — slabs, Japanese cards, an "Other" grade we can't read — is priced from
 // its own eBay solds, or left alone when there are none.
 const tcgPriceable = (c) => !isJP(c) && (c?.grade || "Raw") === "Raw";
-const stCls = (s) => ({ "Kept": "kept", "At grading": "grading", "Listed": "listed", "Sold": "sold" }[s] || "kept");
+export const stCls = (s) => ({ "Kept": "kept", "At grading": "grading", "Listed": "listed", "Sold": "sold" }[s] || "kept");
 // A card at the graders reads "At CGC", not "At grading" — where it is decides
 // what it is worth, so the list has to show it. The stored status is unchanged,
 // so the status filter still matches.
-const statusLabel = (c) => (c.status === "At grading" && c.grader ? `At ${c.grader}` : c.status);
+export const statusLabel = (c) => (c.status === "At grading" && c.grader ? `At ${c.grader}` : c.status);
 
 const TCGP_ORDERS = [
   {o:"3998E",b:"Lee Olson",p:3.47,d:"2026-06-09"},{o:"ABDBA",b:"Shane Davis",p:5.31,d:"2026-05-13"},
@@ -657,10 +702,10 @@ function migrate(s) {
   return s;
 }
 
-const fmt = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const ripValue = (r) => (r.hits || []).reduce((s, h) => s + (Number(h.value) || 0), 0);
-const ripCostOf = (r, buys) => (r.buyId ? (Number((buys || []).find((b) => b.id === r.buyId)?.cost) || 0) : (Number(r.cost) || 0));
-const ripPL = (r, buys) => ripValue(r) - ripCostOf(r, buys);
+export const fmt = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const ripValue = (r) => (r.hits || []).reduce((s, h) => s + (Number(h.value) || 0), 0);
+export const ripCostOf = (r, buys) => (r.buyId ? (Number((buys || []).find((b) => b.id === r.buyId)?.cost) || 0) : (Number(r.cost) || 0));
+export const ripPL = (r, buys) => ripValue(r) - ripCostOf(r, buys);
 /* a logged hit is a card you now hold — mirror it into inventory as a rip pull.
    Basis stays 0 because the rip already carries the cost, which is the whole
    point of logging one: a lot of slabs bought together is one cost against the
@@ -761,8 +806,8 @@ const ripSetSplit = (r, buys, sets) => {
   }
   return out;
 };
-const saleNet = (s) => (Number(s.price) || 0) - (Number(s.fees) || 0) - (Number(s.shipping) || 0) - (Number(s.consign) || 0);
-const saleBasis = (s) => (s.cards || []).reduce((a, c) => a + (Number(c.basis) || 0), 0);
+export const saleNet = (s) => (Number(s.price) || 0) - (Number(s.fees) || 0) - (Number(s.shipping) || 0) - (Number(s.consign) || 0);
+export const saleBasis = (s) => (s.cards || []).reduce((a, c) => a + (Number(c.basis) || 0), 0);
 // Dedup signature for a sale. Orders key off the TCGplayer order suffix (matches whether
 // the ref was imported as "TCGP 5236F" or the full id "62955D06-88B131-5236F"); rows with no
 // order # fall back to a channel/date/price/title signature so CSV reuploads stay idempotent.
@@ -809,11 +854,11 @@ const saleSetSplit = (s, inventory, sets) => {
 // True cost of a card: what it cost to get, plus what grading it cost. Postage to
 // the grader is split across the cards in the submission, so a card carries its
 // own share. All three must be here, or a graded card's ROI reads too high.
-const invBasis = (c) => (Number(c.cost) || 0) + (Number(c.gradingCost) || 0) + (Number(c.gradingShip) || 0);
+export const invBasis = (c) => (Number(c.cost) || 0) + (Number(c.gradingCost) || 0) + (Number(c.gradingShip) || 0);
 // a card at the graders carries a value range — min/max of whichever estimates
 // the user filled in, on the ladder of the company the card is at. Everything
 // else just counts its single value.
-const gradeRange = (c) => {
+export const gradeRange = (c) => {
   if (c.status !== "At grading") return null;
   const vals = estGrades(c).map((g) => Number(c.gradeEst?.[g]) || 0).filter((v) => v > 0);
   return vals.length ? { lo: Math.min(...vals), hi: Math.max(...vals) } : null;
@@ -822,8 +867,8 @@ const invRange = (cards) => cards.reduce((a, c) => {
   const r = gradeRange(c), v = Number(c.value) || 0;
   return { lo: a.lo + (r ? r.lo : v), hi: a.hi + (r ? r.hi : v) };
 }, { lo: 0, hi: 0 });
-const fmtRange = (r) => (r.lo === r.hi ? fmt(r.lo) : `${fmt(r.lo)} – ${fmt(r.hi)}`);
-const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "");
+export const fmtRange = (r) => (r.lo === r.hi ? fmt(r.lo) : `${fmt(r.lo)} – ${fmt(r.hi)}`);
+export const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "");
 // `variant` is optional — without it this picks a printing the way it always
 // has, so every existing caller is unaffected
 const cardPrice = (c, variant) => {
@@ -863,13 +908,89 @@ async function lookupCardPrice(card, variant) {
 // price backfill (the modal prices via the set dump separately) and keeps a
 // session cache so reopening a card shows its image instantly.
 const matchCache = new Map();
+// The in-memory Map above only ever lasted one page load — every reload
+// refetched every card's match again. This backs it with localStorage the
+// same way qcacheGet/qcacheSet (above) back CardSearch's query cache: a
+// card's picture never changes once printed, so a month-long TTL is safe.
+// Only a hit gets persisted, never a miss — a miss today can become a hit
+// once pokemontcg.io indexes a new set, so caching "no match" would be wrong.
+const MATCHCACHE_KEY = "cardledger:matchcache:v1";
+const MATCHCACHE_TTL = 30 * 24 * 3600 * 1000;
+const matchLsRead = () => { try { return JSON.parse(localStorage.getItem(MATCHCACHE_KEY)) || {}; } catch { return {}; } };
+const matchLsGet = (key) => { const c = matchLsRead()[key]; return c && Date.now() - c.t < MATCHCACHE_TTL ? c.r : undefined; };
+const matchLsPut = (key, hit) => {
+  try {
+    const all = matchLsRead();
+    all[key] = { t: Date.now(), r: hit };
+    Object.keys(all).sort((a, b) => all[b].t - all[a].t).slice(40).forEach((k) => delete all[k]);
+    localStorage.setItem(MATCHCACHE_KEY, JSON.stringify(all));
+  } catch {}
+};
 async function lookupCardMatch(card) {
   const key = `${card.name}|${card.set || ""}|${card.number || ""}`.toLowerCase();
   if (matchCache.has(key)) return matchCache.get(key);
+  const persisted = matchLsGet(key);
+  if (persisted !== undefined) { matchCache.set(key, persisted); return persisted; }
   const list = await lookupCardCandidates(card, { fill: false });
   const hit = list.find((c) => cardPrice(c) != null && c.images?.small) || list.find((c) => c.images?.small) || list[0] || null;
-  if (hit) matchCache.set(key, hit); // misses stay uncached so a flaky API call retries next open
+  if (hit) { matchCache.set(key, hit); matchLsPut(key, hit); } // misses stay uncached so a flaky API call retries next open
   return hit;
+}
+// Every other lookupCardMatch caller wants one card at a time (the modal).
+// A screen that renders a card's whole collection at once would otherwise
+// fire one request per card the moment it mounts — capping how many run in
+// parallel keeps that from reading as a rate-limit stampede.
+const CARD_IMG_PARALLEL = 4;
+let cardImgInFlight = 0;
+const cardImgQueue = [];
+function throttledCardMatch(card) {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      cardImgInFlight++;
+      lookupCardMatch(card).then(resolve, reject).finally(() => {
+        cardImgInFlight--;
+        cardImgQueue.shift()?.();
+      });
+    };
+    cardImgInFlight < CARD_IMG_PARALLEL ? run() : cardImgQueue.push(run);
+  });
+}
+// One hook for every screen that wants card pictures. Cards batch by set
+// (fetchSetImages above resolves a whole set in one call); whatever a set
+// batch can't place — no set on the card, a stamped print, a Japanese card,
+// a printing the batch doesn't have — falls back to a throttled one-card
+// lookup. The set cache and the per-card match cache are both module-level,
+// so a card resolved on one screen (Binder, say) is instant on the next
+// (Inventory, Lookup) — nothing here is fetched twice.
+function useCardImages(cards) {
+  const [images, setImages] = useState({}); // id -> url|null; a missing key means still resolving
+  const setNames = [...new Set(cards.filter((c) => c.set && !isJP(c)).map((c) => c.set))].sort().join("|");
+  const cardIds = cards.map((c) => c.id).join("|");
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      const maps = {};
+      await Promise.all((setNames ? setNames.split("|") : []).map(async (name) => { maps[name] = await fetchSetImages(name); }));
+      if (!live) return;
+      const found = {};
+      const leftover = [];
+      for (const c of cards) {
+        if (isJP(c) || !c.name) { found[c.id] = null; continue; }
+        const hit = c.set ? imageInSet(maps[c.set], c) : null;
+        if (hit) found[c.id] = hit.images?.small || null;
+        else leftover.push(c);
+      }
+      setImages((s) => ({ ...s, ...found }));
+      leftover.forEach((c) => {
+        throttledCardMatch(c).then(
+          (m) => { if (live) setImages((s) => ({ ...s, [c.id]: m?.images?.small || null })); },
+          () => { if (live) setImages((s) => ({ ...s, [c.id]: null })); },
+        );
+      });
+    })();
+    return () => { live = false; };
+  }, [setNames, cardIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  return images;
 }
 
 /* ================================================================== */
@@ -1030,6 +1151,7 @@ export default function App() {
     ["dash", "Overview", LayoutDashboard], ["month", "Monthly", CalendarRange],
     ["rips", "Rips", PackageOpen], ["buys", "Buys", ShoppingCart],
     ["sales", "Sales", Tags], ["inv", "Inventory", Archive],
+    ["binder", "Binder", LayoutGrid],
     ["look", "Lookup", Search],
     ...(__BB_SCAN__ ? [["snap", "Scan", Camera]] : []),
   ];
@@ -1051,6 +1173,7 @@ export default function App() {
         {tab === "buys" && <Buys state={state} patch={patch} />}
         {tab === "sales" && <Sales state={state} patch={patch} />}
         {tab === "inv" && <Inventory state={state} patch={patch} />}
+        {tab === "binder" && <Binder state={state} patch={patch} go={setTab} />}
         {tab === "look" && <Lookup state={state} patch={patch} />}
         {__BB_SCAN__ && tab === "snap" && <CardSnap state={state} patch={patch} />}
       </main>
@@ -1266,8 +1389,8 @@ function SyncPanel({ sync, connect, disconnect, choose }) {
 function Rips({ state, patch }) {
   const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState(null);
-  const addRip = (r) => { patch((s) => ({ rips: [{ id: uid(), hits: [], ...r }, ...s.rips], buys: r.buyId ? s.buys.map((b) => (b.id === r.buyId ? { ...b, ripped: true } : b)) : s.buys })); setAdding(false); };
-  const delRip = (id) => patch((s) => {
+  const addRip = useCallback((r) => { patch((s) => ({ rips: [{ id: uid(), hits: [], ...r }, ...s.rips], buys: r.buyId ? s.buys.map((b) => (b.id === r.buyId ? { ...b, ripped: true } : b)) : s.buys })); setAdding(false); }, [patch]);
+  const delRip = useCallback((id) => patch((s) => {
     const rip = s.rips.find((r) => r.id === id);
     const hitIds = new Set((rip?.hits || []).map((h) => h.id));
     return {
@@ -1275,13 +1398,14 @@ function Rips({ state, patch }) {
       inventory: (s.inventory || []).filter((c) => !(hitIds.has(c.hitId) && c.status !== "Sold")),
       buys: rip?.buyId ? s.buys.map((b) => (b.id === rip.buyId ? { ...b, ripped: false } : b)) : s.buys,
     };
-  });
-  const addHit = (ripId, hit) => patch((s) => addHitToState(s, ripId, hit));
-  const delHit = (ripId, hitId) => patch((s) => ({
+  }), [patch]);
+  const addHit = useCallback((ripId, hit) => patch((s) => addHitToState(s, ripId, hit)), [patch]);
+  const delHit = useCallback((ripId, hitId) => patch((s) => ({
     rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: r.hits.filter((h) => h.id !== hitId) } : r)),
     inventory: (s.inventory || []).filter((c) => !(c.hitId === hitId && c.status !== "Sold")),
-  }));
-  const sorted = [...state.rips].sort(byDateDesc);
+  })), [patch]);
+  const onToggle = useCallback((id) => setOpen((o) => (o === id ? null : id)), []);
+  const sorted = useMemo(() => [...state.rips].sort(byDateDesc), [state.rips]);
 
   return (
     <div className="cl-stack">
@@ -1289,28 +1413,9 @@ function Rips({ state, patch }) {
       {adding && <RipForm buys={state.buys} rippedBuyIds={new Set(state.rips.map((r) => r.buyId).filter(Boolean))} onSave={addRip} onCancel={() => setAdding(false)} />}
       {state.rips.length === 0 && !adding && <Empty>Nothing ripped yet. Log a rip — say 5 packs of Chaos Rising — then drop in each hit and watch the P&amp;L land.</Empty>}
       <div className="cl-stack">
-        {sorted.map((r) => {
-          const pl = ripPL(r, state.buys); const isOpen = open === r.id;
-          const packLabel = r.setPacks && r.setPacks.length
-            ? r.setPacks.map((p) => `${p.packs || "?"} ${p.set || "?"}`).join(" + ")
-            : (r.packs ? `${r.packs} packs` : "");
-          return (
-            <div key={r.id} className="cl-card">
-              <button className="cl-card-head" onClick={() => setOpen(isOpen ? null : r.id)}>
-                <div className="cl-row-main"><div className="cl-row-title">{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />} {r.product || "Rip"}</div><div className="cl-row-meta">{packLabel ? `${packLabel} · ` : ""}{r.source || "—"} · {(r.hits || []).length} hits · {r.date}</div></div>
-                <div className="cl-card-num"><div className={"cl-money " + (pl >= 0 ? "pos" : "neg")}>{fmt(pl)}</div><div className="cl-row-meta">{r.buyId ? "from buy" : "cost"} {fmt(ripCostOf(r, state.buys))}</div></div>
-              </button>
-              {isOpen && <div className="cl-card-body">
-                <div className="cl-hits">
-                  {(r.hits || []).length === 0 && <Empty>No hits added.</Empty>}
-                  {(r.hits || []).map((h) => (<div key={h.id} className="cl-hit"><span className="holo-dot" /><div className="cl-hit-main"><div className="cl-hit-name">{h.name}</div><div className="cl-row-meta">{h.grade && h.grade !== "Raw" && <span className="cl-chip">{h.grade}</span>}{isJP(h) && <span className="cl-chip">JP</span>}{h.set ? `${h.set}${h.number ? ` · ${h.number}` : ""}` : ""}</div></div><div className="cl-money">{fmt(Number(h.value) || 0)}</div><button className="cl-x" onClick={() => delHit(r.id, h.id)}><X size={13} /></button></div>))}
-                </div>
-                <HitForm onAdd={(h) => addHit(r.id, h)} />
-                <div className="cl-card-foot"><span>Pulled value {fmt(ripValue(r))}</span><button className="cl-del" onClick={() => delRip(r.id)}><Trash2 size={13} /> Delete rip</button></div>
-              </div>}
-            </div>
-          );
-        })}
+        {sorted.map((r) => (
+          <RipCard key={r.id} rip={r} pl={ripPL(r, state.buys)} cost={ripCostOf(r, state.buys)} isOpen={open === r.id} onToggle={onToggle} onDelete={delRip} onAddHit={addHit} onDeleteHit={delHit} />
+        ))}
       </div>
     </div>
   );
@@ -1371,91 +1476,255 @@ function RipForm({ buys, rippedBuyIds, onSave, onCancel }) {
     </Form>
   );
 }
-function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
-  const [results, setResults] = useState([]);
+/* ==================================================================
+   One card search, for every screen that looks a card up.
+
+   Rips, Sales, Inventory and Lookup each searched differently before
+   this. Rips and Sales asked the card database and nothing else,
+   Inventory had no search at all and made you type the name, and only
+   the Lookup panel could read the local TCGplayer catalog. So the same
+   words found different cards on different screens, and a stamped print
+   was reachable from exactly one of the four.
+
+   Now every screen mounts this component. Two sources feed one list:
+
+     1. the local TCGplayer catalog — offline, answers in milliseconds,
+        carries the exact SKU and the printing, and is the only source
+        that holds a stamped print at all;
+     2. the card database — slower and online-only, but it covers cards
+        the seller's own export never included, and it brings the images.
+
+   The catalog answers first and the database fills in behind it. A row
+   from the catalog shows its printing, which is also how you see that it
+   carries a SKU. Every row hands the caller the same shape — a card in
+   pokemontcg.io shape — so the forms and the three add-paths below take
+   catalog rows and database rows through identical code. */
+
+/* Stamped prints. TCGplayer sells the prerelease stamp as its own
+   product and files it under "Miscellaneous Cards & Products", not under
+   the set whose name is stamped on the card — "Reshiram (Stellar Crown
+   Stamped)" is 022/142 and is not in Stellar Crown. The card database
+   has no row for one at all. */
+const MISC_SET = "Miscellaneous Cards & Products";
+const STAMPED_RE = /\b(stamp|stamped|prerelease|staff)\b/i;
+/* The set scope is shared by every screen and sticks between them: a
+   stack of cards is nearly always one set, and picking it twice is the
+   kind of step that gets skipped. */
+const CATSET_KEY = "cardledger:catset:v1";
+const CARD_SEARCH_MIN = 2;
+const NO_EXTRA = [];
+
+/* Two rows describe one card when the name and the collector number
+   agree. The catalog copy wins, because it knows the printing and the
+   SKU. Printings of one card are not duplicates — they are separate
+   products with separate prices — so this only ever drops a database
+   row that the catalog already answered. */
+const cardDedupeKey = (c) => `${String(c.name || "").toLowerCase()}|${normNum(c.number)}`;
+
+const noMatchMsg = (set, q) =>
+  (set ? `Nothing in ${set} matches “${q}”.` : `Nothing matches “${q}”.`) +
+  (STAMPED_RE.test(q) ? ` TCGplayer files stamped prints under ${MISC_SET} — import that set's export as well.` : "");
+
+function CardSearch({
+  value, onChange,                 // controlled text; omit both for an internal box
+  onPick,                          // (card) => void — omit in a panel that only shows actions
+  placeholder = "Search a card — name, number, or set",
+  panel = false,                   // Lookup shows a list; the forms show a popover
+  actions,                         // panel only: (card) => JSX rendered under each row
+  extra = NO_EXTRA,                // panel only: cards from another source, listed first
+}) {
+  const [own, setOwn] = useState("");
+  const controlled = value !== undefined;
+  const q = controlled ? value : own;
+  const setQ = controlled ? onChange : setOwn;
+
+  const [sets, setSets] = useState([]);
+  const [set, setSet] = useState(() => { try { return localStorage.getItem(CATSET_KEY) || ""; } catch { return ""; } });
+  const [local, setLocal] = useState([]);
+  const [remote, setRemote] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState(false);
-  const timer = useRef();
-  const skip = useRef(false);
+  const skip = useRef(false);            // a pick must not reopen the popover
   const fillSeq = useRef(0);
 
-  const run = async (q) => {
-    setError(false); setPending(false); setLoading(true); setOpen(true);
-    try {
-      const { terms, descriptors, first } = buildQuery(q);
-      const want = [...new Set(descriptors.flatMap((d) => DESC_RARITY[d] || []))];
-      // newest sets first — the default order fills the page with the oldest
-      // printings, so a fresh pull ("dedenne" from Perfect Order) never even
-      // reached the pool before the cut below
-      const data = await ptcgFetch(`cards?q=${encodeURIComponent(terms)}&pageSize=24&orderBy=-set.releaseDate&select=${PTCG_SELECT}`);
-      const filled = await fillMissingPrices((data.data || []).map(slimCard));
-      const list = filled.sort((a, b) => {
-        const av = a.name.toLowerCase().startsWith(first) ? 0 : 1;
-        const bv = b.name.toLowerCase().startsWith(first) ? 0 : 1;
-        if (av !== bv) return av - bv;
-        if (want.length) {
-          const ad = want.some((w) => (a.rarity || "").toLowerCase().includes(w)) ? 0 : 1;
-          const bd = want.some((w) => (b.rarity || "").toLowerCase().includes(w)) ? 0 : 1;
-          if (ad !== bd) return ad - bd;
-        }
-        return (cardPrice(b) || 0) - (cardPrice(a) || 0);
-      }).slice(0, 14);
-      qcacheSet(terms, list);
-      setResults(list);
-    } catch (e) {
-      // ptcgFetch already timed out and retried once — surface the tap-to-retry
-      setResults([]); setError(true);
-    } finally { setLoading(false); }
+  useEffect(() => { catalogSets().then(setSets, () => setSets([])); }, []);
+  const pickSet = (s) => { setSet(s); try { localStorage.setItem(CATSET_KEY, s); } catch {} };
+
+  const typed = q.trim();
+  /* A picked set browses itself with an empty box, but only in the panel.
+     A form is one line on a phone, and filling it with a whole set the
+     moment it opens buries the field the user came to type in. */
+  const browsing = panel && !!set && typed.length < CARD_SEARCH_MIN;
+  const searchable = typed.length >= CARD_SEARCH_MIN || browsing;
+
+  /* The catalog is on the device, so it needs only enough delay to skip
+     the keystrokes of a fast typist. */
+  useEffect(() => {
+    if (!searchable) { setLocal([]); return; }
+    let live = true;
+    const t = setTimeout(() => {
+      searchCatalog({ set, q: typed, limit: 40 })
+        .then((r) => { if (live) setLocal(r); }, () => { if (live) setLocal([]); });
+    }, 120);
+    return () => { live = false; clearTimeout(t); };
+  }, [set, typed, searchable]);
+
+  const runDatabase = async (text) => {
+    const { terms, descriptors, first } = buildQuery(text);
+    const want = [...new Set(descriptors.flatMap((d) => DESC_RARITY[d] || []))];
+    // newest sets first — the default order fills the page with the oldest
+    // printings, so a fresh pull ("dedenne" from Perfect Order) never even
+    // reached the pool before the cut below
+    const data = await ptcgFetch(`cards?q=${encodeURIComponent(terms)}&pageSize=24&orderBy=-set.releaseDate&select=${PTCG_SELECT}`);
+    const filled = await fillMissingPrices((data.data || []).map(slimCard));
+    const list = filled.sort((a, b) => {
+      const av = a.name.toLowerCase().startsWith(first) ? 0 : 1;
+      const bv = b.name.toLowerCase().startsWith(first) ? 0 : 1;
+      if (av !== bv) return av - bv;
+      if (want.length) {
+        const ad = want.some((w) => (a.rarity || "").toLowerCase().includes(w)) ? 0 : 1;
+        const bd = want.some((w) => (b.rarity || "").toLowerCase().includes(w)) ? 0 : 1;
+        if (ad !== bd) return ad - bd;
+      }
+      return (cardPrice(b) || 0) - (cardPrice(a) || 0);
+    }).slice(0, 14);
+    qcacheSet(terms, list);
+    return list;
   };
 
+  /* The card database never sees a stamped query. It has no stamped
+     print, so it would answer with the unstamped card — a different SKU
+     that prices several times lower, and the wrong thing to comp a
+     ledger against. The catalog handles those alone. */
   useEffect(() => {
-    if (timer.current) clearTimeout(timer.current);
-    if (skip.current) { skip.current = false; setPending(false); return; }
-    const q = value.trim();
-    if (q.length < 2) { setResults([]); setOpen(false); setPending(false); setError(false); return; }
-    const cached = qcacheGet(buildQuery(q).terms);
+    setFailed(false);
+    if (typed.length < CARD_SEARCH_MIN || STAMPED_RE.test(typed)) { setRemote([]); setBusy(false); return; }
+    const terms = buildQuery(typed).terms;
+    const cached = qcacheGet(terms);
     if (cached) {
-      setResults(cached); setError(false); setPending(false); setLoading(false); setOpen(true);
+      setRemote(cached); setBusy(false);
+      // a v1 cache entry can predate the fallback prices; top it up quietly
       const seq = ++fillSeq.current;
       fillMissingPrices(cached).then((filled) => {
         if (seq !== fillSeq.current || !filled.some((c, i) => c !== cached[i])) return;
-        qcacheSet(buildQuery(q).terms, filled);
-        setResults(filled);
-      });
+        qcacheSet(terms, filled);
+        setRemote(filled);
+      }, () => {});
       return;
     }
-    setPending(true);
-    // 900ms of quiet typing fires the search — it was 3s, which read as broken;
-    // the slimmed payloads + query cache keep the request budget reasonable
-    timer.current = setTimeout(() => run(q), 900);
-    return () => clearTimeout(timer.current);
-  }, [value]);
+    let live = true;
+    setBusy(true);
+    // 900ms of quiet typing fires the request — the catalog has already
+    // answered by then, so the box never looks idle while this waits
+    const t = setTimeout(() => {
+      runDatabase(typed).then(
+        (list) => { if (live) { setRemote(list); setBusy(false); } },
+        () => { if (live) { setRemote([]); setBusy(false); setFailed(true); } });
+    }, 900);
+    return () => { live = false; clearTimeout(t); };
+  }, [typed]);
 
-  const choose = (c) => { skip.current = true; setOpen(false); setResults([]); setPending(false); setError(false); onSelect(c); };
+  const rows = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    const push = (card, printing, prefix) => {
+      const key = cardDedupeKey(card);
+      out.push({ key: `${prefix}${card.id}`, card, printing });
+      seen.add(key);
+    };
+    for (const c of extra) push(c, null, "x");
+    for (const rec of local) push(catalogEntryCard(rec), rec.printing, "c");
+    for (const c of remote) if (!seen.has(cardDedupeKey(c))) out.push({ key: `d${c.id}`, card: c });
+    return out.slice(0, panel ? 60 : 14);
+  }, [extra, local, remote, panel]);
+
+  /* Typing reopens the list. A pick sets `skip` first, because on a
+     controlled box the pick itself rewrites the text and would otherwise
+     reopen the popover the user just chose from. */
+  useEffect(() => {
+    if (skip.current) { skip.current = false; return; }
+    if (searchable) setOpen(true);
+  }, [typed]);
+
+  const choose = (c) => { skip.current = true; setOpen(false); onPick?.(c); };
+
+  /* One row, one markup, both modes. The printing chip marks a row that
+     came from the catalog and therefore carries a SKU. */
+  const rowBody = (r) => {
+    const c = r.card;
+    const price = cardPrice(c, c.variant);
+    return (<>
+      {c.images?.small ? <img src={c.images.small} alt="" className="cl-ac-img" loading="lazy" /> : <div className="cl-ac-img" />}
+      <div className="cl-ac-meta">
+        <div className="cl-ac-name">{c.name}</div>
+        <div className="cl-row-meta">
+          {r.printing && <span className="cl-chip">{VARIANT_SHORT[r.printing] || r.printing}</span>}
+          <span>{[c.set?.name, c.number, c.rarity].filter(Boolean).join(" · ")}</span>
+        </div>
+      </div>
+      <div className="cl-ac-price">{price != null ? fmt(price) : "—"}</div>
+    </>);
+  };
+
+  const status = failed ? "retry"
+    : busy && !rows.length ? "Searching the card database…"
+    : !searchable ? `Type ${CARD_SEARCH_MIN} letters or more${sets.length ? ", or pick a set to browse it" : ""}.`
+    : !rows.length ? noMatchMsg(set, typed)
+    : null;
+  const statusNode = status === "retry"
+    ? <button className="cl-ac-loading cl-ac-retry" onMouseDown={(e) => e.preventDefault()} onClick={() => { setFailed(false); setBusy(true); runDatabase(typed).then((l) => { setRemote(l); setBusy(false); }, () => { setBusy(false); setFailed(true); }); }}>Card search didn&rsquo;t respond &mdash; tap to retry</button>
+    : status ? <div className={panel ? "cl-import-msg" : "cl-ac-loading"}>{status}</div>
+    : null;
+
+  const setPicker = sets.length > 0 && (
+    <select className="cl-in cl-cs-set" value={set} onChange={(e) => pickSet(e.target.value)}>
+      <option value="">All sets</option>
+      {sets.map((s) => <option key={s.key} value={s.name}>{s.name} ({s.count})</option>)}
+    </select>
+  );
+  const box = (
+    <input
+      className="cl-in"
+      inputMode="search"
+      placeholder={placeholder}
+      value={q}
+      onChange={(e) => setQ(e.target.value)}
+      onFocus={() => searchable && setOpen(true)}
+      onBlur={panel ? undefined : () => setTimeout(() => setOpen(false), 200)}
+    />
+  );
+
+  if (panel) return (
+    <div className="cl-cs">
+      {setPicker}
+      <div className="cl-search">{box}{q && <button className="cl-search-btn" onClick={() => setQ("")}><X size={15} /></button>}</div>
+      {rows.length > 0 && <div className="cl-cs-rows">
+        {rows.map((r) => (
+          <div key={r.key} className="cl-cs-card">
+            {onPick
+              ? <button className="cl-ac-item" onClick={() => choose(r.card)}>{rowBody(r)}</button>
+              : <div className="cl-ac-item as-row">{rowBody(r)}</div>}
+            {actions && <div className="cl-lk-actions">{actions(r.card)}</div>}
+          </div>
+        ))}
+      </div>}
+      {statusNode}
+    </div>
+  );
 
   return (
-    <div className="cl-ac">
-      <input className="cl-in" placeholder={placeholder} value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onFocus={() => (results.length || error) && setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 200)} />
-      {open && (
-        <div className="cl-ac-pop">
-          {loading && <div className="cl-ac-loading">Searching the card database…</div>}
-          {!loading && error && <button className="cl-ac-loading cl-ac-retry" onMouseDown={(e) => e.preventDefault()} onClick={() => run(value.trim())}>Card search didn’t respond — tap to retry</button>}
-          {!loading && !error && results.length === 0 && <div className="cl-ac-loading">No matches — try just the name (set names and card numbers work too)</div>}
-          {!loading && !error && results.map((c) => (
-            <button key={c.id} className="cl-ac-item" onMouseDown={(e) => e.preventDefault()} onClick={() => choose(c)}>
-              {c.images?.small ? <img src={c.images.small} alt="" className="cl-ac-img" /> : <div className="cl-ac-img" />}
-              <div className="cl-ac-meta"><div className="cl-ac-name">{c.name}</div><div className="cl-row-meta">{c.set?.name} · {c.number}{c.rarity ? ` · ${c.rarity}` : ""}</div></div>
-              <div className="cl-ac-price">{cardPrice(c) != null ? fmt(cardPrice(c)) : "—"}</div>
-            </button>
+    <div className="cl-cs">
+      {setPicker}
+      <div className="cl-ac">
+        {box}
+        {open && <div className="cl-ac-pop">
+          {rows.map((r) => (
+            <button key={r.key} className="cl-ac-item" onMouseDown={(e) => e.preventDefault()} onClick={() => choose(r.card)}>{rowBody(r)}</button>
           ))}
-        </div>
-      )}
-      {pending && !open && <div className="cl-ac-hint">…will search in a moment</div>}
+          {statusNode}
+        </div>}
+      </div>
     </div>
   );
 }
@@ -1463,18 +1732,24 @@ function CardAutocomplete({ value, onChange, onSelect, placeholder }) {
    so its cards are nearly always all the same on both counts — retyping
    "Japanese, CGC 9" eight times is the kind of thing that gets skipped, and a
    slab logged as an English raw is then priced as one. */
-function HitForm({ onAdd }) {
-  const blank = (keep) => ({ name: "", set: "", number: "", value: "", lang: keep?.lang || "en", grade: keep?.grade || "Raw" });
+export function HitForm({ onAdd }) {
+  const blank = (keep) => ({ name: "", set: "", number: "", value: "", variant: "", tcgplayerId: "", lang: keep?.lang || "en", grade: keep?.grade || "Raw" });
   const [f, setF] = useState(blank);
   const add = () => { if (!f.name) return; onAdd({ ...f, value: Number(f.value) || 0 }); setF(blank(f)); };
-  // the autocomplete searches English raw singles, so its price is one. Name,
-  // set and number are still worth taking for a slab or a JP card; the price
-  // is not, and silently filling it is the mistake the grade field prevents.
+  // the search prices English raw singles, so its price is one. Name, set and
+  // number are still worth taking for a slab or a JP card; the price is not,
+  // and silently filling it is the mistake the grade field prevents.
   const priceable = f.grade === "Raw" && f.lang === "en";
-  const pick = (c) => setF({ ...f, name: c.name, set: c.set?.name || "", number: c.number || "", value: priceable && cardPrice(c) != null ? String(cardPrice(c)) : "" });
+  /* A catalog row carries its SKU and printing. Keep both — they are what
+     let the TCGplayer upload list this hit without matching it by name. */
+  const pick = (c) => setF({
+    ...f, name: c.name, set: c.set?.name || "", number: c.number || "",
+    variant: c.variant || "", tcgplayerId: c.tcgplayerId || "",
+    value: priceable && cardPrice(c, c.variant) != null ? String(cardPrice(c, c.variant)) : "",
+  });
   return (
     <div className="cl-hitform">
-      <CardAutocomplete value={f.name} onChange={(v) => setF({ ...f, name: v })} onSelect={pick} placeholder="Add a hit — try “Dedenne Perfect Order” or “Dedenne 143”" />
+      <CardSearch value={f.name} onChange={(v) => setF({ ...f, name: v })} onPick={pick} placeholder="Add a hit — try “Dedenne Perfect Order” or “Dedenne 143”" />
       <div className="cl-grid3"><input className="cl-in" placeholder="Set" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /><input className="cl-in" placeholder="No." value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} placeholder="Value" /></div>
       <div className="cl-grid2">
         <select className="cl-in" value={f.lang} onChange={(e) => setF({ ...f, lang: e.target.value })}>{LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
@@ -1490,12 +1765,14 @@ function HitForm({ onAdd }) {
 function Buys({ state, patch }) {
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState(null);
-  const add = (b) => { patch((s) => ({ buys: [{ id: uid(), ...b }, ...s.buys] })); setAdding(false); };
-  const upd = (b) => { patch((s) => ({ buys: s.buys.map((x) => (x.id === b.id ? { ...x, ...b, seed: false } : x)) })); setEditId(null); };
-  const del = (id) => patch((s) => ({ buys: s.buys.filter((b) => b.id !== id) }));
-  const toggleRipped = (id) => patch((s) => ({ buys: s.buys.map((b) => (b.id === id ? { ...b, ripped: !b.ripped } : b)) }));
-  const total = state.buys.reduce((s, b) => s + (Number(b.cost) || 0), 0);
-  const sorted = [...state.buys].sort(byDateDesc);
+  const add = useCallback((b) => { patch((s) => ({ buys: [{ id: uid(), ...b }, ...s.buys] })); setAdding(false); }, [patch]);
+  const upd = useCallback((b) => { patch((s) => ({ buys: s.buys.map((x) => (x.id === b.id ? { ...x, ...b, seed: false } : x)) })); setEditId(null); }, [patch]);
+  const del = useCallback((id) => patch((s) => ({ buys: s.buys.filter((b) => b.id !== id) })), [patch]);
+  const toggleRipped = useCallback((id) => patch((s) => ({ buys: s.buys.map((b) => (b.id === id ? { ...b, ripped: !b.ripped } : b)) })), [patch]);
+  const onEdit = useCallback((id) => { setEditId(id); setAdding(false); }, []);
+  const onCancelEdit = useCallback(() => setEditId(null), []);
+  const total = useMemo(() => state.buys.reduce((s, b) => s + (Number(b.cost) || 0), 0), [state.buys]);
+  const sorted = useMemo(() => [...state.buys].sort(byDateDesc), [state.buys]);
 
   return (
     <div className="cl-stack">
@@ -1503,15 +1780,9 @@ function Buys({ state, patch }) {
       {adding && <BuyForm onSave={add} onCancel={() => setAdding(false)} />}
       {state.buys.length === 0 && !adding && <Empty>No purchases yet.</Empty>}
       <div className="cl-stack sm">
-        {sorted.map((b) => editId === b.id
-          ? <BuyForm key={b.id} initial={b} onSave={upd} onCancel={() => setEditId(null)} />
-          : <div key={b.id} className="cl-row">
-              <div className="cl-row-main"><div className="cl-row-title">{b.name || b.item}{b.seed && <span className="cl-seed">starter</span>}</div><div className="cl-row-meta"><span className="cl-chip">{b.category}</span>{b.ripped && <span className="cl-st grading">ripped</span>} {b.source} · {b.date}{b.name && b.item && b.name !== b.item ? ` · ${b.item}` : ""}</div></div>
-              <div className="cl-money out">{fmt(Number(b.cost) || 0)}</div>
-              <button className={"cl-x" + (b.ripped ? " on" : "")} title={b.ripped ? "Marked ripped — click to unmark" : "Mark as ripped"} onClick={() => toggleRipped(b.id)}><PackageOpen size={13} /></button>
-              <button className="cl-x" onClick={() => { setEditId(b.id); setAdding(false); }}><Pencil size={13} /></button>
-              <button className="cl-x" onClick={() => del(b.id)}><Trash2 size={13} /></button>
-            </div>)}
+        {sorted.map((b) => (
+          <BuyRow key={b.id} buy={b} isEditing={editId === b.id} onEdit={onEdit} onDelete={del} onToggleRipped={toggleRipped} onSave={upd} onCancelEdit={onCancelEdit} />
+        ))}
       </div>
     </div>
   );
@@ -1544,7 +1815,7 @@ function LineRow({ line, sets, onChange, onRemove, removable }) {
     </div>
   );
 }
-function BuyForm({ initial, onSave, onCancel }) {
+export function BuyForm({ initial, onSave, onCancel }) {
   const sets = useSets();
   const blank = () => ({ id: uid(), qty: "1", set: "", product: "Booster Pack", cost: "" });
   const [f, setF] = useState(initial
@@ -1644,21 +1915,27 @@ function Sales({ state, patch }) {
   const fileRef = useRef();
   const soldIds = (x) => (x.cards || []).map((c) => c.invId).filter(Boolean);
   const markSold = (inv, ids) => (ids.length ? inv.map((c) => (ids.includes(c.id) ? { ...c, status: "Sold" } : c)) : inv);
-  const add = (x) => { patch((s) => ({ sales: [{ id: uid(), ...x }, ...s.sales], inventory: markSold(s.inventory, soldIds(x)) })); setAdding(false); };
-  const upd = (x) => { patch((s) => ({ sales: s.sales.map((y) => (y.id === x.id ? { ...y, ...x, seed: false } : y)), inventory: markSold(s.inventory, soldIds(x)) })); setEditId(null); };
-  const del = (id) => patch((s) => ({ sales: s.sales.filter((x) => x.id !== id) }));
+  const add = useCallback((x) => { patch((s) => ({ sales: [{ id: uid(), ...x }, ...s.sales], inventory: markSold(s.inventory, soldIds(x)) })); setAdding(false); }, [patch]);
+  const upd = useCallback((x) => { patch((s) => ({ sales: s.sales.map((y) => (y.id === x.id ? { ...y, ...x, seed: false } : y)), inventory: markSold(s.inventory, soldIds(x)) })); setEditId(null); }, [patch]);
+  const del = useCallback((id) => patch((s) => ({ sales: s.sales.filter((x) => x.id !== id) })), [patch]);
+  const onEditRow = useCallback((id) => { setEditId(id); setAdding(false); }, []);
+  const onCancelEdit = useCallback(() => setEditId(null), []);
   const earned = state.sales.reduce((s, x) => s + saleNet(x), 0);
-  const blob = (x) => [x.item, x.channel, x.date, (x.cards || []).map((c) => `${c.name} ${c.set || ""} ${c.number || ""}`).join(" "), x.price, saleNet(x)].join(" ").toLowerCase();
   const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const noCards = (x) => !(x.cards || []).length;
-  const bareCount = state.sales.filter(noCards).length;
-  const sigCounts = new Map();
-  state.sales.forEach((x) => { const k = saleSig(x); sigCounts.set(k, (sigCounts.get(k) || 0) + 1); });
+  const { sigCounts, bareCount, dupExtra } = useMemo(() => {
+    const sigCounts = new Map();
+    state.sales.forEach((x) => { const k = saleSig(x); sigCounts.set(k, (sigCounts.get(k) || 0) + 1); });
+    const bareCount = state.sales.filter(noCards).length;
+    const dupExtra = [...sigCounts.values()].reduce((a, c) => a + (c - 1), 0);
+    return { sigCounts, bareCount, dupExtra };
+  }, [state.sales]); // eslint-disable-line react-hooks/exhaustive-deps
   const isDup = (x) => sigCounts.get(saleSig(x)) > 1;
-  const dupExtra = [...sigCounts.values()].reduce((a, c) => a + (c - 1), 0);
-  const sorted = [...state.sales]
+  const blob = (x) => [x.item, x.channel, x.date, (x.cards || []).map((c) => `${c.name} ${c.set || ""} ${c.number || ""}`).join(" "), x.price, saleNet(x)].join(" ").toLowerCase();
+  const sorted = useMemo(() => [...state.sales]
     .filter((x) => (view !== "bare" || noCards(x)) && (view !== "dups" || isDup(x)) && terms.every((t) => blob(x).includes(t)))
-    .sort(view === "dups" ? (a, b) => saleSig(a).localeCompare(saleSig(b)) || byDateDesc(a, b) : byDateDesc);
+    .sort(view === "dups" ? (a, b) => saleSig(a).localeCompare(saleSig(b)) || byDateDesc(a, b) : byDateDesc),
+  [state.sales, view, q, sigCounts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const mergeDupes = () => {
     const groups = new Map();
@@ -1791,20 +2068,14 @@ function Sales({ state, patch }) {
       {(q || view !== "all") && <div className="cl-import-msg">Showing {sorted.length} of {state.sales.length} sales</div>}
       {state.sales.length > 0 && sorted.length === 0 && <Empty>{view === "bare" ? "Every sale has card lines attached — nothing left to enrich." : view === "dups" ? "No duplicate orders found." : `No sales match “${q}”.`}</Empty>}
       <div className="cl-stack sm">
-        {sorted.map((x) => editId === x.id
-          ? <SaleForm key={x.id} initial={x} inventory={state.inventory} onSave={upd} onCancel={() => setEditId(null)} />
-          : (() => { const net = saleNet(x); const ded = (Number(x.fees) || 0) + (Number(x.shipping) || 0) + (Number(x.consign) || 0); const cards = x.cards || []; const title = cards.length ? cards[0].name + (cards.length > 1 ? ` +${cards.length - 1}` : "") : (x.item || "Sale"); const basis = saleBasis(x); const ref = cards.length && x.item ? ` · ${x.item}` : ""; return (
-              <div key={x.id} className="cl-row">
-                <div className="cl-row-main"><div className="cl-row-title">{title}</div><div className="cl-row-meta"><span className="cl-chip">{x.channel}</span> {x.date}{ref}{ded > 0 && ` · −${ded.toFixed(2)} fees`}</div></div>
-                <div className="cl-card-num"><div className="cl-money in">{fmt(net)}</div>{basis > 0 ? <div className="cl-row-meta">profit {fmt(net - basis)}</div> : null}</div>
-                <button className="cl-x" onClick={() => { setEditId(x.id); setAdding(false); }}><Pencil size={13} /></button>
-                <button className="cl-x" onClick={() => del(x.id)}><Trash2 size={13} /></button>
-              </div>); })())}
+        {sorted.map((x) => (
+          <SaleRow key={x.id} sale={x} inventory={state.inventory} isEditing={editId === x.id} onEdit={onEditRow} onDelete={del} onSave={upd} onCancelEdit={onCancelEdit} />
+        ))}
       </div>
     </div>
   );
 }
-function SaleForm({ initial, inventory, onSave, onCancel }) {
+export function SaleForm({ initial, inventory, onSave, onCancel }) {
   const kept = (inventory || []).filter((c) => c.status !== "Sold");
   const [f, setF] = useState(initial
     ? { item: initial.item || "", channel: initial.channel, price: String(initial.price), fees: numStr(initial.fees), shipping: numStr(initial.shipping), consign: numStr(initial.consign), date: initial.date, cards: (initial.cards || []).map((c) => ({ ...c })) }
@@ -1813,7 +2084,7 @@ function SaleForm({ initial, inventory, onSave, onCancel }) {
   const [tbasis, setTbasis] = useState("");
   const [tmeta, setTmeta] = useState(null); // set/number from a picked search result
   const addInv = (id) => { const c = kept.find((x) => x.id === id); if (!c) return; setF((s) => ({ ...s, cards: [...s.cards, { id: uid(), invId: c.id, name: c.name, set: c.set, number: c.number, basis: invBasis(c) }] })); };
-  const pickTyped = (c) => { setTname(c.name); setTmeta({ set: c.set?.name || "", number: c.number || "" }); };
+  const pickTyped = (c) => { setTname(c.name); setTmeta({ set: c.set?.name || "", number: c.number || "", variant: c.variant || "", tcgplayerId: c.tcgplayerId || "" }); };
   const addTyped = () => { if (!tname) return; setF((s) => ({ ...s, cards: [...s.cards, { id: uid(), name: tname, ...(tmeta || {}), basis: Number(tbasis) || 0 }] })); setTname(""); setTbasis(""); setTmeta(null); };
   const rmCard = (cid) => setF((s) => ({ ...s, cards: s.cards.filter((c) => c.id !== cid) }));
   const net = (Number(f.price) || 0) - (Number(f.fees) || 0) - (Number(f.shipping) || 0) - (Number(f.consign) || 0);
@@ -1831,10 +2102,13 @@ function SaleForm({ initial, inventory, onSave, onCancel }) {
         </div>
       </Field>
       {availInv.length > 0 && <Field label="Add a card you kept"><select className="cl-in" value="" onChange={(e) => { addInv(e.target.value); }}><option value="">— choose from inventory —</option>{availInv.map((c) => <option key={c.id} value={c.id}>{c.name}{c.number ? " " + c.number : ""} · basis {fmt(invBasis(c))}</option>)}</select></Field>}
+      {/* The search stands on its own row: it carries a set picker and a
+          result list, and squeezing those beside the basis box left no
+          room for either. */}
+      <CardSearch value={tname} onChange={(v) => { setTname(v); setTmeta(null); }} onPick={pickTyped} placeholder="…or search — name, set, number" />
       <div className="cl-typedadd">
-        <CardAutocomplete value={tname} onChange={(v) => { setTname(v); setTmeta(null); }} onSelect={pickTyped} placeholder="…or search — name, set, number" />
         <div className="cl-money-in cl-basisbox"><span>$</span><input className="cl-in bare" inputMode="decimal" placeholder="basis" value={tbasis} onChange={(e) => setTbasis(e.target.value.replace(/[^0-9.]/g, ""))} /></div>
-        <button className="cl-add-card" onClick={addTyped}><Plus size={15} /></button>
+        <button className="cl-add-card" onClick={addTyped}><Plus size={15} /> Add card</button>
       </div>
       <div className="cl-grid2"><Field label="Channel"><Select opts={CHANNELS} value={f.channel} onChange={(v) => setF({ ...f, channel: v })} /></Field><Field label="Sale price"><MoneyInput value={f.price} onChange={(v) => setF({ ...f, price: v })} /></Field></div>
       <div className="cl-grid3"><Field label="Platform fees"><MoneyInput value={f.fees} onChange={(v) => setF({ ...f, fees: v })} /></Field><Field label="Shipping you paid"><MoneyInput value={f.shipping} onChange={(v) => setF({ ...f, shipping: v })} /></Field><Field label="Consignment cut"><MoneyInput value={f.consign} onChange={(v) => setF({ ...f, consign: v })} /></Field></div>
@@ -2029,8 +2303,11 @@ function Inventory({ state, patch }) {
   const [refreshing, setRefreshing] = useState(false);
   const [gradeOpen, setGradeOpen] = useState(false);
   const add = (c) => { patch((s) => ({ inventory: [{ id: uid(), ...c }, ...(s.inventory || [])] })); setAdding(false); };
-  const upd = (c) => { patch((s) => ({ inventory: s.inventory.map((x) => (x.id === c.id ? { ...x, ...c } : x)) })); setEditId(null); };
-  const del = (id) => patch((s) => ({ inventory: s.inventory.filter((c) => c.id !== id) }));
+  const upd = useCallback((c) => { patch((s) => ({ inventory: s.inventory.map((x) => (x.id === c.id ? { ...x, ...c } : x)) })); setEditId(null); }, [patch]);
+  const del = useCallback((id) => patch((s) => ({ inventory: s.inventory.filter((c) => c.id !== id) })), [patch]);
+  const onEditRow = useCallback((id) => { setEditId(id); setAdding(false); }, []);
+  const onCancelEdit = useCallback(() => setEditId(null), []);
+  const onOpenRow = useCallback((id) => setViewId(id), []);
   // Send a submission: flip the cards, stamp each one's share of the cost, and
   // write the single Grading buy that carries the cash. One patch, so the whole
   // submission syncs as one change.
@@ -2484,7 +2761,7 @@ function Inventory({ state, patch }) {
   const range = invRange(live);
   const hasRange = range.lo !== range.hi;
   const FILTERS = ["All", "Kept", "At grading", "Listed", "Sold"];
-  const shown = (filter === "All" ? inv : inv.filter((c) => c.status === filter)).slice().sort(byDateDesc);
+  const shown = useMemo(() => (filter === "All" ? inv : inv.filter((c) => c.status === filter)).slice().sort(byDateDesc), [inv, filter]);
   const viewCard = viewId ? inv.find((c) => c.id === viewId) : null;
 
   return (
@@ -2609,15 +2886,9 @@ function Inventory({ state, patch }) {
       {inv.length > 0 && <div className="cl-pills">{FILTERS.map((x) => <button key={x} className={"cl-pill" + (filter === x ? " on" : "")} onClick={() => setFilter(x)}>{x}</button>)}</div>}
       {inv.length === 0 && !adding && <Empty>No cards yet. Add a keeper or a card you've sent for grading, or hit “+ Keep” from Lookup to pull one in with its market value.</Empty>}
       <div className="cl-stack sm">
-        {shown.map((c) => editId === c.id
-          ? <InvForm key={c.id} initial={c} onSave={upd} onCancel={() => setEditId(null)} />
-          : <div key={c.id} className={"cl-row click" + (c.status === "Sold" ? " sold" : "")} onClick={() => setViewId(c.id)}>
-              <span className="holo-dot" />
-              <div className="cl-row-main"><div className="cl-row-title">{c.name}</div><div className="cl-row-meta"><span className={"cl-st " + stCls(c.status)}>{statusLabel(c)}</span><span className="cl-chip">{c.grade}</span>{isJP(c) && <span className="cl-chip">JP</span>}{c.variant && <span className="cl-chip">{VARIANT_SHORT[c.variant] || c.variant}</span>}{c.set ? `${c.set}${c.number ? " · " + c.number : ""} · ` : ""}{c.source}</div></div>
-              <div className="cl-card-num"><div className="cl-money" style={{ color: "var(--holo2)" }}>{gradeRange(c) ? fmtRange(gradeRange(c)) : fmt(Number(c.value) || 0)}</div>{invBasis(c) ? <div className="cl-row-meta">basis {fmt(invBasis(c))}</div> : null}</div>
-              <button className="cl-x" onClick={(e) => { e.stopPropagation(); setEditId(c.id); setAdding(false); }}><Pencil size={13} /></button>
-              <button className="cl-x" onClick={(e) => { e.stopPropagation(); del(c.id); }}><Trash2 size={13} /></button>
-            </div>)}
+        {shown.map((c) => (
+          <InventoryRow key={c.id} card={c} isEditing={editId === c.id} onEdit={onEditRow} onDelete={del} onOpen={onOpenRow} onSave={upd} onCancelEdit={onCancelEdit} />
+        ))}
       </div>
       {viewCard && <CardModal card={viewCard} onClose={() => setViewId(null)}
         onEdit={() => { setViewId(null); setEditId(viewCard.id); setAdding(false); }}
@@ -2679,11 +2950,11 @@ function GradingForm({ cards, onSend, onCancel }) {
     </Form>
   );
 }
-function InvForm({ initial, onSave, onCancel }) {
+export function InvForm({ initial, onSave, onCancel }) {
   const estStr = (e, grader) => Object.fromEntries(GRADER_LADDER[grader].map((g) => [g, numStr(e?.[g])]));
   const [f, setF] = useState(initial
-    ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", lang: cardLang(initial), grade: initial.grade || "Raw", status: initial.status || "Kept", grader: cardGrader(initial), source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), gradingShip: numStr(initial.gradingShip), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst, cardGrader(initial)), date: initial.date || today() }
-    : { name: "", set: "", number: "", variant: "", lang: "en", grade: "Raw", status: "Kept", grader: DEFAULT_GRADER, source: "Rip pull", cost: "", gradingCost: "", gradingShip: "", value: "", gradeEst: estStr(null, DEFAULT_GRADER), date: today() });
+    ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", tcgplayerId: initial.tcgplayerId || "", lang: cardLang(initial), grade: initial.grade || "Raw", status: initial.status || "Kept", grader: cardGrader(initial), source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), gradingShip: numStr(initial.gradingShip), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst, cardGrader(initial)), date: initial.date || today() }
+    : { name: "", set: "", number: "", variant: "", tcgplayerId: "", lang: "en", grade: "Raw", status: "Kept", grader: DEFAULT_GRADER, source: "Rip pull", cost: "", gradingCost: "", gradingShip: "", value: "", gradeEst: estStr(null, DEFAULT_GRADER), date: today() });
   const [comps, setComps] = useState("");
   const [slabMsg, setSlabMsg] = useState("");
   const slab = slabOf(f.grade);
@@ -2692,6 +2963,15 @@ function InvForm({ initial, onSave, onCancel }) {
   // company's sold prices, and carrying them over is the exact mistake this
   // field exists to stop — a PSA 10 figure sitting under a CGC 10 label.
   const setGrader = (grader) => setF((s) => ({ ...s, grader, gradeEst: estStr(null, grader) }));
+  /* The market price is the English raw price, so it fills only a card
+     that is both. It also never overwrites a value already typed — the
+     figure in the box was put there on purpose. */
+  const pickCard = (c) => setF((s) => {
+    const price = tcgPriceable(s) ? cardPrice(c, c.variant) : null;
+    return { ...s, name: c.name, set: c.set?.name || "", number: c.number || "",
+      variant: c.variant || s.variant, tcgplayerId: c.tcgplayerId || "",
+      value: s.value || (price != null ? String(price) : "") };
+  });
   const pullComps = async () => {
     if (comps === "loading") return;
     setComps("loading");
@@ -2739,6 +3019,13 @@ function InvForm({ initial, onSave, onCancel }) {
   // burned through pokemonpricetracker.com's daily credit budget too fast.
   return (
     <Form editing={!!initial}>
+      {/* Inventory used to be the one screen with no card search on it —
+          you typed the name, the set and the number by hand, and nothing
+          gave the card a SKU. Picking a row fills all four fields and the
+          printing, so a card added here lists on TCGplayer with no
+          name-matching step at all. The fields stay editable, because a
+          card the search cannot reach still has to be enterable. */}
+      <Field label="Find the card"><CardSearch onPick={pickCard} placeholder="Search a card — name, number, or set" /></Field>
       <Field label="Card"><input className="cl-in" placeholder="Umbreon ex SIR" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
       <div className="cl-grid2"><Field label="Set"><input className="cl-in" placeholder="Prismatic Evolutions" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /></Field><Field label="Number"><input className="cl-in" placeholder="161/131" value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /></Field></div>
       {/* "Printing" is what TCGplayer calls it on the listing form; the field
@@ -2770,7 +3057,7 @@ function InvForm({ initial, onSave, onCancel }) {
       <div className="cl-net-preview"><span>True basis</span><span className="cl-money out">{fmt((Number(f.cost) || 0) + (Number(f.gradingCost) || 0) + (Number(f.gradingShip) || 0))}</span></div>
       {/* gradeEst is written on the saved card's ladder only, so a card that
           moved graders can never keep a stale grade from the old scale */}
-      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, variant: f.variant, lang: f.lang, grade: f.grade, status: f.status, grader: f.grader, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, gradingShip: Number(f.gradingShip) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(ladder.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
+      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, variant: f.variant, tcgplayerId: f.tcgplayerId, lang: f.lang, grade: f.grade, status: f.status, grader: f.grader, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, gradingShip: Number(f.gradingShip) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(ladder.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
     </Form>
   );
 }
@@ -2958,206 +3245,157 @@ function CardModal({ card, onClose, onEdit, onValue }) {
 }
 
 /* ================================================================== */
-/* ================================================================== */
-/* Catalog entry: the fast path for a stack of cards on a phone.
-
-   Pick the set once — it sticks, because a stack is nearly always one
-   set — then type the collector number or a few letters of the name.
-   The search is local, so it answers while you type instead of after a
-   network round trip, and it returns TCGplayer's own products: each row
-   is a SKU, the parenthetical variant is on it, and tapping one enters
-   the card already carrying that SKU. Nothing to confirm afterwards. */
-const CATSET_KEY = "cardledger:catset:v1";
-
-function CatalogEntry({ state, patch }) {
-  const [sets, setSets] = useState([]);
-  const [set, setSet] = useState(() => { try { return localStorage.getItem(CATSET_KEY) || ""; } catch { return ""; } });
+/* Binder: every held card as one image, grouped into a page per set —
+   the shelf-of-binders view of the same rows Inventory lists as text.
+   Tapping a card opens the same CardModal Inventory uses, so a look and
+   an edit both land in one place. The catalog carries no images at all,
+   so a card's picture is a live pokemontcg.io lookup (BinderCard below,
+   cached by lookupCardMatch); a card that lookup can't pin down — a
+   stamped print, a Japanese card, a SKU the database hasn't indexed —
+   falls back to a name tile instead of a broken image. */
+function Binder({ state, patch, go }) {
+  const inv = state.inventory || [];
   const [q, setQ] = useState("");
-  const [res, setRes] = useState([]);
-  const [busy, setBusy] = useState(false);
+  const [showSold, setShowSold] = useState(false);
+  const [viewId, setViewId] = useState(null);
+  const typed = q.trim().toLowerCase();
+  const cards = useMemo(() => inv
+    .filter((c) => (showSold || c.status !== "Sold") && c.name)
+    .filter((c) => !typed || c.name.toLowerCase().includes(typed) || (c.set || "").toLowerCase().includes(typed))
+    .sort((a, b) => (a.set || "").localeCompare(b.set || "") || normNum(a.number).localeCompare(normNum(b.number), undefined, { numeric: true }) || a.name.localeCompare(b.name)),
+  [inv, showSold, typed]);
+  const pages = useMemo(() => {
+    const out = [];
+    for (const c of cards) {
+      const key = c.set || "Unsorted";
+      const page = out[out.length - 1]?.key === key ? out[out.length - 1] : (out.push({ key, cards: [] }), out[out.length - 1]);
+      page.cards.push(c);
+    }
+    return out;
+  }, [cards]);
+  const viewCard = viewId ? inv.find((c) => c.id === viewId) : null;
+  const setValue = (v) => patch((s) => ({ inventory: s.inventory.map((x) => (x.id === viewCard.id ? { ...x, value: v } : x)) }));
+  const images = useCardImages(cards);
+
+  return (
+    <div className="cl-stack">
+      <Header title="Binder" sub={`${cards.length} card${cards.length === 1 ? "" : "s"}${pages.length > 1 ? ` · ${pages.length} sets` : ""}`} />
+      {inv.length === 0
+        ? <Empty>No cards yet. Add a keeper from Inventory or Lookup and it shows up here.</Empty>
+        : <>
+          <div className="cl-salesearch">
+            <Search size={15} className="cl-salesearch-ic" />
+            <input className="cl-in bare" placeholder="Search your binder — name or set" value={q} onChange={(e) => setQ(e.target.value)} />
+            {q && <button className="cl-salesearch-x" onClick={() => setQ("")}><X size={14} /></button>}
+          </div>
+          <label className="cl-binder-soldtoggle"><input type="checkbox" checked={showSold} onChange={(e) => setShowSold(e.target.checked)} /> Show sold cards</label>
+          {cards.length === 0 && <Empty>Nothing matches “{q}”.</Empty>}
+          {pages.map((p) => (
+            <div key={p.key} className="cl-binder-page">
+              <div className="cl-binder-page-head"><span>{p.key}</span><span className="cl-row-meta">{p.cards.length} card{p.cards.length === 1 ? "" : "s"}</span></div>
+              <div className="cl-binder-grid">
+                {p.cards.map((c) => <BinderCard key={c.id} card={c} img={images[c.id]} onOpen={setViewId} />)}
+              </div>
+            </div>
+          ))}
+        </>}
+      {viewCard && <CardModal card={viewCard} onClose={() => setViewId(null)}
+        onEdit={() => { setViewId(null); go?.("inv"); }}
+        onValue={setValue} />}
+    </div>
+  );
+}
+/* ================================================================== */
+/* Card lookup: the same CardSearch every other screen uses, with the
+   three add-paths hung off each row.
+
+   Below it sits the one thing CardSearch cannot do — browse a whole
+   TCGplayer set straight from the Lambda. That reaches a set the seller
+   has never exported and a card the database has not indexed yet, which
+   is most of the first week after a release. Its results are handed
+   back to CardSearch as `extra`, so they render as the same rows in the
+   same list rather than in a second list of their own. */
+function Lookup({ state, patch }) {
   const [ripId, setRipId] = useState("");
   const [flashes, setFlashes] = useState({});
   const flash = (id, t) => { setFlashes((f) => ({ ...f, [id]: t })); setTimeout(() => setFlashes((f) => ({ ...f, [id]: null })), 1600); };
 
-  useEffect(() => { catalogSets().then(setSets, () => setSets([])); }, []);
-  const pickSet = (s) => { setSet(s); try { localStorage.setItem(CATSET_KEY, s); } catch {} };
-
-  /* Debounced so a fast typist runs one query, not one per keystroke.
-     `live` guards the late answer of a query the user has already typed
-     past, which would otherwise overwrite the newer results. */
-  useEffect(() => {
-    if (!set) { setRes([]); return; }
-    let live = true;
-    setBusy(true);
-    const t = setTimeout(() => {
-      searchCatalog({ set, q, limit: 40 })
-        .then((r) => { if (live) { setRes(r); setBusy(false); } },
-              () => { if (live) { setRes([]); setBusy(false); } });
-    }, 120);
-    return () => { live = false; clearTimeout(t); };
-  }, [set, q]);
-
-  if (!sets.length) return null;
-
-  const rip = ripId || state.rips[0]?.id;
-  const asBuy = (rec) => { patch(addAsBuy(catalogEntryCard(rec))); flash(rec.tcgplayer_id, "Added to Buys"); };
-  const asKeep = (rec) => { patch(addAsKeep(catalogEntryCard(rec))); flash(rec.tcgplayer_id, "Kept in inventory"); };
-  const asHit = (rec) => {
-    if (!rip) { flash(rec.tcgplayer_id, "Make a rip first"); return; }
-    patch(addAsHit(catalogEntryCard(rec), rip));
-    flash(rec.tcgplayer_id, "Added as hit");
-  };
-
-  return (
-    <div className="cl-import">
-      <div className="cl-tcgp-pick-head" style={{ marginBottom: 8 }}>
-        <span>Enter from the catalog</span>
-        <span>{sets.reduce((a, s) => a + s.count, 0).toLocaleString()} SKUs on this device</span>
-      </div>
-      <select className="cl-in" value={set} onChange={(e) => pickSet(e.target.value)}>
-        <option value="">Pick a set…</option>
-        {sets.map((s) => <option key={s.key} value={s.name}>{s.name} ({s.count})</option>)}
-      </select>
-      {set && <>
-        <div className="cl-search" style={{ marginTop: 8 }}>
-          <input
-            className="cl-in"
-            inputMode="search"
-            placeholder="Number or name — e.g. 091, or banette dusk"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          {q && <button className="cl-search-btn" onClick={() => setQ("")}><X size={15} /></button>}
-        </div>
-        {state.rips.length > 0 && <select className="cl-rip-sel" style={{ width: "100%" }} value={ripId} onChange={(e) => setRipId(e.target.value)}>
-          <option value="">+ Hit goes to the latest rip</option>
-          {state.rips.map((r) => <option key={r.id} value={r.id}>+ Hit → {r.product || "Rip"}</option>)}
-        </select>}
-        <div className="cl-catrows">
-          {res.map((rec) => {
-            /* The full Product Name, parenthetical and all: on a set where
-               five products share a number, that parenthetical is the only
-               thing telling them apart. */
-            const price = rec.market_price ?? rec.low_price ?? null;
-            return (
-              <div key={rec.tcgplayer_id} className="cl-catrow">
-                <div className="cl-row-main">
-                  <div className="cl-tcgp-pick-name" title={rec.product_name}>{rec.product_name}</div>
-                  <div className="cl-row-meta">
-                    <span className="cl-chip">{VARIANT_SHORT[rec.printing] || rec.printing}</span>
-                    {rec.number ? `${rec.number} · ` : ""}{rec.rarity || "—"}
-                    {price != null ? ` · ${fmt(price)}` : " · no price"}
-                  </div>
-                </div>
-                <div className="cl-lk-actions" style={{ marginTop: 0 }}>
-                  <button className="cl-mini" onClick={() => asBuy(rec)}>+ Buy</button>
-                  <button className="cl-mini" onClick={() => asKeep(rec)}>+ Keep</button>
-                  <button className="cl-mini holo-border" onClick={() => asHit(rec)}>+ Hit</button>
-                </div>
-                {flashes[rec.tcgplayer_id] && <div className="cl-flash">{flashes[rec.tcgplayer_id]}</div>}
-              </div>
-            );
-          })}
-        </div>
-        {!busy && !res.length && <div className="cl-import-msg">{q ? `Nothing in ${set} matches “${q}”.` : "Type a number or a few letters of the name."}</div>}
-      </>}
-    </div>
-  );
-}
-
-function Lookup({ state, patch }) {
-  const [q, setQ] = useState("");
-  const [res, setRes] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
-  const [ripFor, setRipFor] = useState({});
-  const [flashes, setFlashes] = useState({});
-  const flash = (id, t) => { setFlashes((f) => ({ ...f, [id]: t })); setTimeout(() => setFlashes((f) => ({ ...f, [id]: null })), 1600); };
-
-  const search = async () => {
-    if (!q.trim()) return;
-    setLoading(true); setErr(""); setRes([]);
-    const { terms } = buildQuery(q.trim());
-    // repeat searches come straight from the 24h query cache — instant, and
-    // immune to the API having a bad day
-    const cached = qcacheGet(terms);
-    if (cached) {
-      setRes(cached); setLoading(false);
-      if (!cached.length) setErr("No cards matched. Try just the Pokémon's name.");
-      return;
-    }
-    try {
-      const data = await ptcgFetch(`cards?q=${encodeURIComponent(terms)}&pageSize=18&orderBy=-set.releaseDate&select=${PTCG_SELECT}`);
-      const filled = await fillMissingPrices((data.data || []).map(slimCard));
-      qcacheSet(terms, filled);
-      setRes(filled);
-      if (!filled.length) setErr("No cards matched. Try just the Pokémon's name.");
-    } catch { setErr("The card database didn't respond — tap search to try again."); }
-    finally { setLoading(false); }
-  };
-  // fallback: search a set straight from TCGplayer's catalog (via the Lambda) —
-  // newly released cards land there days before pokemontcg.io knows them
   const sets = useSets();
   const [catSet, setCatSet] = useState("");
+  const [catQ, setCatQ] = useState("");
+  const [catRows, setCatRows] = useState(NO_EXTRA);
+  const [catMsg, setCatMsg] = useState("");
   const [catLoading, setCatLoading] = useState(false);
-  const catSearch = async () => {
-    const s = catSet.trim();
-    if (!s || catLoading) return;
-    setCatLoading(true); setErr(""); setRes([]);
+  const browseSet = async () => {
+    const name = catSet.trim();
+    if (!name || catLoading) return;
+    setCatLoading(true); setCatMsg(""); setCatRows(NO_EXTRA);
     try {
-      const r = await fetch(`${SYNC_URL}catalog?set=${encodeURIComponent(s)}`);
+      const r = await fetch(`${SYNC_URL}catalog?set=${encodeURIComponent(name)}`);
       if (!r.ok) { const e = new Error(); e.status = r.status; throw e; }
       const j = await r.json();
-      const toks = q.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+      const toks = catQ.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+      /* A collector number is not always in the product name: "Reshiram
+         (Stellar Crown Stamped)" carries 022/142 only on `num`, so a
+         name-only filter drops it the moment the user types the number
+         printed on the card. */
+      const hasTok = (p, t) =>
+        p.name.toLowerCase().includes(t) ||
+        String(p.num || "").toLowerCase().includes(t) ||
+        normNum(p.num) === normNum(t);
       const list = (j.cards || [])
-        .filter((p) => toks.every((t) => p.name.toLowerCase().includes(t)))
+        .filter((p) => toks.every((t) => hasTok(p, t)))
         .sort((a, b) => (b.market || 0) - (a.market || 0))
         .slice(0, 40)
-        .map((p) => catalogCard(j.group, p, s));
-      setRes(list);
-      if (!list.length) setErr(toks.length ? `Nothing in ${j.group} matches “${toks.join(" ")}” — clear the search box above to browse the whole set.` : "No singles found in that set.");
+        .map((p) => catalogCard(j.group, p, name));
+      setCatRows(list.length ? list : NO_EXTRA);
+      setCatMsg(list.length ? `${list.length} from ${j.group}, listed above.`
+        : toks.length ? `Nothing in ${j.group} matches “${toks.join(" ")}” — empty this box to browse the whole set.`
+        : "No singles found in that set.");
     } catch (e) {
-      setErr(e.status === 404 ? "TCGplayer doesn't have a set by that name — pick one from the suggestions." : "TCGplayer catalog is unavailable right now — try again.");
+      setCatMsg(e.status === 404 ? "TCGplayer doesn't have a set by that name — pick one from the suggestions." : "TCGplayer catalog is unavailable right now — try again.");
     } finally { setCatLoading(false); }
   };
-  const priceOf = cardPrice;
 
+  const rip = ripId || state.rips[0]?.id;
   const asBuy = (c) => { patch(addAsBuy(c)); flash(c.id, "Added to Buys"); };
   const asKeep = (c) => { patch(addAsKeep(c)); flash(c.id, "Kept in inventory"); };
-  const asHit = (c) => { const ripId = ripFor[c.id] || state.rips[0]?.id; if (!ripId) { flash(c.id, "Make a rip first"); return; } patch(addAsHit(c, ripId)); flash(c.id, "Added as hit"); };
+  const asHit = (c) => {
+    if (!rip) { flash(c.id, "Make a rip first"); return; }
+    patch(addAsHit(c, rip));
+    flash(c.id, "Added as hit");
+  };
 
   return (
     <div className="cl-stack">
-      <Header title="Card lookup" sub="Live TCGplayer market prices · pokemontcg.io" />
-      {/* The catalog answers offline and gives the card an exact SKU, so it
-          comes first. It renders nothing until an export is imported, which
-          leaves this tab exactly as it was for anyone who has not. */}
-      <CatalogEntry state={state} patch={patch} />
-      <div className="cl-search"><input className="cl-in" placeholder="Search a card — e.g. Froakie" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} /><button className="cl-search-btn" onClick={search}><Search size={15} /></button></div>
-      {loading && <div className="cl-center">Searching…</div>}
-      {err && <Empty>{err}</Empty>}
-      <div className="cl-cards">
-        {res.map((c) => { const price = priceOf(c); return (
-          <div key={c.id} className="cl-lk">
-            {c.images?.small && <img src={c.images.small} alt={c.name} className="cl-lk-img" loading="lazy" />}
-            <div className="cl-lk-body">
-              <div className="cl-lk-name">{c.name}</div>
-              <div className="cl-row-meta">{c.set?.name} · {c.number}{c.rarity ? ` · ${c.rarity}` : ""}</div>
-              <div className="cl-lk-price">{price != null ? fmt(price) : "no market price"}</div>
-              <div className="cl-lk-actions"><button className="cl-mini" onClick={() => asBuy(c)}>+ Buy</button><button className="cl-mini" onClick={() => asKeep(c)}>+ Keep</button><button className="cl-mini holo-border" onClick={() => asHit(c)}>+ Hit</button></div>
-              {state.rips.length > 0 && <select className="cl-rip-sel" value={ripFor[c.id] || ""} onChange={(e) => setRipFor({ ...ripFor, [c.id]: e.target.value })}><option value="">latest rip</option>{state.rips.map((r) => <option key={r.id} value={r.id}>{r.product || "Rip"}</option>)}</select>}
-              {flashes[c.id] && <div className="cl-flash">{flashes[c.id]}</div>}
-            </div>
-          </div>); })}
-      </div>
-      {!loading && !catLoading && <div className="cl-cat">
-        <div className="cl-row-meta">Missing from the database? New cards hit TCGplayer's catalog first — pick a set (the search box above filters it by name):</div>
+      <Header title="Card lookup" sub="The catalog on this device, then the card database" />
+      {state.rips.length > 0 && <select className="cl-rip-sel" style={{ width: "100%" }} value={ripId} onChange={(e) => setRipId(e.target.value)}>
+        <option value="">+ Hit goes to the latest rip</option>
+        {state.rips.map((r) => <option key={r.id} value={r.id}>+ Hit → {r.product || "Rip"}</option>)}
+      </select>}
+      <CardSearch
+        panel
+        extra={catRows}
+        placeholder="Search a card — e.g. 091, banette dusk, or reshiram stamped"
+        actions={(c) => (<>
+          <div className="cl-lk-actions" style={{ marginTop: 0 }}>
+            <button className="cl-mini" onClick={() => asBuy(c)}>+ Buy</button>
+            <button className="cl-mini" onClick={() => asKeep(c)}>+ Keep</button>
+            <button className="cl-mini holo-border" onClick={() => asHit(c)}>+ Hit</button>
+          </div>
+          {flashes[c.id] && <div className="cl-flash">{flashes[c.id]}</div>}
+        </>)}
+      />
+      <div className="cl-cat">
+        <div className="cl-row-meta">Missing from both? A new set reaches TCGplayer's catalog first — name it here and its cards join the list above:</div>
         <div className="cl-search">
-          <input className="cl-in" list="bb-set-list" placeholder="Set — e.g. ME Black Star Promos" value={catSet} onChange={(e) => setCatSet(e.target.value)} onKeyDown={(e) => e.key === "Enter" && catSearch()} />
-          <button className="cl-search-btn" onClick={catSearch}><PackageOpen size={15} /></button>
+          <input className="cl-in" list="bb-set-list" placeholder="Set — e.g. ME Black Star Promos" value={catSet} onChange={(e) => setCatSet(e.target.value)} onKeyDown={(e) => e.key === "Enter" && browseSet()} />
+          <button className="cl-search-btn" onClick={browseSet}><PackageOpen size={15} /></button>
         </div>
+        <input className="cl-in" placeholder="Filter that set — leave empty for all of it" value={catQ} onChange={(e) => setCatQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && browseSet()} />
         <datalist id="bb-set-list">{(sets || []).map((s) => <option key={s} value={s} />)}</datalist>
-      </div>}
+        {(catLoading || catMsg) && <div className="cl-import-msg">{catLoading ? "Reading TCGplayer's catalog…" : catMsg}</div>}
+      </div>
     </div>
   );
 }
@@ -3507,14 +3745,6 @@ function Fonts() {
     .cl-import-msg .cl-link{color:#c4b5fd;display:inline-flex;align-items:center;gap:4px;vertical-align:-2px;}
     .cl-scan-ctl{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px;}
     .cl-scan-go{padding:11px 14px;font-size:13px;}
-    /* catalog entry rows: the product name gets the whole width, because
-       the parenthetical variant at the end of it is what tells two
-       otherwise identical rows apart */
-    .cl-catrows{display:flex;flex-direction:column;gap:7px;margin-top:9px;}
-    .cl-catrow{border:1px solid var(--line);border-radius:10px;padding:8px 9px;}
-    .cl-catrow .cl-tcgp-pick-name{white-space:normal;font-size:13px;}
-    .cl-catrow .cl-row-meta{margin-top:3px;display:flex;align-items:center;gap:6px;}
-    .cl-catrow .cl-lk-actions{margin-top:7px;}
     .cl-cat{background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px;display:flex;flex-direction:column;gap:8px;}
     .cl-cat .cl-row-meta{margin-top:0;}
     .cl-import-btn:disabled{opacity:.6;cursor:default;}
@@ -3527,12 +3757,6 @@ function Fonts() {
     .cl-salesearch-ic{color:var(--mut);flex:none;}
     .cl-salesearch .cl-in.bare{flex:1;padding:10px 0;}
     .cl-salesearch-x{background:none;border:none;color:var(--mut);cursor:pointer;display:grid;place-items:center;padding:4px;flex:none;}
-    .cl-cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-    .cl-lk{background:var(--surf);border:1px solid var(--line);border-radius:13px;overflow:hidden;display:flex;flex-direction:column;}
-    .cl-lk-img{width:100%;aspect-ratio:3/4;object-fit:contain;background:#0c0f15;padding:8px;}
-    .cl-lk-body{padding:9px 10px 11px;display:flex;flex-direction:column;gap:4px;}
-    .cl-lk-name{font-size:13px;font-weight:600;font-family:'Space Grotesk';}
-    .cl-lk-price{font-family:'Space Grotesk';font-weight:600;color:var(--pos);font-size:15px;font-variant-numeric:tabular-nums;margin-top:2px;}
     .cl-lk-actions{display:flex;gap:5px;margin-top:6px;}
     /* scanner: the add row wraps rather than shrinking the buttons, so the
        tap targets stay full size on a narrow phone */
@@ -3549,7 +3773,7 @@ function Fonts() {
     .cl-typedadd{display:flex;gap:6px;align-items:stretch;}
     .cl-typedadd>.cl-in,.cl-typedadd>.cl-ac{flex:1;}
     .cl-basisbox{max-width:110px;}
-    .cl-add-card{background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:9px;width:44px;display:grid;place-items:center;cursor:pointer;flex:none;}
+    .cl-add-card{background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:9px;flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:0 14px;cursor:pointer;font-family:'Inter';font-size:12.5px;}
     .cl-reset{margin-top:6px;display:flex;justify-content:center;}
     .cl-reset-btn{background:none;border:1px solid var(--line);color:var(--mut);border-radius:10px;padding:9px 14px;font-size:12px;cursor:pointer;font-family:'Inter';}
     .cl-reset-btn:hover{color:var(--neg);border-color:var(--neg);}
@@ -3577,6 +3801,18 @@ function Fonts() {
     .cl-addline{background:none;border:1px dashed var(--line);color:var(--mut);border-radius:10px;padding:9px;font-size:12.5px;cursor:pointer;font-family:'Inter';}
     .cl-addline:hover{color:var(--ink);border-color:var(--mut);}
     .cl-total-ro{display:flex;align-items:center;color:var(--out);font-variant-numeric:tabular-nums;}
+    /* one card search, one row style: the popover in a form and the list
+       on the Lookup tab render the same .cl-ac-item */
+    .cl-cs{display:flex;flex-direction:column;gap:8px;}
+    .cl-cs-rows{display:flex;flex-direction:column;gap:7px;}
+    .cl-cs-card{border:1px solid var(--line);border-radius:10px;background:var(--surf);overflow:hidden;}
+    .cl-cs-card .cl-ac-item{border-bottom:none;}
+    .cl-cs-card .cl-ac-item.as-row{cursor:default;}
+    .cl-cs-card .cl-lk-actions{margin:0;padding:0 10px 9px;}
+    /* three buttons share a padded row on a phone — "+ Keep" wrapped to a
+       second line and made the row twice as tall as its neighbours */
+    .cl-cs-card .cl-lk-actions .cl-mini{white-space:nowrap;padding:7px 2px;}
+    .cl-cs-card .cl-flash{padding:0 10px 8px;margin-top:0;}
     .cl-ac{position:relative;}
     .cl-ac-pop{position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:4px;background:var(--surf);border:1px solid var(--line);border-radius:10px;max-height:280px;overflow-y:auto;box-shadow:0 14px 34px rgba(0,0,0,.55);}
     .cl-ac-loading{padding:12px;text-align:center;color:var(--mut);font-size:12px;}
@@ -3588,7 +3824,6 @@ function Fonts() {
     .cl-ac-name{font-size:13px;font-weight:600;}
     .cl-ac-price{font-family:'Space Grotesk';font-weight:600;color:var(--pos);font-size:13px;font-variant-numeric:tabular-nums;flex:none;}
     .cl-ac-retry{width:100%;background:none;border:none;color:#ffce9e;cursor:pointer;font-family:'Inter';}
-    .cl-ac-hint{font-size:10.5px;color:var(--mut);margin-top:4px;padding-left:2px;font-style:italic;}
     .cl-modal-ov{position:fixed;inset:0;z-index:60;background:rgba(6,8,13,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px;}
     .cl-modal{background:var(--surf);border:1px solid var(--line);border-radius:18px;width:100%;max-width:540px;max-height:min(88vh,780px);overflow-y:auto;padding:16px;position:relative;animation:cmIn .18s ease-out;}
     @keyframes cmIn{from{transform:translateY(16px);opacity:.5;}to{transform:none;opacity:1;}}
@@ -3627,6 +3862,18 @@ function Fonts() {
     .cl-cm-meta{font-size:12px;color:var(--mut);line-height:1.5;}
     .cl-cm-links{display:flex;gap:6px;margin-top:10px;}
     .cl-cm-links .cl-mini{display:flex;align-items:center;justify-content:center;gap:5px;text-decoration:none;}
-    @media (max-width:420px){.cl-grid3{grid-template-columns:1fr;}.cl-hero-num{font-size:40px;}.cl-inv-summary .cl-stat-num{font-size:16px;}.cl-inv-summary .cl-range{font-size:11px;}.cl-gradeest{grid-template-columns:repeat(3,1fr);}.cl-cm-img{width:116px;}.cl-cm-mkt-num{font-size:22px;}.cl-scan-ctl{grid-template-columns:1fr 1fr;}.cl-scan-go{grid-column:1/-1;}}
+    .cl-binder-soldtoggle{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--mut);cursor:pointer;}
+    .cl-binder-page-head{display:flex;justify-content:space-between;align-items:baseline;font-family:'Space Grotesk';font-weight:600;font-size:13.5px;padding:2px 1px;}
+    .cl-binder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px;margin-top:8px;}
+    .cl-binder-card{display:flex;flex-direction:column;gap:5px;background:none;border:none;padding:0;cursor:pointer;font-family:'Inter';text-align:left;}
+    .cl-binder-imgwrap{position:relative;aspect-ratio:5/7;border-radius:9px;overflow:hidden;background:var(--surf2);border:1px solid var(--line);}
+    .cl-binder-img{width:100%;height:100%;object-fit:contain;background:#0c0f15;}
+    .cl-binder-ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:8px;text-align:center;font-size:10.5px;line-height:1.3;color:var(--mut);}
+    .cl-binder-ph.named{color:var(--ink);}
+    .cl-binder-sold{position:absolute;top:5px;right:5px;background:rgba(12,14,19,.82);color:var(--mut);font-size:9px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;border-radius:5px;padding:2px 5px;}
+    .cl-binder-cap{display:flex;flex-direction:column;gap:1px;}
+    .cl-binder-name{font-size:11.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .cl-binder-money{font-family:'Space Grotesk';font-weight:600;font-size:11.5px;color:var(--holo2);font-variant-numeric:tabular-nums;}
+    @media (max-width:420px){.cl-grid3{grid-template-columns:1fr;}.cl-hero-num{font-size:40px;}.cl-inv-summary .cl-stat-num{font-size:16px;}.cl-inv-summary .cl-range{font-size:11px;}.cl-gradeest{grid-template-columns:repeat(3,1fr);}.cl-cm-img{width:116px;}.cl-cm-mkt-num{font-size:22px;}.cl-scan-ctl{grid-template-columns:1fr 1fr;}.cl-scan-go{grid-column:1/-1;}.cl-binder-grid{grid-template-columns:repeat(auto-fill,minmax(88px,1fr));}}
   `}</style>);
 }
