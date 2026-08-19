@@ -10,7 +10,7 @@ import { fmt, BuyForm } from "../App.jsx";
 function BuyRow({ buy: b, isEditing, onEdit, onDelete, onToggleRipped, onSave, onCancelEdit }) {
   if (isEditing) return <BuyForm initial={b} onSave={onSave} onCancel={onCancelEdit} />;
   return (
-    <div className="cl-row">
+    <div className="cl-row cl-row-enter">
       <div className="cl-row-main">
         <div className="cl-row-title">{b.name || b.item}{b.seed && <span className="cl-seed">starter</span>}</div>
         <div className="cl-row-meta"><span className="cl-chip">{b.category}</span>{b.ripped && <span className="cl-st grading">ripped</span>} {b.source} · {b.date}{b.name && b.item && b.name !== b.item ? ` · ${b.item}` : ""}</div>

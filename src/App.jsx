@@ -1166,7 +1166,7 @@ export default function App() {
       <nav className="cl-tabs">
         {TABS.map(([k, label, Icon]) => (<button key={k} className={"cl-tab" + (tab === k ? " on" : "")} onClick={() => { haptic("select"); setTab(k); }}><Icon size={15} /> <span>{label}</span></button>))}
       </nav>
-      <main className="cl-main">
+      <main className="cl-main cl-tabpane" key={tab}>
         {tab === "dash" && <Dashboard state={state} go={setTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} resolveChoice={resolveChoice} />}
         {tab === "month" && <Monthly state={state} />}
         {tab === "rips" && <Rips state={state} patch={patch} />}
@@ -1255,7 +1255,7 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync, resolv
       <div className="cl-reset">
         {!confirmReset
           ? <button className="cl-reset-btn" onClick={() => setConfirmReset(true)}>Reset all data</button>
-          : <div className="cl-reset-confirm"><span>Wipes everything and reloads the starter data.</span><div className="cl-reset-actions"><button className="cl-cancel" onClick={() => setConfirmReset(false)}>Cancel</button><button className="cl-reset-go" onClick={() => { reset(); setConfirmReset(false); }}>Reset</button></div></div>}
+          : <div className="cl-reset-confirm cl-tabpane"><span>Wipes everything and reloads the starter data.</span><div className="cl-reset-actions"><button className="cl-cancel" onClick={() => setConfirmReset(false)}>Cancel</button><button className="cl-reset-go" onClick={() => { reset(); setConfirmReset(false); }}>Reset</button></div></div>}
       </div>
     </div>
   );
@@ -1701,7 +1701,7 @@ function CardSearch({
       <div className="cl-search">{box}{q && <button className="cl-search-btn" onClick={() => setQ("")}><X size={15} /></button>}</div>
       {rows.length > 0 && <div className="cl-cs-rows">
         {rows.map((r) => (
-          <div key={r.key} className="cl-cs-card">
+          <div key={r.key} className="cl-cs-card cl-row-enter">
             {onPick
               ? <button className="cl-ac-item" onClick={() => choose(r.card)}>{rowBody(r)}</button>
               : <div className="cl-ac-item as-row">{rowBody(r)}</div>}
@@ -1720,7 +1720,7 @@ function CardSearch({
         {box}
         {open && <div className="cl-ac-pop">
           {rows.map((r) => (
-            <button key={r.key} className="cl-ac-item" onMouseDown={(e) => e.preventDefault()} onClick={() => choose(r.card)}>{rowBody(r)}</button>
+            <button key={r.key} className="cl-ac-item cl-row-enter" onMouseDown={(e) => e.preventDefault()} onClick={() => choose(r.card)}>{rowBody(r)}</button>
           ))}
           {statusNode}
         </div>}
@@ -2769,10 +2769,10 @@ function Inventory({ state, patch }) {
       <Header title="Inventory" sub={`${live.length} held · ${hasRange ? fmtRange(range) : fmt(val)} market`} onAdd={() => { setAdding(!adding); setEditId(null); }} addOpen={adding} />
       {live.length > 0 && <div className="cl-grid2"><Stat label="Cost basis" value={fmt(basis)} tone="out" /><Stat label="Unrealized" value={hasRange ? <span className="cl-range">{fmtRange({ lo: range.lo - basis, hi: range.hi - basis })}</span> : fmt(val - basis)} tone={range.lo - basis >= 0 ? "in" : range.hi - basis < 0 ? "neg" : "out"} /></div>}
       {inv.length > 0 && <div className="cl-import">
-        <button className="cl-import-btn" onClick={refreshPrices} disabled={refreshing}><RefreshCw size={14} /> {refreshing ? "Refreshing prices…" : "Refresh market prices (TCGplayer daily data)"}</button>
+        <button className="cl-import-btn" onClick={refreshPrices} disabled={refreshing}><RefreshCw size={14} className={refreshing ? "cl-spin" : ""} /> {refreshing ? "Refreshing prices…" : "Refresh market prices (TCGplayer daily data)"}</button>
         {(state.sales || []).length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={reconcileSold}><RefreshCw size={14} /> Check against sales — mark anything already sold</button>}
         <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => { setScanOpen(!scanOpen); setSyncMsg(""); }}><Sparkles size={14} /> Grading candidates — rank raw cards by grading upside</button>
-        {scanOpen && <div className="cl-tcgp-pick">
+        {scanOpen && <div className="cl-tcgp-pick cl-tabpane">
           <div className="cl-scan-ctl">
             <Field label="Min raw value"><MoneyInput value={scanFloor} onChange={setScanFloor} /></Field>
             <Field label="Grading cost"><MoneyInput value={scanFee} onChange={setScanFee} /></Field>
@@ -2805,7 +2805,7 @@ function Inventory({ state, patch }) {
         <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={toggleTcgp}><Upload size={14} /> Upload to TCGplayer — choose cards for a staged CSV</button>
         <input ref={tcgpFileRef} type="file" accept=".csv" hidden onChange={onTcgpFile} />
         <input ref={catFileRef} type="file" accept=".csv" hidden onChange={onCatalogFile} />
-        {tcgpOpen && <div className="cl-tcgp-pick">
+        {tcgpOpen && <div className="cl-tcgp-pick cl-tabpane">
           {tcgpEligible.length === 0
             ? <div className="cl-import-msg" style={{ marginTop: 0 }}>No raw Kept cards with a set name to list — the CSV import only takes raw singles, not slabs.</div>
             : <>
@@ -3560,7 +3560,7 @@ const Stat = ({ label, value, tone }) => (<div className={"cl-stat " + tone}><di
 const Panel = ({ title, action, children }) => (<section className="cl-panel"><div className="cl-panel-head"><span>{title}</span>{action}</div>{children}</section>);
 const Empty = ({ children }) => <div className="cl-empty">{children}</div>;
 const Field = ({ label, children }) => <label className="cl-field"><span>{label}</span>{children}</label>;
-const Form = ({ children, editing }) => <div className={"cl-form" + (editing ? " cl-editing" : "")}>{children}</div>;
+const Form = ({ children, editing }) => <div className={"cl-form cl-tabpane" + (editing ? " cl-editing" : "")}>{children}</div>;
 const Actions = ({ onCancel, onSave, label, disabled }) => (<div className="cl-form-actions">{onCancel && <button className="cl-cancel" onClick={onCancel}>Cancel</button>}<button className="cl-save" disabled={disabled} onClick={onSave}>{label}</button></div>);
 const Select = ({ opts, value, onChange }) => (<select className="cl-in" value={value} onChange={(e) => onChange(e.target.value)}>{opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>);
 const MoneyInput = ({ value, onChange, placeholder = "0.00" }) => (<div className="cl-money-in"><span>$</span><input className="cl-in bare" inputMode="decimal" placeholder={placeholder} value={value} onChange={(e) => onChange(e.target.value.replace(/[^0-9.]/g, ""))} /></div>);
@@ -3605,6 +3605,48 @@ function Fonts() {
     .holo-text.neg{background:linear-gradient(110deg,#ff9a8b,#ff6f6f,#ffb454,#ff6f6f,#ff9a8b);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;}
     @keyframes holo{to{background-position:300% 0;}}
     @media (prefers-reduced-motion:reduce){.holo-text{animation:none;}}
+    /* hover/active-state easing, shared across every interactive class below
+       instead of a transition on each — state swaps (active tab, selected
+       pill, ripped toggle, disabled) ease instead of snapping */
+    .cl-tab, .cl-pill, .cl-x, .cl-save, .cl-cancel, .cl-link, .cl-row.click,
+    .cl-monthnav-btn, .cl-month-row, .cl-chip-x, .cl-reset-btn, .cl-addline,
+    .cl-ac-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
+    .cl-del, .cl-search-btn, .cl-addbtn, .cl-reset-go {
+      transition: color .15s ease, background-color .15s ease, border-color .15s ease, opacity .15s ease, transform .1s ease;
+    }
+    /* tap feedback — a light press-scale on every button-like tappable
+       element, since the app has haptics on native but nothing visual on web */
+    .cl-tab:active, .cl-pill:active, .cl-x:active, .cl-save:active:not(:disabled),
+    .cl-cancel:active, .cl-link:active:not(:disabled), .cl-row.click:active,
+    .cl-monthnav-btn:active:not(:disabled), .cl-chip-x:active, .cl-reset-btn:active,
+    .cl-addline:active, .cl-ac-item:active, .cl-import-btn:active:not(:disabled),
+    .cl-mini:active:not(:disabled), .cl-card-head:active, .cl-binder-card:active,
+    .cl-del:active, .cl-search-btn:active, .cl-addbtn:active, .cl-reset-go:active {
+      transform: scale(.96);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .cl-tab, .cl-pill, .cl-x, .cl-save, .cl-cancel, .cl-link, .cl-row.click,
+      .cl-monthnav-btn, .cl-month-row, .cl-chip-x, .cl-reset-btn, .cl-addline,
+      .cl-ac-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
+      .cl-del, .cl-search-btn, .cl-addbtn, .cl-reset-go { transition: none; }
+      .cl-tab:active, .cl-pill:active, .cl-x:active, .cl-save:active:not(:disabled),
+      .cl-cancel:active, .cl-link:active:not(:disabled), .cl-row.click:active,
+      .cl-monthnav-btn:active:not(:disabled), .cl-chip-x:active, .cl-reset-btn:active,
+      .cl-addline:active, .cl-ac-item:active, .cl-import-btn:active:not(:disabled),
+      .cl-mini:active:not(:disabled), .cl-card-head:active, .cl-binder-card:active,
+      .cl-del:active, .cl-search-btn:active, .cl-addbtn:active, .cl-reset-go:active {
+        transform: none;
+      }
+    }
+    /* tab-content fade-in on switch — replayed each time via key={tab} */
+    .cl-tabpane{animation:tabIn .16s ease-out;}
+    @keyframes tabIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+    @media (prefers-reduced-motion:reduce){.cl-tabpane{animation:none;}}
+    /* list-row entrance — applied per-row on mount, so only genuinely new or
+       newly-filtered-in rows animate, never the whole list */
+    .cl-row-enter{animation:rowIn .16s ease-out;}
+    @keyframes rowIn{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:none;}}
+    @media (prefers-reduced-motion:reduce){.cl-row-enter{animation:none;}}
     .holo-dot{width:8px;height:8px;border-radius:50%;flex:none;background:linear-gradient(110deg,#5ce1e6,#a78bfa,#ffd479);box-shadow:0 0 8px rgba(167,139,250,.6);}
     .holo-border{position:relative;border:1px solid transparent!important;background:linear-gradient(var(--surf2),var(--surf2)) padding-box,linear-gradient(110deg,#5ce1e6,#a78bfa,#ffd479) border-box!important;}
     .cl-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 8px;}
@@ -3764,7 +3806,12 @@ function Fonts() {
     .cl-snap-go .cl-mini{flex:1 1 auto;justify-content:center;padding:9px 12px;}
     .cl-mini{flex:1;background:var(--surf2);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px 4px;font-size:11.5px;cursor:pointer;font-family:'Inter';}
     .cl-rip-sel{margin-top:6px;background:#10141b;border:1px solid var(--line);color:var(--mut);border-radius:8px;padding:5px;font-size:11px;font-family:'Inter';}
-    .cl-flash{font-size:11px;color:#7cf5a0;margin-top:5px;text-align:center;}
+    .cl-flash{font-size:11px;color:#7cf5a0;margin-top:5px;text-align:center;animation:flashIn .18s ease-out;}
+    @keyframes flashIn{from{opacity:0;transform:translateY(-3px);}to{opacity:1;transform:none;}}
+    @media (prefers-reduced-motion:reduce){.cl-flash{animation:none;}}
+    .cl-spin{animation:spin .8s linear infinite;}
+    @media (prefers-reduced-motion:reduce){.cl-spin{animation:none;}}
+    @keyframes spin{to{transform:rotate(360deg);}}
     .cl-cardchips{display:flex;flex-wrap:wrap;gap:6px;}
     .cl-cardchips-empty{font-size:12px;color:var(--mut);}
     .cl-cardchip{display:inline-flex;align-items:center;gap:5px;background:#10141b;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:12px;}
@@ -3824,10 +3871,11 @@ function Fonts() {
     .cl-ac-name{font-size:13px;font-weight:600;}
     .cl-ac-price{font-family:'Space Grotesk';font-weight:600;color:var(--pos);font-size:13px;font-variant-numeric:tabular-nums;flex:none;}
     .cl-ac-retry{width:100%;background:none;border:none;color:#ffce9e;cursor:pointer;font-family:'Inter';}
-    .cl-modal-ov{position:fixed;inset:0;z-index:60;background:rgba(6,8,13,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px;}
+    .cl-modal-ov{position:fixed;inset:0;z-index:60;background:rgba(6,8,13,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px;animation:ovIn .15s ease-out;}
     .cl-modal{background:var(--surf);border:1px solid var(--line);border-radius:18px;width:100%;max-width:540px;max-height:min(88vh,780px);overflow-y:auto;padding:16px;position:relative;animation:cmIn .18s ease-out;}
     @keyframes cmIn{from{transform:translateY(16px);opacity:.5;}to{transform:none;opacity:1;}}
-    @media (prefers-reduced-motion:reduce){.cl-modal{animation:none;}}
+    @keyframes ovIn{from{opacity:0;}to{opacity:1;}}
+    @media (prefers-reduced-motion:reduce){.cl-modal{animation:none;}.cl-modal-ov{animation:none;}}
     .cl-cm-close{position:absolute;top:10px;right:10px;background:var(--surf2);}
     .cl-cm-top{display:flex;gap:14px;}
     .cl-cm-img{width:158px;flex:none;align-self:flex-start;border-radius:12px;background:#0c0f15;}

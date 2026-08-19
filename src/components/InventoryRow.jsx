@@ -8,7 +8,7 @@ import { fmt, fmtRange, stCls, statusLabel, isJP, invBasis, gradeRange, VARIANT_
 function InventoryRow({ card: c, isEditing, onEdit, onDelete, onOpen, onSave, onCancelEdit }) {
   if (isEditing) return <InvForm initial={c} onSave={onSave} onCancel={onCancelEdit} />;
   return (
-    <div className={"cl-row click" + (c.status === "Sold" ? " sold" : "")} onClick={() => onOpen(c.id)}>
+    <div className={"cl-row click cl-row-enter" + (c.status === "Sold" ? " sold" : "")} onClick={() => onOpen(c.id)}>
       <span className="holo-dot" />
       <div className="cl-row-main">
         <div className="cl-row-title">{c.name}</div>

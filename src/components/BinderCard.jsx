@@ -11,7 +11,7 @@ import { fmt } from "../App.jsx";
 // `setViewId`) — this component calls it with its own `card.id`.
 function BinderCard({ card, img, onOpen }) {
   return (
-    <button className="cl-binder-card" onClick={() => onOpen(card.id)} title={card.name}>
+    <button className="cl-binder-card cl-row-enter" onClick={() => onOpen(card.id)} title={card.name}>
       <span className="cl-binder-imgwrap">
         {img
           ? <img className="cl-binder-img" src={img} alt={card.name} loading="lazy" />

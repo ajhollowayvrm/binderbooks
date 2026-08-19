@@ -16,7 +16,7 @@ function SaleRow({ sale: x, inventory, isEditing, onEdit, onDelete, onSave, onCa
   const basis = saleBasis(x);
   const ref = cards.length && x.item ? ` · ${x.item}` : "";
   return (
-    <div className="cl-row">
+    <div className="cl-row cl-row-enter">
       <div className="cl-row-main"><div className="cl-row-title">{title}</div><div className="cl-row-meta"><span className="cl-chip">{x.channel}</span> {x.date}{ref}{ded > 0 && ` · −${ded.toFixed(2)} fees`}</div></div>
       <div className="cl-card-num"><div className="cl-money in">{fmt(net)}</div>{basis > 0 ? <div className="cl-row-meta">profit {fmt(net - basis)}</div> : null}</div>
       <button className="cl-x" onClick={() => onEdit(x.id)}><Pencil size={13} /></button>
