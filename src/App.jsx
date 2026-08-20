@@ -10,6 +10,7 @@ import {
   CSV_COLUMNS, importCatalogFile, catalogSets, catalogStats, searchCatalog,
   getCatalogRecords, catalogRowsForSets, recordToRow, clearCatalog,
 } from "./catalog.js";
+import { SET_CODES } from "./setCodes.js";
 import BuyRow from "./components/BuyRow.jsx";
 import InventoryRow from "./components/InventoryRow.jsx";
 import SaleRow from "./components/SaleRow.jsx";
@@ -17,31 +18,8 @@ import RipCard from "./components/RipCard.jsx";
 import BinderCard from "./components/BinderCard.jsx";
 
 /* ------------------------------------------------------------------ */
-/* hosted-app glue: localStorage persistence + optional API key       */
+/* hosted-app glue: localStorage persistence                           */
 /* ------------------------------------------------------------------ */
-const API_KEY = import.meta.env.VITE_POKEMONTCG_API_KEY;
-const PTCG_OPTS = API_KEY ? { headers: { "X-Api-Key": API_KEY } } : undefined;
-/* every pokemontcg.io call goes through here: the API's favorite failure mode
-   is hanging or dropping a request, so each call gets a hard timeout and one
-   retry — and `select=` trims the default payloads (full card objects carry
-   attacks/abilities/legalities we never render, ~10-20x the bytes we need) */
-const PTCG_SELECT = "id,name,number,rarity,set,images,tcgplayer";
-async function ptcgFetch(pathAndQuery, { tries = 2, timeout = 9000 } = {}) {
-  let err;
-  for (let i = 0; i < tries; i++) {
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), timeout);
-    try {
-      const r = await fetch(`https://api.pokemontcg.io/v2/${pathAndQuery}`, { ...(PTCG_OPTS || {}), signal: ctl.signal });
-      if (!r.ok) throw new Error(String(r.status));
-      return await r.json();
-    } catch (e) {
-      err = e;
-      if (i + 1 < tries) await new Promise((res) => setTimeout(res, 600));
-    } finally { clearTimeout(t); }
-  }
-  throw err;
-}
 const storage = {
   get: async (k) => { try { const v = localStorage.getItem(k); return v == null ? null : { key: k, value: v }; } catch { return null; } },
   set: async (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* quota / private mode */ } return { key: k, value: v }; },
@@ -92,46 +70,59 @@ const syncFetch = async (method, body, since) => {
     return j;
   } finally { clearTimeout(t); }
 };
+/* Every card fact — search, prices, images, comps, history — comes through
+   the Lambda's PPT-backed routes, and every one of them sits behind the sync
+   token because they spend metered credits. No token means no network call at
+   all: the thrown 401 is what lets each caller show "connect sync" instead of
+   burning a request that can only fail. */
+const NO_TOKEN_MSG = "Connect cloud sync (Overview → Cloud sync) to search the card database and pull prices.";
+async function cardFetch(path, params = {}) {
+  const token = syncToken();
+  if (!token) { const e = new Error(NO_TOKEN_MSG); e.status = 401; throw e; }
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v != null && v !== "") qs.set(k, v);
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), SYNC_TIMEOUT);
+  try {
+    const r = await fetch(`${SYNC_URL}${path}${qs.size ? `?${qs}` : ""}`, { headers: { "x-sync-token": token }, signal: ctl.signal });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
+    return j;
+  } finally { clearTimeout(t); }
+}
 
 /* ------------------------------------------------------------------ */
 const KEY = "cardledger:v1";
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-/* set list for the structured buy form — live from pokemontcg.io,
-   cached for a week so the dropdown opens instantly. v2 also carries the
-   printed expansion codes ("PRE" -> "Prismatic Evolutions") that the card
-   scanner resolves a photographed set symbol against. */
-const SETS_KEY = "cardledger:sets:v2"; // v2: entries carry ptcgoCode
+/* set list for the structured buy form — the Lambda's /sets route (PPT's
+   catalogue with the "SV07:"-style prefixes stripped), cached for a week so
+   the dropdown opens instantly. The printed expansion codes the scanner
+   resolves ("PRE" -> "Prismatic Evolutions") live in src/setCodes.js now —
+   PPT's set list doesn't carry them. */
+const SETS_KEY = "cardledger:sets:v3"; // v3: PPT names, no ptcgoCode
 let setsPromise = null;
 async function fetchSets() {
-  const data = await ptcgFetch("sets?orderBy=-releaseDate&select=name,releaseDate,ptcgoCode&pageSize=250");
-  const names = [...new Set((data.data || []).map((s) => s.name))];
+  const data = await cardFetch("sets", {});
+  const names = [...new Set(data.names || [])];
   if (!names.length) throw new Error("empty");
-  // eight codes are shared by two sets, and every one of them is a main set
-  // plus a subset of it ("BRS" is both Brilliant Stars and Brilliant Stars
-  // Trainer Gallery). Prefer the main set — it holds nearly every card and its
-  // name is always the shorter. A subset card still resolves, via
-  // lookupCardCandidates' retry without the set filter.
-  const codes = {};
-  for (const s of data.data || []) {
-    if (!s.ptcgoCode || !s.name) continue;
-    const k = s.ptcgoCode.toUpperCase();
-    if (!codes[k] || s.name.length < codes[k].length) codes[k] = s.name;
-  }
-  try { localStorage.setItem(SETS_KEY, JSON.stringify({ t: Date.now(), names, codes })); } catch {}
-  return { names, codes };
+  try { localStorage.setItem(SETS_KEY, JSON.stringify({ t: Date.now(), names })); } catch {}
+  return { names };
 }
 /* card-search cache: query -> slimmed results, 24h TTL, ~30 most recent
    queries kept. Repeat searches are instant and rate-limit failures drop. */
-const QCACHE_KEY = "cardledger:qcache:v2"; // v2: entries must carry fallback prices
+const QCACHE_KEY = "cardledger:qcache:v3"; // v3: keyed by raw text, PPT-sourced rows
 const QCACHE_TTL = 24 * 3600 * 1000;
 const cachedSets = () => { try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); return c?.names || null; } catch { return null; } };
-const cachedSetCodes = () => { try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); return c?.codes || null; } catch { return null; } };
 // words that describe a variant, not a card name — "ampharos full art" should
 // search name:*ampharos* and float Illustration/Ultra Rares, not find nothing
 const SEARCH_STOP = new Set(["full", "art", "fullart", "alt", "illustration", "special", "secret", "rainbow", "hyper", "holo", "reverse", "foil", "textured", "sir", "ir", "promo"]);
 const DESC_RARITY = { full: ["illustration", "ultra", "full"], art: ["illustration", "ultra", "full"], fullart: ["illustration", "ultra", "full"], alt: ["illustration"], illustration: ["illustration"], special: ["special"], sir: ["special illustration"], ir: ["illustration"], secret: ["secret", "hyper"], rainbow: ["rainbow", "hyper"], hyper: ["hyper"], holo: ["holo"], reverse: ["reverse"], foil: ["holo"], textured: ["special illustration"], promo: ["promo"] };
-const buildQuery = (q) => {
+/* PPT's search is fuzzy over plain words, so nothing here becomes query
+   syntax — this only reads intent out of the text: a set name becomes the
+   /search set filter, a collector number becomes the number filter, and
+   variant words ("full art") become sort hints rather than name terms. */
+const parseQuery = (q) => {
   const sets = cachedSets();
   // "143/190" printed on a card means card 143 — the denominator is set size
   let tokens = q.replace(/(\d+)\s*\/\s*\d+/g, "$1").replace(/[^\w\s-]/g, " ").trim().split(/\s+/).filter(Boolean);
@@ -160,11 +151,19 @@ const buildQuery = (q) => {
   });
   const descriptors = [...new Set(tokens.filter((t) => SEARCH_STOP.has(t.toLowerCase())).map((t) => t.toLowerCase()))];
   const nameTokens = tokens.filter((t) => !SEARCH_STOP.has(t.toLowerCase()));
-  const parts = nameTokens.map((t) => `name:*${t}*`);
-  if (setFilter) parts.push(`set.name:"${setFilter}"`);
-  if (number) parts.push(`number:${number.replace(/^0+(?=\w)/, "").toUpperCase()}`);
-  return { terms: parts.join(" ") || `name:*${q.trim()}*`, descriptors, first: (nameTokens[0] || "").toLowerCase() };
+  return {
+    q: nameTokens.join(" ") || q.trim(),
+    set: setFilter || "",
+    number: number ? number.replace(/^0+(?=\w)/, "").toUpperCase() : "",
+    descriptors, first: (nameTokens[0] || "").toLowerCase(),
+  };
 };
+/* one thin door to the Lambda's /search — raw text in, legacy-shaped slim
+   cards out. The retry without the set filter lives server-side. */
+async function searchCards({ q, set = "", number = "", lang = "en" }) {
+  const j = await cardFetch("search", { q, set, number, lang: lang === "jp" ? "jp" : "" });
+  return j.cards || [];
+}
 const qcacheRead = () => { try { return JSON.parse(localStorage.getItem(QCACHE_KEY)) || {}; } catch { return {}; } };
 const qcacheGet = (terms) => { const c = qcacheRead()[terms]; return c && Date.now() - c.t < QCACHE_TTL ? c.r : null; };
 const qcacheSet = (terms, results) => {
@@ -175,21 +174,15 @@ const qcacheSet = (terms, results) => {
     localStorage.setItem(QCACHE_KEY, JSON.stringify(all));
   } catch {}
 };
-const slimCard = (c) => ({
-  id: c.id, name: c.name, number: c.number, rarity: c.rarity,
-  set: { name: c.set?.name }, images: { small: c.images?.small },
-  ...(c.tcgplayer ? { tcgplayer: { prices: c.tcgplayer.prices } } : {}),
-});
-
-/* fallback prices: pokemontcg.io has no price data for sets newer than
-   Nov 2025, so cards missing a price get TCGplayer market values from the
-   tcgcsv.com dump, proxied through our Lambda (see aws/index.mjs). */
+/* set prices: one { cardNumber: { printing: market } } map per set from the
+   Lambda's PPT-backed /prices route. */
 const SETPRICE_KEY = "cardledger:setprices:v2"; // v2: entries are per-printing maps, not scalars
 const normNum = (s) => String(s || "").split("/")[0].trim().replace(/^0+(?=\w)/, "").toUpperCase();
 
 /* printings. A card's reverse holo can be worth several times its normal
-   printing, so which one a ledger card is decides what it's worth. tcgcsv
-   labels them one way and pokemontcg.io another, hence the two tables. */
+   printing, so which one a ledger card is decides what it's worth. TCGplayer
+   (so PPT) names them one way and the price blocks key them another, hence
+   the two tables. */
 const VARIANTS = ["Normal", "Holofoil", "Reverse Holofoil"];
 const PTCG_VARIANT_KEY = { "Normal": "normal", "Holofoil": "holofoil", "Reverse Holofoil": "reverseHolofoil" };
 // list rows are tight on a phone — "Reverse Holofoil" doesn't fit next to a
@@ -228,75 +221,62 @@ const setPricesPut = (set, p) => {
   } catch {}
 };
 // one { cardNumber: { printing: market } } map per set from the Lambda's
-// tcgcsv proxy — read through subPrice, never directly. `force` skips the 24h
-// client cache (explicit refreshes want today's dump) but still falls back to
-// it if the network call fails. Falls back to the flat `prices` map so a
-// client that ships ahead of the Lambda still prices cards.
-async function fetchSetPrices(setName, force = false) {
-  if (!force) { const m = setPricesGet(setName); if (m) return m; }
+// /prices route — read through subPrice, never directly. `force` skips the
+// 24h client cache (explicit refreshes want today's prices) but still falls
+// back to it if the network call fails. Falls back to the flat `prices` map
+// so a client that ships ahead of the Lambda still prices cards.
+async function fetchSetPrices(setName, force = false, lang = "en") {
+  const key = lang === "jp" ? `${setName}|jp` : setName;
+  if (!force) { const m = setPricesGet(key); if (m) return m; }
   try {
-    const r = await fetch(`${SYNC_URL}prices?set=${encodeURIComponent(setName)}`);
-    if (!r.ok) return force ? setPricesGet(setName) : null;
-    const j = await r.json();
+    const j = await cardFetch("prices", { set: setName, lang: lang === "jp" ? "jp" : "" });
     const m = j.subs || j.prices || {};
-    setPricesPut(setName, m);
+    setPricesPut(key, m);
     return m;
-  } catch { return force ? setPricesGet(setName) : null; }
+  } catch { return setPricesGet(key); }
 }
-async function fillMissingPrices(list) {
-  const missing = list.filter((c) => cardPrice(c) == null && c.set?.name && c.number);
-  if (!missing.length) return list;
-  const maps = {};
-  await Promise.all([...new Set(missing.map((c) => c.set.name))].map(async (s) => {
-    const m = await fetchSetPrices(s);
-    if (m) maps[s] = m;
-  }));
-  return list.map((c) => {
-    if (cardPrice(c) != null) return c;
-    const p = subsToPrices(maps[c.set?.name]?.[normNum(c.number)]);
-    return p ? { ...c, tcgplayer: { prices: p } } : c;
-  });
-}
-/* Card images, consolidated the same way fillMissingPrices consolidates
-   prices above: pokemontcg.io hands back a whole set — images included — in
-   one call, so every card in a set costs one request total instead of one
-   per card. Images never change once a card is printed, so the cache lives
-   a month; a stale entry just means a routine refetch, never a wrong
-   picture. */
-const SETIMG_KEY = "cardledger:setimages:v1";
-const SETIMG_TTL = 30 * 24 * 3600 * 1000;
-const setImagesGet = (set) => { try { const c = (JSON.parse(localStorage.getItem(SETIMG_KEY)) || {})[set]; return c && Date.now() - c.t < SETIMG_TTL ? c.l : null; } catch { return null; } };
-const setImagesPut = (set, list) => {
+/* Whole-set catalogs from the Lambda's /catalog route — every card's name,
+   number, printing prices, thumbnail and PPT product id in one call, so a
+   set's images cost one request total instead of one per card. Images never
+   change once a card is printed, so the cache lives a month; prices inside
+   go stale but this cache is only ever read for images and identity. */
+const SETCATALOG_KEY = "cardledger:setcatalog:v1";
+const SETCATALOG_TTL = 30 * 24 * 3600 * 1000;
+const setCatalogGet = (key) => { try { const c = (JSON.parse(localStorage.getItem(SETCATALOG_KEY)) || {})[key]; return c && Date.now() - c.t < SETCATALOG_TTL ? c.l : null; } catch { return null; } };
+const setCatalogPut = (key, list) => {
   try {
-    const all = JSON.parse(localStorage.getItem(SETIMG_KEY)) || {};
-    all[set] = { t: Date.now(), l: list };
+    const all = JSON.parse(localStorage.getItem(SETCATALOG_KEY)) || {};
+    all[key] = { t: Date.now(), l: list };
     const keys = Object.keys(all);
     if (keys.length > 10) keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - 10).forEach((k) => delete all[k]);
-    localStorage.setItem(SETIMG_KEY, JSON.stringify(all));
+    localStorage.setItem(SETCATALOG_KEY, JSON.stringify(all));
   } catch {}
 };
-const setImagesInFlight = new Map(); // dedupes concurrent fetches for the same set
-function fetchSetImages(setName) {
-  const cached = setImagesGet(setName);
+const setCatalogInFlight = new Map(); // dedupes concurrent fetches for the same set
+function fetchSetCatalog(setName, lang = "en") {
+  const key = lang === "jp" ? `${setName}|jp` : setName;
+  const cached = setCatalogGet(key);
   if (cached) return Promise.resolve(cached);
-  if (setImagesInFlight.has(setName)) return setImagesInFlight.get(setName);
-  const esc = String(setName).replace(/["\\]/g, "");
-  const p = ptcgFetch(`cards?q=${encodeURIComponent(`set.name:"${esc}"`)}&pageSize=250&select=name,number,images`)
-    .then((data) => {
-      const list = (data.data || []).map((c) => ({ name: c.name, number: c.number, images: c.images }));
-      setImagesPut(setName, list);
+  if (setCatalogInFlight.has(key)) return setCatalogInFlight.get(key);
+  const p = cardFetch("catalog", { set: setName, lang: lang === "jp" ? "jp" : "" })
+    .then((j) => {
+      const list = j.cards || [];
+      setCatalogPut(key, list);
       return list;
     })
     .catch(() => [])
-    .finally(() => setImagesInFlight.delete(setName));
-  setImagesInFlight.set(setName, p);
+    .finally(() => setCatalogInFlight.delete(key));
+  setCatalogInFlight.set(key, p);
   return p;
 }
+// catalog rows carry TCGplayer product names ("Pikachu - 058/102 (Pokemon
+// Center Exclusive)") — compare with the number tail and qualifiers stripped
+const bareName = (s) => String(s || "").replace(/ - [\w/.]+/g, "").replace(/\s*\([^)]*\)/g, "").toLowerCase().trim();
 const imageInSet = (list, card) => (list && (
-  (card.number && list.find((c) => normNum(c.number) === normNum(card.number))) ||
-  list.find((c) => c.name.toLowerCase() === card.name.toLowerCase())
+  (card.number && list.find((c) => normNum(c.num) === normNum(card.number))) ||
+  list.find((c) => bareName(c.name) === bareName(card.name))
 )) || null;
-// a tcgcsv per-printing map as pokemontcg.io-shaped price blocks. This used to
+// a /prices per-printing map as price blocks in the app's card shape. This used to
 // force every price under `holofoil` regardless of its real subtype, which
 // left a card's displayed price unrelated to the printing it came from.
 const subsToPrices = (e) => {
@@ -312,16 +292,18 @@ const subsToPrices = (e) => {
   if (!Object.keys(prices).length) { const v = subPrice(e, ""); if (v != null) prices.holofoil = { market: v }; }
   return Object.keys(prices).length ? prices : null;
 };
-/* a TCGplayer catalog product as a pokemontcg.io-shaped card, so the Lookup
-   result list, the scanner, and the three add-paths all handle one shape.
-   `set` stays the ledger's own name for the set, not TCGplayer's group name,
-   so a later price refresh on the kept card resolves the same way. */
+/* a /catalog product as a search-result-shaped card, so the Lookup result
+   list, the scanner, and the three add-paths all handle one shape. `set`
+   stays the ledger's own name for the set, not TCGplayer's group name, so a
+   later price refresh on the kept card resolves the same way. */
 const catalogCard = (group, p, setName) => {
   const prices = subsToPrices(p.subs ?? p.market);
   return {
     id: `tcgp-${group}-${p.num}-${p.name}`,
+    productId: p.productId || "",
     name: p.name.replace(/ - [\w/.]+$/, ""),
-    number: p.num, rarity: p.rarity, set: { name: setName }, images: {},
+    number: p.num, rarity: p.rarity, set: { name: setName },
+    images: { small: p.img || null },
     ...(prices ? { tcgplayer: { prices } } : {}),
   };
 };
@@ -355,8 +337,8 @@ async function downscale(file, maxEdge = 1500, quality = 0.85) {
   bmp.close?.();
   return cv.toDataURL("image/jpeg", quality).split(",")[1]; // strip the data: prefix
 }
-// the scan route is token-walled (it costs money per call), so it can't use
-// the bare fetch the public price routes use
+// the scan route POSTs a photo, which cardFetch's GET-shaped helper doesn't
+// carry — same token wall, its own fetch
 const identifyFetch = async (body) => {
   const r = await fetch(`${SYNC_URL}identify`, {
     method: "POST",
@@ -369,7 +351,7 @@ const identifyFetch = async (body) => {
 };
 const snapErrMsg = (e) =>
   e.status === 401 ? "Connect this device to cloud sync first — the scanner runs behind the same token."
-  : e.status === 501 ? "Card scanning isn't set up yet — the sync Lambda needs an Anthropic API key (see aws/deploy.ps1)."
+  : e.status === 501 ? "Card scanning isn't set up yet — the sync Lambda needs an Anthropic API key (see aws/deploy.sh)."
   : e.status === 429 ? "Too many scans just now — give it a moment and try again."
   : e.status === 422 ? "Couldn't read that card. Retake the photo straight-on, filling the frame, in even light."
   : e.status === 413 ? "That photo was too large to send — try again."
@@ -387,31 +369,28 @@ const readGrade = (hit) => {
   return SLAB_GRADES[co]?.includes(g) ? `${co} ${g}` : "Other";
 };
 /* what Claude read -> a real catalog card. Set first (the printed code is the
-   strongest signal), then the card, with the same two fallbacks the rest of
-   the app uses: pokemontcg.io, then TCGplayer's catalog for sets it doesn't
-   know yet. Every step may come up empty; the confirm sheet is editable. */
+   strongest signal), then the card: the fuzzy /search, then the whole-set
+   /catalog dump when search misses a brand-new card. Every step may come up
+   empty; the confirm sheet is editable. */
 async function resolveScan(hit, sets, codes) {
   const printed = hit.number || "";
   const setName = (hit.setCode && codes?.[hit.setCode.toUpperCase()]) || matchSetName(hit.setName, sets) || "";
   const variant = hit.variant && hit.variant !== "Unknown" ? hit.variant : "";
-  // pokemontcg.io stores "95" where the card prints "095/086", and its query
-  // matches the stored form — so normalise before asking, or both the
-  // set-filtered attempt and its retry miss
+  const lang = hit.language === "japanese" ? "jp" : "en";
+  // the card prints "095/086" but every lookup stores and matches "95" — so
+  // normalise before asking, or both attempts miss
   const num = normNum(printed);
   let card = null;
   if (hit.name && num) {
-    try { card = (await lookupCardCandidates({ name: hit.name, set: setName, number: num }))[0] || null; } catch {}
+    try { card = (await lookupCardCandidates({ name: hit.name, set: setName, number: num, lang }))[0] || null; } catch {}
   }
   if (!card && setName && num) {
     try {
-      const r = await fetch(`${SYNC_URL}catalog?set=${encodeURIComponent(setName)}`);
-      if (r.ok) {
-        const j = await r.json();
-        const toks = String(hit.name || "").toLowerCase().split(/\s+/).filter(Boolean);
-        const byNum = (j.cards || []).filter((x) => normNum(x.num) === num);
-        const p = byNum.find((x) => toks.every((t) => x.name.toLowerCase().includes(t))) || byNum[0];
-        if (p) card = catalogCard(j.group, p, setName);
-      }
+      const list = await fetchSetCatalog(setName, lang);
+      const toks = String(hit.name || "").toLowerCase().split(/\s+/).filter(Boolean);
+      const byNum = list.filter((x) => normNum(x.num) === num);
+      const p = byNum.find((x) => toks.every((t) => x.name.toLowerCase().includes(t))) || byNum[0];
+      if (p) card = catalogCard(setName, p, setName);
     } catch {}
   }
   return { card, setName, variant, number: card?.number || printed };
@@ -425,7 +404,7 @@ async function resolveScan(hit, sets, codes) {
    listing. */
 const GRADED_KEY = "cardledger:graded:v2"; // v2: entries carry byGrade/raw/image for the card modal
 try { localStorage.removeItem("cardledger:graded:v1"); } catch {}
-async function fetchGradedComps(name, set, number, lang = "en") {
+async function fetchGradedComps(name, set, number, lang = "en", productId = "") {
   // English keeps the old key shape, so an existing 24h cache still hits and the
   // daily PPT budget isn't re-spent on every card the moment this ships
   const key = `${name}|${set}|${number}`.toLowerCase() + (lang === "jp" ? "|jp" : "");
@@ -444,23 +423,21 @@ async function fetchGradedComps(name, set, number, lang = "en") {
     if (cached.r?._empty) { const e = new Error("no graded comps"); e.status = 404; throw e; }
     return cached.r;
   }
-  const qs = new URLSearchParams({ name });
-  if (set) qs.set("set", set);
-  if (number) qs.set("number", number);
-  if (lang === "jp") qs.set("lang", "jp");
-  const r = await fetch(`${SYNC_URL}graded?${qs}`);
-  if (!r.ok) {
+  try {
+    const body = await cardFetch("graded", {
+      name, set, number,
+      lang: lang === "jp" ? "jp" : "",
+      productId,
+    });
+    writeCache(body);
+    return body;
+  } catch (e) {
     // remember "no comps for this card" so auto-pull doesn't re-spend the daily
-    // PPT budget on it every time the form reopens; transient failures (429
-    // budget exhausted, 5xx) stay uncached so they retry later
-    if (r.status === 404) writeCache({ _empty: true });
-    const err = new Error("graded fetch failed");
-    err.status = r.status;
-    throw err;
+    // PPT budget on it every time the form reopens; transient failures (401 no
+    // token, 429 budget exhausted, 5xx) stay uncached so they retry later
+    if (e.status === 404) writeCache({ _empty: true });
+    throw e;
   }
-  const body = await r.json();
-  writeCache(body);
-  return body;
 }
 
 function useSets() {
@@ -479,21 +456,10 @@ function useSets() {
 }
 
 // printed expansion code -> set name, for resolving a scanned card's set
-// symbol. Shares fetchSets' promise and cache entry, so pairing it with
-// useSets costs no extra request.
+// symbol. Static data now (src/setCodes.js) — PPT's set list carries no
+// codes, and a table that never loads can never be the reason a scan fails.
 function useSetCodes() {
-  const [codes, setCodes] = useState(() => {
-    try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); if (c && Date.now() - c.t < 7 * 864e5 && c.codes) return c.codes; } catch {}
-    return null;
-  });
-  useEffect(() => {
-    if (codes) return;
-    if (!setsPromise) setsPromise = fetchSets();
-    let live = true;
-    setsPromise.then((d) => live && setCodes(d.codes || {})).catch(() => { setsPromise = null; if (live) setCodes({}); });
-    return () => { live = false; };
-  }, [codes]);
-  return codes; // null = loading, {} = unavailable, {...} = loaded
+  return SET_CODES;
 }
 
 const SOURCES = ["Gamecraft", "Dragon's Keep", "Game Grid", "Croma TCG", "PokeBank", "GameStop", "TikTok Shop", "Whatnot", "TCGplayer", "eBay", "PSA", "CGC", "BGS", "Other"];
@@ -575,11 +541,10 @@ const compsMatch = (r, c) => {
   const a = alnumKey(r.card), b = alnumKey(c.name);
   return !!a && !!b && (a === b || a.startsWith(b) || b.startsWith(a));
 };
-/* Japanese cards are their own print run with their own market, and both
-   English price sources here — the tcgcsv TCGplayer dump and pokemontcg.io —
-   carry English cards only. Matching a JP card against them finds the English
-   card of the same name and number and prices it as that, which is why a card's
-   language decides which sources are allowed to touch its value. */
+/* Japanese cards are their own print run with their own market. PPT carries
+   a separate Japanese catalogue, so a card's language decides which catalogue
+   every lookup asks — matching a JP card against the English one finds the
+   English card of the same name and number and prices it as that. */
 const LANGS = [["en", "English"], ["jp", "Japanese"]];
 const cardLang = (c) => (c?.lang === "jp" ? "jp" : "en");
 export const isJP = (c) => cardLang(c) === "jp";
@@ -672,8 +637,10 @@ function migrate(s) {
   // `tcgplayerId` is the per-condition SKU a card was entered as. Cards from
   // before the catalog existed have none and keep exporting through the name
   // matcher, so nothing in an existing ledger has to be re-entered.
+  // `productId` is PPT's product id — a different namespace from the export
+  // SKU, never write one into the other. It buys exact comp/history lookups.
   s.inventory = s.inventory.map((c) => {
-    const d = { status: "Kept", gradingCost: 0, gradingShip: 0, variant: "", grader: "", lang: "en", tcgplayerId: "", ...c };
+    const d = { status: "Kept", gradingCost: 0, gradingShip: 0, variant: "", grader: "", lang: "en", tcgplayerId: "", productId: "", ...c };
     if (d.status === "At grading" && !d.grader) d.grader = DEFAULT_GRADER;
     return d;
   });
@@ -720,7 +687,7 @@ export const ripPL = (r, buys) => ripValue(r) - ripCostOf(r, buys);
 function addHitToState(s, ripId, hit) {
   const h = { id: uid(), ...hit };
   const rip = s.rips.find((r) => r.id === ripId);
-  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", tcgplayerId: h.tcgplayerId || "", lang: cardLang(h), grade: h.grade || "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
+  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", tcgplayerId: h.tcgplayerId || "", productId: h.productId || "", lang: cardLang(h), grade: h.grade || "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
   return { rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r)), inventory: [inv, ...(s.inventory || [])] };
 }
 /* Editing a hit corrects the card it names, so the inventory row it produced
@@ -731,37 +698,37 @@ function updHitInState(s, ripId, hit) {
   return {
     rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: (r.hits || []).map((h) => (h.id === hit.id ? { ...h, ...hit } : h)) } : r)),
     inventory: (s.inventory || []).map((c) => (c.hitId === hit.id && c.status !== "Sold"
-      ? { ...c, name: hit.name, set: hit.set || "", number: hit.number || "", variant: hit.variant || "", tcgplayerId: hit.tcgplayerId || "", lang: cardLang(hit), grade: hit.grade || "Raw", value: Number(hit.value) || 0 }
+      ? { ...c, name: hit.name, set: hit.set || "", number: hit.number || "", variant: hit.variant || "", tcgplayerId: hit.tcgplayerId || "", productId: hit.productId || "", lang: cardLang(hit), grade: hit.grade || "Raw", value: Number(hit.value) || 0 }
       : c)),
   };
 }
 
 /* the three ways an identified card enters the ledger. Each takes a card in
-   pokemontcg.io shape and returns a patch slice, so Lookup and the scanner
+   the app's search-result shape and returns a patch slice, so Lookup and the scanner
    add cards through the same code instead of two copies that drift.
    `c.variant` is optional — Lookup results don't carry one and price exactly
    as they always did. */
 /* `cardPrice` is the English TCGplayer market price, which is the right opening
    value for an English raw single and the wrong one for anything else. A JP card
    or a slab starts at 0 — an empty field asks to be filled, where a plausible
-   wrong number does not. Callers that pass a bare pokemontcg.io card (Lookup)
+   wrong number does not. Callers that pass a bare search-result card (Lookup)
    carry no language or grade and price exactly as they always did. */
 const entryValue = (c) => (tcgPriceable(c) ? cardPrice(c, c.variant) || 0 : 0);
 const entryLabel = (c) => `${c.name} ${c.number || ""} ${isJP(c) ? "JP" : ""} ${c.grade && c.grade !== "Raw" ? c.grade : ""}`.replace(/\s+/g, " ").trim();
 const addAsBuy = (c) => (s) => ({ buys: [{ id: uid(), item: entryLabel(c), category: "Single", source: "Other", cost: entryValue(c), date: today() }, ...s.buys] });
-const addAsKeep = (c) => (s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", tcgplayerId: c.tcgplayerId || "", lang: cardLang(c), grade: c.grade || "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, gradingShip: 0, value: entryValue(c), date: today() }, ...(s.inventory || [])] });
-const addAsHit = (c, ripId) => (s) => addHitToState(s, ripId, { name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", tcgplayerId: c.tcgplayerId || "", lang: cardLang(c), grade: c.grade || "Raw", value: entryValue(c) });
+const addAsKeep = (c) => (s) => ({ inventory: [{ id: uid(), name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", tcgplayerId: c.tcgplayerId || "", productId: c.productId || "", lang: cardLang(c), grade: c.grade || "Raw", status: "Kept", source: "Other", cost: 0, gradingCost: 0, gradingShip: 0, value: entryValue(c), date: today() }, ...(s.inventory || [])] });
+const addAsHit = (c, ripId) => (s) => addHitToState(s, ripId, { name: c.name, set: c.set?.name, number: c.number, variant: c.variant || "", tcgplayerId: c.tcgplayerId || "", productId: c.productId || "", lang: cardLang(c), grade: c.grade || "Raw", value: entryValue(c) });
 /* ------------------------------------------------------------------ */
 /* A catalog row entering the ledger.
 
    TCGplayer writes the collector number into the product name — "Banette
    - 091/217 (Dusk Ball)" — but the ledger already has a `number` field,
-   and a name carrying the number matches nothing on pokemontcg.io. Strip
+   and a name carrying the number matches nothing in a name search. Strip
    the " - <number>" tail and keep the parenthetical, because that
    parenthetical is often the only thing separating two products that
    share a number, and it has to stay visible in the inventory list. */
 const catalogCardName = (productName) => String(productName || "").replace(/ - [\w/.]+(?= \(|$)/, "").trim();
-/* Present a catalog record in pokemontcg.io shape, so + Buy / + Keep /
+/* Present a catalog record in the app's search-result shape, so + Buy / + Keep /
    + Hit take it through exactly the same code as a Lookup result. The
    price is the export's own snapshot: market first, then the low columns,
    and nothing at all when the row has no price — which is every C- custom
@@ -894,26 +861,20 @@ const cardPrice = (c, variant) => {
   const v = (want && p[want]) || p.holofoil || p.normal || p.reverseHolofoil || p["1stEditionHolofoil"] || Object.values(p)[0];
   return v?.market ?? v?.mid ?? null;
 };
-// Look up one stored card on pokemontcg.io — used by Inventory's "refresh
+// Look up one stored card through /search — used by Inventory's "refresh
 // prices" and the card modal. We only trust a match we can pin down (name +
 // number, or name + set); a bare name is too ambiguous to auto-pick, so we
-// skip it rather than risk grabbing the wrong card.
-async function lookupCardCandidates(card, { fill = true } = {}) {
+// skip it rather than risk grabbing the wrong card. The server's search is
+// fuzzy, so the number filter below is the guarantee, not a nicety.
+async function lookupCardCandidates(card) {
   if (!card.name) return [];
-  const esc = (s) => String(s || "").replace(/["\\]/g, "");
-  const name = `name:"${esc(card.name)}"`;
-  const fetchList = async (q) => {
-    const data = await ptcgFetch(`cards?q=${encodeURIComponent(q)}&pageSize=24&select=${PTCG_SELECT}`);
-    const list = (data.data || []).map(slimCard);
-    return fill ? fillMissingPrices(list) : list; // fill adds a Lambda round-trip — image lookups skip it
-  };
+  const lang = card.lang === "jp" ? "jp" : "en";
   try {
     if (card.number) {
-      let list = await fetchList(card.set ? `${name} number:"${esc(card.number)}" set.name:"${esc(card.set)}"` : `${name} number:"${esc(card.number)}"`);
-      if (!list.length && card.set) list = await fetchList(`${name} number:"${esc(card.number)}"`);
+      const list = await searchCards({ q: card.name, set: card.set || "", number: normNum(card.number), lang });
       return list.filter((c) => normNum(c.number) === normNum(card.number));
     }
-    if (card.set) return await fetchList(`${name} set.name:"${esc(card.set)}"`);
+    if (card.set) return await searchCards({ q: card.name, set: card.set, lang });
   } catch { return []; }
   return []; // no number and no set — too ambiguous to match safely
 }
@@ -930,8 +891,8 @@ const matchCache = new Map();
 // same way qcacheGet/qcacheSet (above) back CardSearch's query cache: a
 // card's picture never changes once printed, so a month-long TTL is safe.
 // Only a hit gets persisted, never a miss — a miss today can become a hit
-// once pokemontcg.io indexes a new set, so caching "no match" would be wrong.
-const MATCHCACHE_KEY = "cardledger:matchcache:v1";
+// once PPT indexes a new set, so caching "no match" would be wrong.
+const MATCHCACHE_KEY = "cardledger:matchcache:v2"; // v2: PPT-sourced matches
 const MATCHCACHE_TTL = 30 * 24 * 3600 * 1000;
 const matchLsRead = () => { try { return JSON.parse(localStorage.getItem(MATCHCACHE_KEY)) || {}; } catch { return {}; } };
 const matchLsGet = (key) => { const c = matchLsRead()[key]; return c && Date.now() - c.t < MATCHCACHE_TTL ? c.r : undefined; };
@@ -948,7 +909,7 @@ async function lookupCardMatch(card) {
   if (matchCache.has(key)) return matchCache.get(key);
   const persisted = matchLsGet(key);
   if (persisted !== undefined) { matchCache.set(key, persisted); return persisted; }
-  const list = await lookupCardCandidates(card, { fill: false });
+  const list = await lookupCardCandidates(card);
   const hit = list.find((c) => cardPrice(c) != null && c.images?.small) || list.find((c) => c.images?.small) || list[0] || null;
   if (hit) { matchCache.set(key, hit); matchLsPut(key, hit); } // misses stay uncached so a flaky API call retries next open
   return hit;
@@ -973,28 +934,32 @@ function throttledCardMatch(card) {
   });
 }
 // One hook for every screen that wants card pictures. Cards batch by set
-// (fetchSetImages above resolves a whole set in one call); whatever a set
-// batch can't place — no set on the card, a stamped print, a Japanese card,
-// a printing the batch doesn't have — falls back to a throttled one-card
-// lookup. The set cache and the per-card match cache are both module-level,
-// so a card resolved on one screen (Binder, say) is instant on the next
-// (Inventory, Lookup) — nothing here is fetched twice.
+// (fetchSetCatalog above resolves a whole set in one call — Japanese sets
+// included, through PPT's Japanese catalogue); whatever a set batch can't
+// place — no set on the card, a stamped print, a printing the batch doesn't
+// have — falls back to a throttled one-card lookup. The set cache and the
+// per-card match cache are both module-level, so a card resolved on one
+// screen (Binder, say) is instant on the next (Inventory, Lookup) — nothing
+// here is fetched twice.
 function useCardImages(cards) {
   const [images, setImages] = useState({}); // id -> url|null; a missing key means still resolving
-  const setNames = [...new Set(cards.filter((c) => c.set && !isJP(c)).map((c) => c.set))].sort().join("|");
+  const setKeys = [...new Set(cards.filter((c) => c.set).map((c) => `${c.set}\t${isJP(c) ? "jp" : "en"}`))].sort().join("|");
   const cardIds = cards.map((c) => c.id).join("|");
   useEffect(() => {
     let live = true;
     (async () => {
       const maps = {};
-      await Promise.all((setNames ? setNames.split("|") : []).map(async (name) => { maps[name] = await fetchSetImages(name); }));
+      await Promise.all((setKeys ? setKeys.split("|") : []).map(async (k) => {
+        const [name, lang] = k.split("\t");
+        maps[k] = await fetchSetCatalog(name, lang);
+      }));
       if (!live) return;
       const found = {};
       const leftover = [];
       for (const c of cards) {
-        if (isJP(c) || !c.name) { found[c.id] = null; continue; }
-        const hit = c.set ? imageInSet(maps[c.set], c) : null;
-        if (hit) found[c.id] = hit.images?.small || null;
+        if (!c.name) { found[c.id] = null; continue; }
+        const hit = c.set ? imageInSet(maps[`${c.set}\t${isJP(c) ? "jp" : "en"}`], c) : null;
+        if (hit?.img) found[c.id] = hit.img;
         else leftover.push(c);
       }
       setImages((s) => ({ ...s, ...found }));
@@ -1006,7 +971,7 @@ function useCardImages(cards) {
       });
     })();
     return () => { live = false; };
-  }, [setNames, cardIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [setKeys, cardIds]); // eslint-disable-line react-hooks/exhaustive-deps
   return images;
 }
 
@@ -1519,8 +1484,8 @@ function RipForm({ buys, rippedBuyIds, onSave, onCancel }) {
 
    The catalog answers first and the database fills in behind it. A row
    from the catalog shows its printing, which is also how you see that it
-   carries a SKU. Every row hands the caller the same shape — a card in
-   pokemontcg.io shape — so the forms and the three add-paths below take
+   carries a SKU. Every row hands the caller the same shape — the app's
+   search-result card — so the forms and the three add-paths below take
    catalog rows and database rows through identical code. */
 
 /* Stamped prints. TCGplayer sells the prerelease stamp as its own
@@ -1546,7 +1511,7 @@ const cardDedupeKey = (c) => `${String(c.name || "").toLowerCase()}|${normNum(c.
 
 const noMatchMsg = (set, q) =>
   (set ? `Nothing in ${set} matches “${q}”.` : `Nothing matches “${q}”.`) +
-  (STAMPED_RE.test(q) ? ` TCGplayer files stamped prints under ${MISC_SET} — import that set's export as well.` : "");
+  (STAMPED_RE.test(q) ? ` TCGplayer files stamped prints under ${MISC_SET} — try browsing that set, or import its export.` : "");
 
 function CardSearch({
   value, onChange,                 // controlled text; omit both for an internal box
@@ -1570,7 +1535,6 @@ function CardSearch({
   const [open, setOpen] = useState(false);
   const skip = useRef(false);            // a pick must not reopen the popover
   const mounted = useRef(false);         // nor does opening an edit form with a name already in it
-  const fillSeq = useRef(0);
 
   useEffect(() => { catalogSets().then(setSets, () => setSets([])); }, []);
   const pickSet = (s) => { setSet(s); try { localStorage.setItem(CATSET_KEY, s); } catch {} };
@@ -1595,14 +1559,10 @@ function CardSearch({
   }, [set, typed, searchable]);
 
   const runDatabase = async (text) => {
-    const { terms, descriptors, first } = buildQuery(text);
+    const { q: term, set: setFilter, number, descriptors, first } = parseQuery(text);
     const want = [...new Set(descriptors.flatMap((d) => DESC_RARITY[d] || []))];
-    // newest sets first — the default order fills the page with the oldest
-    // printings, so a fresh pull ("dedenne" from Perfect Order) never even
-    // reached the pool before the cut below
-    const data = await ptcgFetch(`cards?q=${encodeURIComponent(terms)}&pageSize=24&orderBy=-set.releaseDate&select=${PTCG_SELECT}`);
-    const filled = await fillMissingPrices((data.data || []).map(slimCard));
-    const list = filled.sort((a, b) => {
+    const found = await searchCards({ q: term, set: setFilter, number });
+    const list = found.sort((a, b) => {
       const av = a.name.toLowerCase().startsWith(first) ? 0 : 1;
       const bv = b.name.toLowerCase().startsWith(first) ? 0 : 1;
       if (av !== bv) return av - bv;
@@ -1613,30 +1573,15 @@ function CardSearch({
       }
       return (cardPrice(b) || 0) - (cardPrice(a) || 0);
     }).slice(0, 14);
-    qcacheSet(terms, list);
+    qcacheSet(text.toLowerCase(), list);
     return list;
   };
 
-  /* The card database never sees a stamped query. It has no stamped
-     print, so it would answer with the unstamped card — a different SKU
-     that prices several times lower, and the wrong thing to comp a
-     ledger against. The catalog handles those alone. */
   useEffect(() => {
     setFailed(false);
-    if (typed.length < CARD_SEARCH_MIN || STAMPED_RE.test(typed)) { setRemote([]); setBusy(false); return; }
-    const terms = buildQuery(typed).terms;
-    const cached = qcacheGet(terms);
-    if (cached) {
-      setRemote(cached); setBusy(false);
-      // a v1 cache entry can predate the fallback prices; top it up quietly
-      const seq = ++fillSeq.current;
-      fillMissingPrices(cached).then((filled) => {
-        if (seq !== fillSeq.current || !filled.some((c, i) => c !== cached[i])) return;
-        qcacheSet(terms, filled);
-        setRemote(filled);
-      }, () => {});
-      return;
-    }
+    if (typed.length < CARD_SEARCH_MIN) { setRemote([]); setBusy(false); return; }
+    const cached = qcacheGet(typed.toLowerCase());
+    if (cached) { setRemote(cached); setBusy(false); return; }
     let live = true;
     setBusy(true);
     // 900ms of quiet typing fires the request — the catalog has already
@@ -1644,7 +1589,7 @@ function CardSearch({
     const t = setTimeout(() => {
       runDatabase(typed).then(
         (list) => { if (live) { setRemote(list); setBusy(false); } },
-        () => { if (live) { setRemote([]); setBusy(false); setFailed(true); } });
+        (e) => { if (live) { setRemote([]); setBusy(false); setFailed(e.status === 401 ? "token" : true); } });
     }, 900);
     return () => { live = false; clearTimeout(t); };
   }, [typed]);
@@ -1705,13 +1650,14 @@ function CardSearch({
     </>);
   };
 
-  const status = failed ? "retry"
+  const status = failed === "token" ? NO_TOKEN_MSG
+    : failed ? "retry"
     : busy && !rows.length ? "Searching the card database…"
     : !searchable ? `Type ${CARD_SEARCH_MIN} letters or more${sets.length ? ", or pick a set to browse it" : ""}.`
     : !rows.length ? noMatchMsg(set, typed)
     : null;
   const statusNode = status === "retry"
-    ? <button className="cl-ac-loading cl-ac-retry" onMouseDown={(e) => e.preventDefault()} onClick={() => { setFailed(false); setBusy(true); runDatabase(typed).then((l) => { setRemote(l); setBusy(false); }, () => { setBusy(false); setFailed(true); }); }}>Card search didn&rsquo;t respond &mdash; tap to retry</button>
+    ? <button className="cl-ac-loading cl-ac-retry" onMouseDown={(e) => e.preventDefault()} onClick={() => { setFailed(false); setBusy(true); runDatabase(typed).then((l) => { setRemote(l); setBusy(false); }, (e) => { setBusy(false); setFailed(e.status === 401 ? "token" : true); }); }}>Card search didn&rsquo;t respond &mdash; tap to retry</button>
     : status ? <div className={panel ? "cl-import-msg" : "cl-ac-loading"}>{status}</div>
     : null;
 
@@ -1775,7 +1721,7 @@ function CardSearch({
    printing select matters most in the edit case — a hit logged off the wrong
    search row is fixed there without retyping the card. */
 export function HitForm({ initial, onAdd, onSave, onCancel }) {
-  const blank = (keep) => ({ name: "", set: "", number: "", value: "", variant: "", tcgplayerId: "", lang: keep?.lang || "en", grade: keep?.grade || "Raw" });
+  const blank = (keep) => ({ name: "", set: "", number: "", value: "", variant: "", tcgplayerId: "", productId: "", lang: keep?.lang || "en", grade: keep?.grade || "Raw" });
   const [f, setF] = useState(() => (initial
     ? { name: initial.name || "", set: initial.set || "", number: initial.number || "", value: initial.value != null ? String(initial.value) : "", variant: initial.variant || "", tcgplayerId: initial.tcgplayerId || "", lang: initial.lang || "en", grade: initial.grade || "Raw" }
     : blank()));
@@ -1797,7 +1743,7 @@ export function HitForm({ initial, onAdd, onSave, onCancel }) {
   const pick = (c) => {
     setF({
       ...f, name: c.name, set: c.set?.name || "", number: c.number || "",
-      variant: c.variant || "", tcgplayerId: c.tcgplayerId || "",
+      variant: c.variant || "", tcgplayerId: c.tcgplayerId || "", productId: c.productId || "",
       value: priceable && cardPrice(c, c.variant) != null ? String(cardPrice(c, c.variant)) : "",
     });
     setPreview(c.images?.small || null);
@@ -2186,14 +2132,14 @@ export function SaleForm({ initial, inventory, onSave, onCancel }) {
 /* ------------------------------------------------------------------ */
 /* TCGplayer staged upload: merge held raw cards into the seller's own
    TCGplayer CSV export. The "TCGplayer Id" the importer matches on is a
-   per-condition SKU number that only TCGplayer's exports carry (tcgcsv /
-   pokemontcg.io product ids are a different namespace), so the flow is:
+   per-condition SKU number that only TCGplayer's exports carry (PPT's
+   `productId` is a different namespace — never write one into the other), so the flow is:
    export a CSV from the Seller Portal (Live Inventory export, or a
    Pricing-tab set export with out-of-stock rows included), feed it here
    once — it's cached per set from then on — and upload the file this
    builds via Inventory → Import to Staged. */
 const TCGP_REQ_COLS = ["TCGplayer Id", "Set Name", "Product Name", "Number", "Condition", "Add to Quantity", "TCG Marketplace Price"];
-// ledger sets use pokemontcg.io names ("Prismatic Evolutions"), TCGplayer
+// ledger sets use plain names ("Prismatic Evolutions"), TCGplayer
 // prefixes them ("SV: Prismatic Evolutions") — suffix match covers all but
 // the promo sets, whose names share no usable suffix
 const TCGP_SET_ALIASES = [
@@ -2422,7 +2368,7 @@ function Inventory({ state, patch }) {
     }));
     setSyncMsg(`Marked ${sellIds.size} card${sellIds.size === 1 ? "" : "s"} as Sold.`);
   };
-  // Pull current market prices from pokemontcg.io for every held card we can pin
+  // Pull current market prices from the price database for every held card we can pin
   // down (name + number, or name + set) — refreshing existing prices too, since they
   // go stale, not just filling blanks. Cards with only a name are skipped (too vague
   // to match safely). Also backfills a missing set/number from the match.
@@ -2453,7 +2399,7 @@ function Inventory({ state, patch }) {
     /* fastest path: a card entered from the catalog already names its SKU,
        so its price is a local read of the row we imported. It also has to
        come first — a catalog card carries TCGplayer's product name and set
-       name, which the pokemontcg.io paths below would either fail to match
+       name, which the search paths below would either fail to match
        or, worse, match to a different printing of the same card. */
     const bySku = cands.filter((c) => c.tcgplayerId);
     if (bySku.length) {
@@ -2467,23 +2413,24 @@ function Inventory({ state, patch }) {
         }
       } catch { /* no catalog on this device — fall through to the old paths */ }
     }
-    // fast path: one TCGplayer daily-dump pull per distinct set (via the
-    // Lambda) prices every card with a set + number in a few requests total —
-    // the old card-by-card pokemontcg.io walk took minutes and died mid-way
-    const setNames = [...new Set(cands.filter((c) => c.set && c.number && !updates[c.id]).map((c) => c.set))];
+    // fast path: one whole-set pull per distinct set+language (via the
+    // Lambda's PPT-backed /prices) prices every card with a set + number in a
+    // few requests total. Japanese cards batch through PPT's own Japanese
+    // catalogue — they used to be unpriceable here.
+    const setKeys = [...new Set(cands.filter((c) => c.set && c.number && !updates[c.id]).map((c) => `${c.set}\t${cardLang(c)}`))];
     const maps = {};
-    await Promise.all(setNames.map(async (s) => { const m = await fetchSetPrices(s, true); if (m) maps[s] = m; }));
+    await Promise.all(setKeys.map(async (k) => { const [name, lg] = k.split("\t"); const m = await fetchSetPrices(name, true, lg); if (m) maps[k] = m; }));
     const leftovers = [];
     for (const c of cands) {
       if (updates[c.id]?.value != null) continue; // already priced off its SKU
       // subPrice, never the raw entry — these are per-printing maps now, and
       // this value is written straight onto the card and then synced
-      const v = c.set && c.number ? subPrice(maps[c.set]?.[normNum(c.number)], c.variant) : null;
+      const v = c.set && c.number ? subPrice(maps[`${c.set}\t${cardLang(c)}`]?.[normNum(c.number)], c.variant) : null;
       if (v != null) applyPrice(c, v);
       else leftovers.push(c);
     }
     // slow path: whatever the set dump couldn't pin down (missing number, set
-    // name tcgcsv doesn't know) goes card-by-card to pokemontcg.io, which can
+    // name PPT doesn't know) goes card-by-card through /search, which can
     // also backfill a missing set/number from its match
     for (const c of leftovers) {
       const m = await lookupCardPrice(c, c.variant);
@@ -2499,9 +2446,10 @@ function Inventory({ state, patch }) {
       if (gradedNote) break; // budget gone or route unavailable — the rest would fail the same way
       let r;
       try {
-        r = await fetchGradedComps(c.name, c.set, c.number, cardLang(c));
+        r = await fetchGradedComps(c.name, c.set, c.number, cardLang(c), c.productId || "");
       } catch (e) {
         if (e.status === 429) gradedNote = " · eBay comps budget used up, try the rest tomorrow";
+        else if (e.status === 401) { gradedNote = " · " + NO_TOKEN_MSG; break; }
         else if (e.status === 501) gradedNote = " · eBay graded comps aren't set up";
         continue; // 404 / transient: just skip comps for this card
       }
@@ -2533,7 +2481,7 @@ function Inventory({ state, patch }) {
     setRefreshing(false);
     const missed = cands.length - (priced - ownComps);
     setSyncMsg(priced || graded
-      ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${ownComps ? `, ${ownComps} from their own eBay solds` : ""}${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the database yet` : ""}${wrongCard ? `; ${wrongCard} skipped — the sold data came back for a different card, check their set and number` : ""}${gradedNote}.`
+      ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${ownComps ? `, ${ownComps} from their own eBay solds` : ""}${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the price database — those price from your imported TCGplayer CSV when it covers them` : ""}${wrongCard ? `; ${wrongCard} skipped — the sold data came back for a different card, check their set and number` : ""}${gradedNote}.`
       : `None of those ${total} card${total === 1 ? "" : "s"} are in the database yet — check back later${gradedNote}.`);
   };
   // Grading-candidate scan: pull eBay graded comps for every held raw card at
@@ -2562,13 +2510,13 @@ function Inventory({ state, patch }) {
       if (isFresh(c)) continue; // fresh enough from a previous run
       setScanMsg(`Pulling eBay comps… ${i}/${scanCands.length} (${c.name})`);
       try {
-        const r = await fetchGradedComps(c.name, c.set, c.number, cardLang(c));
+        const r = await fetchGradedComps(c.name, c.set, c.number, cardLang(c), c.productId || "");
         if (!compsMatch(r, c)) { skipped++; continue; } // solds for a different card rank nothing
         const slim = (k) => (r.byGrade?.[k] ? { p: r.byGrade[k].price, n: r.byGrade[k].count } : null);
         updates[c.id] = { grading: { t: Date.now(), raw: r.raw ? { p: r.raw.price, n: r.raw.count } : null, psa10: slim("psa10"), psa9: slim("psa9"), cgc10: slim("cgc10"), tag10: slim("tag10") } };
         pulled++;
       } catch (e) {
-        if (e.status === 429) { outOfBudget = true; break; }
+        if (e.status === 429 || e.status === 401) { outOfBudget = true; break; }
         if (e.status === 404) updates[c.id] = { grading: { t: Date.now(), none: true } };
         else failed++; // transient failure — the next scan retries it
       }
@@ -3016,8 +2964,8 @@ function GradingForm({ cards, onSend, onCancel }) {
 export function InvForm({ initial, onSave, onCancel }) {
   const estStr = (e, grader) => Object.fromEntries(GRADER_LADDER[grader].map((g) => [g, numStr(e?.[g])]));
   const [f, setF] = useState(initial
-    ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", tcgplayerId: initial.tcgplayerId || "", lang: cardLang(initial), grade: initial.grade || "Raw", status: initial.status || "Kept", grader: cardGrader(initial), source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), gradingShip: numStr(initial.gradingShip), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst, cardGrader(initial)), date: initial.date || today() }
-    : { name: "", set: "", number: "", variant: "", tcgplayerId: "", lang: "en", grade: "Raw", status: "Kept", grader: DEFAULT_GRADER, source: "Rip pull", cost: "", gradingCost: "", gradingShip: "", value: "", gradeEst: estStr(null, DEFAULT_GRADER), date: today() });
+    ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", tcgplayerId: initial.tcgplayerId || "", productId: initial.productId || "", lang: cardLang(initial), grade: initial.grade || "Raw", status: initial.status || "Kept", grader: cardGrader(initial), source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), gradingShip: numStr(initial.gradingShip), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst, cardGrader(initial)), date: initial.date || today() }
+    : { name: "", set: "", number: "", variant: "", tcgplayerId: "", productId: "", lang: "en", grade: "Raw", status: "Kept", grader: DEFAULT_GRADER, source: "Rip pull", cost: "", gradingCost: "", gradingShip: "", value: "", gradeEst: estStr(null, DEFAULT_GRADER), date: today() });
   const [comps, setComps] = useState("");
   const [slabMsg, setSlabMsg] = useState("");
   const slab = slabOf(f.grade);
@@ -3032,14 +2980,14 @@ export function InvForm({ initial, onSave, onCancel }) {
   const pickCard = (c) => setF((s) => {
     const price = tcgPriceable(s) ? cardPrice(c, c.variant) : null;
     return { ...s, name: c.name, set: c.set?.name || "", number: c.number || "",
-      variant: c.variant || s.variant, tcgplayerId: c.tcgplayerId || "",
+      variant: c.variant || s.variant, tcgplayerId: c.tcgplayerId || "", productId: c.productId || "",
       value: s.value || (price != null ? String(price) : "") };
   });
   const pullComps = async () => {
     if (comps === "loading") return;
     setComps("loading");
     try {
-      const r = await fetchGradedComps(f.name, f.set, f.number, f.lang);
+      const r = await fetchGradedComps(f.name, f.set, f.number, f.lang, f.productId || "");
       if (!compsMatch(r, f)) { setComps(wrongCardMsg(r)); return; }
       const got = compGrades(r, f.grader);
       // read off the ladder, not Object.keys — JS sorts "10" and "9" ahead of
@@ -3050,7 +2998,8 @@ export function InvForm({ initial, onSave, onCancel }) {
       const label = r.number && !String(r.card).includes(r.number) ? `${r.card} ${r.number}` : r.card;
       setComps(`${f.grader} ${grades.join(" / ")} filled from eBay solds (${grades.map((g) => compCount(r, f.grader, g) || "–").join(" / ")} sales) — ${label}.`);
     } catch (e) {
-      setComps(e.status === 501 ? "Not set up yet — the sync Lambda needs a pokemonpricetracker.com API key (see aws/deploy.ps1)."
+      setComps(e.status === 401 ? NO_TOKEN_MSG
+        : e.status === 501 ? "Not set up yet — the sync Lambda needs a pokemonpricetracker.com API key (see aws/deploy.sh)."
         : e.status === 429 ? "Daily eBay-comps budget is used up — try again tomorrow, or fill the values in manually."
         : e.status === 404 ? "No recent graded sales found for this card — fill the values in manually."
         : "Comps unavailable right now — fill the values in manually.");
@@ -3064,7 +3013,7 @@ export function InvForm({ initial, onSave, onCancel }) {
     if (slabMsg === "loading" || !slab) return;
     setSlabMsg("loading");
     try {
-      const r = await fetchGradedComps(f.name, f.set, f.number, f.lang);
+      const r = await fetchGradedComps(f.name, f.set, f.number, f.lang, f.productId || "");
       if (!compsMatch(r, f)) { setSlabMsg(wrongCardMsg(r)); return; }
       const b = slabComp(r, f.grade);
       if (!b) { setSlabMsg(`No recent ${f.grade} sales found for this card — the other grades it did sell in are on the card's detail view. Fill the value in manually.`); return; }
@@ -3072,7 +3021,8 @@ export function InvForm({ initial, onSave, onCancel }) {
       const spread = b.min != null && b.max != null && b.min !== b.max ? `, ${fmt(b.min)} – ${fmt(b.max)}` : "";
       setSlabMsg(`${f.grade} · ${fmt(b.price)} from ${b.count} eBay sold${b.count === 1 ? "" : "s"}${spread}.`);
     } catch (e) {
-      setSlabMsg(e.status === 501 ? "Not set up yet — the sync Lambda needs a pokemonpricetracker.com API key (see aws/deploy.ps1)."
+      setSlabMsg(e.status === 401 ? NO_TOKEN_MSG
+        : e.status === 501 ? "Not set up yet — the sync Lambda needs a pokemonpricetracker.com API key (see aws/deploy.sh)."
         : e.status === 429 ? "Daily eBay-comps budget is used up — try again tomorrow, or fill the value in manually."
         : e.status === 404 ? "No recent sales found for this card — fill the value in manually."
         : "Comps unavailable right now — fill the value in manually.");
@@ -3120,61 +3070,113 @@ export function InvForm({ initial, onSave, onCancel }) {
       <div className="cl-net-preview"><span>True basis</span><span className="cl-money out">{fmt((Number(f.cost) || 0) + (Number(f.gradingCost) || 0) + (Number(f.gradingShip) || 0))}</span></div>
       {/* gradeEst is written on the saved card's ladder only, so a card that
           moved graders can never keep a stale grade from the old scale */}
-      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, variant: f.variant, tcgplayerId: f.tcgplayerId, lang: f.lang, grade: f.grade, status: f.status, grader: f.grader, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, gradingShip: Number(f.gradingShip) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(ladder.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
+      <Actions onCancel={onCancel} label={initial ? "Update card" : "Add card"} disabled={!f.name} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), name: f.name, set: f.set, number: f.number, variant: f.variant, tcgplayerId: f.tcgplayerId, productId: f.productId || "", lang: f.lang, grade: f.grade, status: f.status, grader: f.grader, source: f.source, cost: Number(f.cost) || 0, gradingCost: Number(f.gradingCost) || 0, gradingShip: Number(f.gradingShip) || 0, value: Number(f.value) || 0, gradeEst: Object.fromEntries(ladder.map((g) => [g, Number(f.gradeEst[g]) || 0])), date: f.date })} />
     </Form>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Card detail modal — opened by tapping an inventory row. Pulls three
-   sources in parallel: the TCGplayer set dump for a live market price,
-   pokemontcg.io for the card image/details, and the Lambda's /graded route
-   for recent eBay solds (raw + slabbed). The graded pull spends the daily
-   PPT credit budget (~6 per fresh card, cached 24h client & server) — fine
-   here because opening a card is a deliberate one-card action, unlike the
-   form auto-pull that was removed for draining the budget. */
+/* The price-over-time strip in the card modal. One series, so the section
+   title is the legend; the line wears the market accent and every number
+   wears an ink token, never the series color. The hover readout follows the
+   pointer (touch included) and names the exact day and price. */
+function PriceSpark({ points }) {
+  const [at, setAt] = useState(null); // index under the pointer
+  const W = 320, H = 56, PAD = 4;
+  const vals = points.map((p) => p.market);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const span = hi - lo || 1;
+  const x = (i) => PAD + (i / Math.max(1, points.length - 1)) * (W - PAD * 2);
+  const y = (v) => H - PAD - ((v - lo) / span) * (H - PAD * 2);
+  const d = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.market).toFixed(1)}`).join("");
+  const cur = points[points.length - 1];
+  const pick = (e) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const fx = (e.clientX - box.left) / box.width;
+    setAt(Math.max(0, Math.min(points.length - 1, Math.round(fx * (points.length - 1)))));
+  };
+  const a = at != null ? points[at] : null;
+  return (
+    <div className="cl-spark">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="cl-spark-svg"
+        onPointerMove={pick} onPointerDown={pick} onPointerLeave={() => setAt(null)}>
+        <path d={d} fill="none" stroke="var(--holo2)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        {a
+          ? <><line x1={x(at)} y1={PAD} x2={x(at)} y2={H - PAD} stroke="var(--line)" strokeWidth="1" vectorEffect="non-scaling-stroke" /><circle cx={x(at)} cy={y(a.market)} r="3.5" fill="var(--holo2)" /></>
+          : <circle cx={x(points.length - 1)} cy={y(cur.market)} r="3.5" fill="var(--holo2)" />}
+      </svg>
+      <div className="cl-spark-meta">
+        {a
+          ? <span>{a.date} · <b>{fmt(a.market)}</b></span>
+          : <span>{points[0].date} → {cur.date} · now <b>{fmt(cur.market)}</b></span>}
+        <span className="cl-row-meta">low {fmt(lo)} · high {fmt(hi)}</span>
+      </div>
+    </div>
+  );
+}
+
+/* Card detail modal — opened by tapping an inventory row. Pulls four PPT
+   slots in parallel through the Lambda: the whole-set dump for a live
+   market price, /search for the card image/details, /graded for recent
+   eBay solds (raw + slabbed), and /history for the price line. The graded
+   pull spends the daily PPT credit budget (cached 24h client & server) —
+   fine here because opening a card is a deliberate one-card action, unlike
+   the form auto-pull that was removed for draining the budget. Japanese
+   cards resolve everything through PPT's Japanese catalogue. */
 const CM_COMPANIES = [["psa", "PSA"], ["cgc", "CGC"], ["tag", "TAG"]];
 const CM_GRADES = ["10", "9.5", "9", "8"];
 const cmTrend = (t) => (t === "up" ? <span className="cl-cm-tr up">▲</span> : t === "down" ? <span className="cl-cm-tr down">▼</span> : null);
-const cmErrMsg = (s) => (s === 501 ? "eBay comps aren't set up on the sync Lambda."
+const cmErrMsg = (s) => (s === 401 ? NO_TOKEN_MSG
+  : s === 501 ? "eBay comps aren't set up on the sync Lambda."
   : s === 429 ? "Daily eBay-comps budget is used up — sold data comes back tomorrow."
   : s === 404 ? "No recent eBay solds found for this card."
   : "eBay sold data is unavailable right now.");
 function CardModal({ card, onClose, onEdit, onValue }) {
-  const [match, setMatch] = useState(null);   // pokemontcg.io match: null = looking, false = none found
-  const [live, setLive] = useState(null);     // TCGplayer market from the set dump
+  const [match, setMatch] = useState(null);   // /search match: null = looking, false = none found
+  const [live, setLive] = useState(null);     // market from the set dump
   const [comps, setComps] = useState({ state: "loading" }); // /graded body
+  const [hist, setHist] = useState(null);     // /history body: null = looking, false = none
   useEffect(() => {
     let ok = true;
-    setMatch(null); setLive(null); setComps({ state: "loading" });
-    // three independent sources, fired together — each fills its slot as it
-    // lands (the first market value to arrive wins; the rest keep theirs).
-    // Two of the three are English-only databases, so a Japanese card takes
-    // neither: it would match the English card of the same name and show its
-    // image, its set and its price. PPT's own record fills all three instead.
+    setMatch(null); setLive(null); setComps({ state: "loading" }); setHist(null);
+    const lang = cardLang(card);
+    // four independent slots, fired together — each fills as it lands (the
+    // first market value to arrive wins; the rest keep theirs)
     (async () => {
-      if (isJP(card) || !card.set || !card.number) return;
-      const m = await fetchSetPrices(card.set);
+      if (!card.set || !card.number) return;
+      const m = await fetchSetPrices(card.set, false, lang);
       const v = subPrice(m?.[normNum(card.number)], card.variant);
       if (ok && v != null) setLive((p) => (p != null ? p : v));
     })();
     (async () => {
-      if (isJP(card)) { setMatch(false); return; }
+      // the set catalog the binder already warmed carries this card's art —
+      // read it first so the modal never says "no image" for a card whose
+      // tile is showing one
+      if (card.set) {
+        const row = imageInSet(await fetchSetCatalog(card.set, lang), card);
+        if (ok && row?.img) setMatch((m) => m || { images: { small: row.img }, rarity: row.rarity, set: { name: card.set }, number: row.num });
+      }
       const hit = await lookupCardMatch(card);
       if (!ok) return;
-      setMatch(hit || false);
+      setMatch((m) => hit || m || false);
       if (!hit) return;
       let v = cardPrice(hit, card.variant);
       // ledger card missing set/number: the match names them, so its set dump can still price it
       if (v == null && hit.set?.name && hit.number && !(card.set && card.number)) {
-        const m = await fetchSetPrices(hit.set.name);
+        const m = await fetchSetPrices(hit.set.name, false, lang);
         v = subPrice(m?.[normNum(hit.number)], card.variant);
       }
       if (ok && v != null) setLive((p) => (p != null ? p : v));
     })();
     (async () => {
-      try { const r = await fetchGradedComps(card.name, card.set, card.number, cardLang(card)); if (ok) setComps({ state: "ok", data: r }); }
+      try { const r = await fetchGradedComps(card.name, card.set, card.number, lang, card.productId || ""); if (ok) setComps({ state: "ok", data: r }); }
       catch (e) { if (ok) setComps({ state: "err", status: e.status || 0 }); }
+    })();
+    (async () => {
+      try {
+        const h = await cardFetch("history", { productId: card.productId || "", name: card.productId ? "" : card.name, set: card.productId ? "" : card.set, number: card.productId ? "" : card.number, lang: lang === "jp" ? "jp" : "", days: "90" });
+        if (ok) setHist(h?.points?.length > 1 ? h : false);
+      } catch { if (ok) setHist(false); } // 401/404/429 alike: the section just doesn't render
     })();
     return () => { ok = false; };
   }, [card.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -3262,6 +3264,11 @@ function CardModal({ card, onClose, onEdit, onValue }) {
           <div className="cl-cm-stat"><span>Unrealized</span><b className={unreal >= 0 ? "pos" : "neg"}>{fmt(unreal)}</b></div>
         </div>
 
+        {hist && <>
+          <div className="cl-cm-sec">Market price — last 90 days</div>
+          <PriceSpark points={hist.points} />
+        </>}
+
         <div className="cl-cm-sec">Recent eBay solds — raw</div>
         {comps.state === "loading" && <div className="cl-cm-note">Pulling eBay sold data…</div>}
         {comps.state === "err" && <div className="cl-cm-note">{cmErrMsg(comps.status)}</div>}
@@ -3311,11 +3318,10 @@ function CardModal({ card, onClose, onEdit, onValue }) {
 /* Binder: every held card as one image, grouped into a page per set —
    the shelf-of-binders view of the same rows Inventory lists as text.
    Tapping a card opens the same CardModal Inventory uses, so a look and
-   an edit both land in one place. The catalog carries no images at all,
-   so a card's picture is a live pokemontcg.io lookup (BinderCard below,
-   cached by lookupCardMatch); a card that lookup can't pin down — a
-   stamped print, a Japanese card, a SKU the database hasn't indexed —
-   falls back to a name tile instead of a broken image. */
+   an edit both land in one place. A card's picture is a live lookup off
+   the whole-set /catalog dump (BinderCard below, cached by fetchSetCatalog
+   and lookupCardMatch) — Japanese cards included; a card that lookup can't
+   pin down falls back to a name tile instead of a broken image. */
 function Binder({ state, patch, go }) {
   const inv = state.inventory || [];
   const [q, setQ] = useState("");
@@ -3394,9 +3400,7 @@ function Lookup({ state, patch }) {
     if (!name || catLoading) return;
     setCatLoading(true); setCatMsg(""); setCatRows(NO_EXTRA);
     try {
-      const r = await fetch(`${SYNC_URL}catalog?set=${encodeURIComponent(name)}`);
-      if (!r.ok) { const e = new Error(); e.status = r.status; throw e; }
-      const j = await r.json();
+      const j = await cardFetch("catalog", { set: name });
       const toks = catQ.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
       /* A collector number is not always in the product name: "Reshiram
          (Stellar Crown Stamped)" carries 022/142 only on `num`, so a
@@ -3416,7 +3420,9 @@ function Lookup({ state, patch }) {
         : toks.length ? `Nothing in ${j.group} matches “${toks.join(" ")}” — empty this box to browse the whole set.`
         : "No singles found in that set.");
     } catch (e) {
-      setCatMsg(e.status === 404 ? "TCGplayer doesn't have a set by that name — pick one from the suggestions." : "TCGplayer catalog is unavailable right now — try again.");
+      setCatMsg(e.status === 404 ? "The price database doesn't have a set by that name — pick one from the suggestions."
+        : e.status === 401 ? NO_TOKEN_MSG
+        : "The set catalog is unavailable right now — try again.");
     } finally { setCatLoading(false); }
   };
 
@@ -3979,6 +3985,10 @@ function Fonts() {
     .cl-cm-tr.up{color:var(--pos);}.cl-cm-tr.down{color:var(--neg);}
     .cl-cm-extra{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
     .cl-cm-foot{font-size:10.5px;color:var(--mut);margin-top:8px;}
+    .cl-spark{margin-top:2px;}
+    .cl-spark-svg{display:block;width:100%;height:56px;touch-action:none;cursor:crosshair;}
+    .cl-spark-meta{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--mut);margin-top:2px;font-variant-numeric:tabular-nums;}
+    .cl-spark-meta b{color:var(--ink);font-weight:600;}
     .cl-cm-meta{font-size:12px;color:var(--mut);line-height:1.5;}
     .cl-cm-links{display:flex;gap:6px;margin-top:10px;}
     .cl-cm-links .cl-mini{display:flex;align-items:center;justify-content:center;gap:5px;text-decoration:none;}

@@ -36,8 +36,8 @@ export AWS_PROFILE=personal
 | Resource | Detail |
 |---|---|
 | HTTP API | `j18dixq7ei`, `us-west-2` — the `binderbooks-sync` API Gateway |
-| Lambda | `binderbooks-sync` — holds `SYNC_TOKEN`, `PPT_KEY` and the Anthropic API key |
-| DynamoDB | The ledger table behind that Lambda |
+| Lambda | `binderbooks-sync` — holds `SYNC_TOKEN`, `PPT_KEY` (all card data) and the Anthropic API key |
+| DynamoDB | The ledger table behind that Lambda — also the card-data cache (`set:*`, `sets:*`, `hist:*` items) |
 
 Secrets live only on the Lambda, never in this repo. The app is a static bundle, so anything shipped
 to the client is public.
@@ -49,7 +49,7 @@ From macOS or Linux:
 ```bash
 cd aws
 ./deploy.sh                              # code only
-./deploy.sh --ppt-key "ppt_..."          # also set the PPT key /graded needs
+./deploy.sh --ppt-key "ppt_..."          # also set the PPT key all card data needs
 ./deploy.sh --anthropic-key "sk-ant-..." # also set the key /identify needs
 ```
 
@@ -80,12 +80,12 @@ BadRequestException: Invalid format for origin binderbooks://local
 So the shell could never be added to an explicit list. The choice was to widen the list or to proxy
 every API call through native code. Widening won, because the allowlist was not protecting anything:
 
-- **CORS only restrains browser JavaScript.** `/prices` and `/catalog` sit outside the token wall by
-  design, and anyone could already call them with curl. Allowing browsers to do what curl could
-  always do is not a new exposure.
-- **Every other route needs `x-sync-token`.** A hostile page gains nothing from being allowed to send
+- **Every route needs `x-sync-token`.** Since the card-data routes moved to pokemonpricetracker
+  (whose credits are metered), nothing on this API answers without the token — a request that CORS
+  would have blocked fails on auth anyway. A hostile page gains nothing from being allowed to send
   a request, because it cannot read the token — that lives in `localStorage` under a different
   origin, which the same-origin policy keeps out of its reach.
+- **CORS only restrains browser JavaScript.** curl never cared. It was never the control here.
 
 The real access control is the token. Treat it that way: if it leaks, rotate `SYNC_TOKEN` on the
 Lambda and repaste it on each device. Do not reach for the CORS list as a security control, because

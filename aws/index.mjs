@@ -2,7 +2,12 @@
 // behind API Gateway HTTP API "j18dixq7ei" ($default route, payload v2).
 // The whole ledger is one JSON blob in the "binderbooks" DynamoDB table;
 // writes are conditional on updatedAt so an out-of-date device gets a 409
-// instead of clobbering newer data.
+// instead of clobbering newer data. The same table holds the card-data
+// caches (set dumps, price history) under their own ids — see cacheGet.
+// Every card fact the app shows — search, prices, printings, images,
+// graded comps, price history — comes from pokemonpricetracker.com (PPT),
+// and every route that reaches it sits behind the sync token, because PPT
+// meters by credit and an open route would spend real money.
 // (A Lambda function URL was the first attempt, but public function URLs
 // return 403 on this account regardless of resource policy.)
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
@@ -27,26 +32,19 @@ const authed = (event) => {
   return got.length === want.length && timingSafeEqual(got, want);
 };
 
-/* GET /prices?set=<name> — pokemontcg.io stopped publishing prices for sets
-   after Nov 2025, so this proxies TCGplayer market prices from tcgcsv.com's
-   daily dump (which has no CORS headers, hence the server-side hop) and
-   returns { prices: { cardNumber: market } } for the set. */
-const PRICE_TTL = 6 * 3600 * 1000;
-const priceCache = new Map();
-let groupsCache = null;
-// some CDNs reject UA-less requests from cloud IPs; send a normal browser UA
-const TCGCSV_HEADERS = { "user-agent": "Mozilla/5.0 (BinderBooks price sync; personal use)" };
 const normNum = (s) => String(s).split("/")[0].trim().replace(/^0+(?=\w)/, "").toUpperCase();
 /* Set names are compared with their accents stripped. The ledger stores a set
-   the way the card database spells it ("Pokémon GO") and tcgcsv spells the same
-   set without the accent ("Pokemon GO"), so an exact compare misses a set both
-   sides plainly have. Folding is only for matching — the names themselves are
-   still returned and displayed as their source spells them. */
+   the way the old card database spelled it ("Pokémon GO") and TCGplayer — so
+   PPT — spells the same set without the accent ("Pokemon GO"), so an exact
+   compare misses a set both sides plainly have. Folding is only for matching —
+   the names themselves are still returned and displayed as their source
+   spells them. */
 const foldSet = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-// pokemontcg.io promo-set names ("SWSH Black Star Promos") share no usable
-// suffix with TCGplayer's group names, so those eras get explicit aliases
+// legacy promo-set names in the ledger ("SWSH Black Star Promos") share no
+// usable suffix with TCGplayer's set names, so those eras get explicit aliases
 const GROUP_ALIASES = [
   [/scarlet.*violet.*(black star|promo)/, "sv: scarlet & violet promo cards"],
+  [/^svp\b/, "sv: scarlet & violet promo cards"],
   [/^me(ga evolution)?\b.*(black star|promo)/, "me: mega evolution promo"],
   [/^swsh\b.*(black star|promo)/, "swsh: sword & shield promo cards"],
   [/^sm\b.*(black star|promo)/, "sm promos"],
@@ -65,16 +63,92 @@ const nameNum = (name) => {
 // variant; this is the "don't care" answer, and the order is load-bearing —
 // it's the collapse /prices has always returned.
 const collapse = (sub) => (sub ? sub["Normal"] ?? sub["Holofoil"] ?? Object.values(sub)[0] ?? null : null);
-async function setData(setName) {
-  const key = setName.toLowerCase();
-  const hit = priceCache.get(key);
-  if (hit && Date.now() - hit.t < PRICE_TTL) return hit;
-  if (!groupsCache || Date.now() - groupsCache.t > PRICE_TTL) {
-    const gr = await fetch("https://tcgcsv.com/tcgplayer/3/groups", { headers: TCGCSV_HEADERS });
-    if (!gr.ok) throw new Error(`groups HTTP ${gr.status}`);
-    const g = await gr.json();
-    groupsCache = { t: Date.now(), list: g.results || [] };
+/* --- the PPT client ---------------------------------------------------- */
+// PPT bills credits on the requested `limit`, never on the rows that come
+// back — a bare list call defaults to limit=50 and costs 50 credits even
+// when one card matches, so every list call here names its limit. A 429
+// carries Retry-After: a short one is the per-minute cap (wait it out,
+// once), a long one is the daily budget (surface it — retrying can't help).
+const PPT_BASE = "https://www.pokemonpricetracker.com/api/v2";
+const pptLang = (lang) => (lang === "jp" ? "japanese" : "english");
+async function pptFetch(path, params) {
+  for (let attempt = 0; ; attempt++) {
+    const u = new URL(`${PPT_BASE}/${path}`);
+    for (const [k, v] of Object.entries(params)) if (v != null && v !== "") u.searchParams.set(k, v);
+    const ctl = new AbortController();
+    // beat API Gateway's 30s cut-off, same reasoning as identifyCards
+    const t = setTimeout(() => ctl.abort(), 25_000);
+    try {
+      const r = await fetch(u, { headers: { authorization: `Bearer ${process.env.PPT_KEY}` }, signal: ctl.signal });
+      if (r.status === 429 && attempt === 0) {
+        const wait = Number(r.headers.get("retry-after"));
+        if (wait > 0 && wait <= 10) { await new Promise((ok) => setTimeout(ok, wait * 1000)); continue; }
+      }
+      if (!r.ok) { const e = new Error(`ppt HTTP ${r.status}`); e.status = r.status; throw e; }
+      return await r.json();
+    } finally { clearTimeout(t); }
   }
+}
+// /cards answers with a list on a search and one bare object on an id
+// lookup — normalize both to an array
+async function pptCards(params) {
+  const data = await pptFetch("cards", params);
+  const cards = data.cards ?? data.data ?? data;
+  return Array.isArray(cards) ? cards : cards && typeof cards === "object" ? [cards] : [];
+}
+
+/* --- the card-data cache ------------------------------------------------ */
+/* Set dumps, the set list and price history live in the same DynamoDB table
+   as the ledger, under their own ids ("set:en:base set", "sets:jp",
+   "hist:en:1234:90"). A Lambda's in-memory Map dies with its container, and
+   every cold start would otherwise re-buy the same set at its full card
+   count in credits. The item stores the JSON as a string so the 400 KB size
+   guard is exact; anything over the cap stays memory-only — caching must
+   never fail a request. */
+const memCache = new Map();
+async function cacheGet(id, ttl) {
+  const m = memCache.get(id);
+  if (m && Date.now() - m.t < ttl) return m.body;
+  try {
+    const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: { id } }));
+    if (r.Item?.t && Date.now() - r.Item.t < ttl) {
+      const body = JSON.parse(r.Item.data);
+      memCache.set(id, { t: r.Item.t, body });
+      return body;
+    }
+  } catch {}
+  return null;
+}
+async function cachePut(id, body) {
+  memCache.set(id, { t: Date.now(), body });
+  try {
+    const data = JSON.stringify(body);
+    if (data.length <= MAX_BYTES) await ddb.send(new PutCommand({ TableName: TABLE, Item: { id, t: Date.now(), data } }));
+  } catch {}
+}
+
+const SETS_TTL = 7 * 24 * 3600 * 1000;
+async function pptSets(lang = "en") {
+  const id = `sets:${lang}`;
+  const hit = await cacheGet(id, SETS_TTL);
+  if (hit) return hit;
+  const data = await pptFetch("sets", { language: pptLang(lang), limit: "500" });
+  const list = (data.data || [])
+    .filter((s) => s.tcgPlayerNumericId)
+    .map((s) => ({ name: s.name, numericId: s.tcgPlayerNumericId, releaseDate: (s.releaseDate || "").slice(0, 10), cardCount: s.cardCount || 0 }))
+    .sort((a, b) => b.releaseDate.localeCompare(a.releaseDate));
+  const body = { list };
+  await cachePut(id, body);
+  return body;
+}
+
+// PPT reprices daily, so a fresher dump than 24h buys nothing
+const SET_TTL = 24 * 3600 * 1000;
+async function pptSetData(setName, lang = "en") {
+  const cacheId = `set:${lang}:${foldSet(setName)}`;
+  const hit = await cacheGet(cacheId, SET_TTL);
+  if (hit) return hit;
+  const { list } = await pptSets(lang);
   /* Exact name wins before any partial match, and the reason is a real card:
      four later sets are named "<something> Base Set", and every one of them
      ends with "base set" — so "Base Set" used to resolve to SV01: Scarlet &
@@ -82,36 +156,55 @@ async function setData(setName) {
      That is not a search miss, it is the wrong set's prices written onto a
      Base Set card. Same trap waits for any short set name that is also the
      tail of a newer one, so exactness is the rule, not a special case. */
+  const key = setName.toLowerCase();
   const fkey = foldSet(key);
   const alias = GROUP_ALIASES.find(([re]) => re.test(key))?.[1];
-  const group = (alias && groupsCache.list.find((x) => foldSet(x.name) === alias))
-    || groupsCache.list.find((x) => foldSet(x.name) === fkey)
-    || groupsCache.list.find((x) => foldSet(x.name).endsWith(fkey))
-    || groupsCache.list.find((x) => foldSet(x.name).includes(fkey));
+  const group = (alias && list.find((x) => foldSet(x.name) === alias))
+    || list.find((x) => foldSet(x.name) === fkey)
+    || list.find((x) => foldSet(x.name).endsWith(fkey))
+    || list.find((x) => foldSet(x.name).includes(fkey));
   if (!group) return null;
-  const [prods, prices] = await Promise.all([
-    fetch(`https://tcgcsv.com/tcgplayer/3/${group.groupId}/products`, { headers: TCGCSV_HEADERS }).then((r) => { if (!r.ok) throw new Error(`products HTTP ${r.status}`); return r.json(); }),
-    fetch(`https://tcgcsv.com/tcgplayer/3/${group.groupId}/prices`, { headers: TCGCSV_HEADERS }).then((r) => { if (!r.ok) throw new Error(`prices HTTP ${r.status}`); return r.json(); }),
-  ]);
-  const byProd = {};
-  for (const p of prices.results || []) {
-    if (p.marketPrice == null) continue;
-    (byProd[p.productId] ||= {})[p.subTypeName] = p.marketPrice;
+  // fetchAllInSet with no limit/offset returns the whole set in one response,
+  // billed once at its card count; page defensively anyway in case a set
+  // ever outgrows one response
+  const raw = [];
+  for (let offset = 0; ; ) {
+    const page = await pptFetch("cards", {
+      setId: String(group.numericId), fetchAllInSet: "true", language: pptLang(lang),
+      ...(offset ? { limit: "200", offset: String(offset) } : {}),
+    });
+    const got = page.data || [];
+    raw.push(...got);
+    if (!page.metadata?.hasMore || !got.length) break;
+    offset += got.length;
   }
-  const products = [];
-  for (const pr of prods.results || []) {
-    const ext = (pr.extendedData || []).find((d) => d.name === "Number"); // absent on sealed products
-    if (!ext) continue;
-    const rar = (pr.extendedData || []).find((d) => d.name === "Rarity");
-    const sub = byProd[pr.productId];
-    products.push({ id: pr.productId, name: pr.name, num: nameNum(pr.name) || ext.value, extNum: ext.value, rarity: rar?.value || "", market: collapse(sub), subs: sub || null });
-  }
-  const data = { t: Date.now(), group: group.name, products };
-  priceCache.set(key, data);
-  return data;
+  /* The internal product shape predates PPT and every consumer speaks it:
+     { id, name, num, extNum, rarity, market, subs, img }. PPT product names
+     are TCGplayer names ("Koraidon - 014 (Pokemon Center Exclusive)"), so
+     nameNum and the qualifier matching carry over unchanged. Per-printing
+     prices come from the card's top-level `variants` map — prices.variants
+     and prices.conditions are deprecated upstream (removal Aug 2026). */
+  const products = raw.map((c) => {
+    const subs = {};
+    for (const [printing, v] of Object.entries(c.variants || {})) {
+      if (v?.marketPrice != null) subs[printing] = v.marketPrice;
+    }
+    const has = Object.keys(subs).length > 0;
+    return {
+      id: String(c.tcgPlayerId || ""), name: c.name || "",
+      num: nameNum(c.name) || c.cardNumber || "", extNum: c.cardNumber || "",
+      rarity: c.rarity || "",
+      market: has ? collapse(subs) : (c.prices?.market ?? null),
+      subs: has ? subs : null,
+      img: c.imageCdnUrl200 || null,
+    };
+  });
+  const body = { group: group.name, products };
+  await cachePut(cacheId, body);
+  return body;
 }
-async function setPrices(setName) {
-  const d = await setData(setName);
+async function setPrices(setName, lang) {
+  const d = await pptSetData(setName, lang);
   if (!d) return null;
   // [Staff] and (Prerelease) variants share the plain card's number but carry
   // very different prices — they only fill a slot the plain card doesn't
@@ -134,26 +227,118 @@ async function setPrices(setName) {
   for (const n of Object.keys(subs)) out[n] = collapse(subs[n]);
   return { set: setName, group: d.group, prices: out, subs };
 }
-/* GET /catalog?set=<name> — the singles in a set straight from TCGplayer's
-   catalog (via tcgcsv): name, number, rarity, market. Newly released cards
-   land here days before pokemontcg.io knows them, so the app's Lookup tab
-   falls back to this when its card database comes up empty. */
-async function setCatalog(setName) {
-  const d = await setData(setName);
+/* GET /catalog?set=<name> — a whole set's singles: name, number, rarity,
+   market, per-printing subs, plus `img` (the thumbnail the binder and rip
+   views render) and `productId` (PPT's product id, which buys exact
+   2-credit graded/history lookups later). */
+async function setCatalog(setName, lang) {
+  const d = await pptSetData(setName, lang);
   if (!d) return null;
-  return { set: setName, group: d.group, cards: d.products.map((p) => ({ name: p.name, num: p.num, rarity: p.rarity, market: p.market, subs: p.subs })) };
+  return { set: setName, group: d.group, cards: d.products.map((p) => ({ name: p.name, num: p.num, rarity: p.rarity, market: p.market, subs: p.subs, img: p.img, productId: p.id })) };
 }
 
-/* GET /graded?name=<card>&number=<num>&set=<set>&lang=<en|jp> — eBay-sold comps
-   for PSA grades from pokemonpricetracker.com (Bearer key in PPT_KEY env var;
-   free tier is 100 credits/day and a 5-card lookup with eBay data costs 10, so
-   results are cached hard). `lang=jp` asks PPT's Japanese catalogue, which is a
-   separate card with separate sold prices — not a translation of the English
-   one. Returns { card, set, number, market, grades }
-   where grades is { "10": avg, "9": avg, ... } for whatever grades have
-   recorded sales, plus the card-detail extras the app's card modal shows:
-   byGrade (every company+grade bucket, e.g. "cgc9_5"), raw (ungraded solds),
-   window (the date range the sales cover), image and url (TCGplayer CDN). */
+/* GET /search?q=<text>&set=<name>&number=<num>&lang=<en|jp> — fuzzy card
+   search, slimmed to the exact shape the client has always consumed (its
+   cardPrice() reads tcgplayer.prices keyed normal/holofoil/reverseHolofoil,
+   its rows split per priced printing). PPT's search takes plain words and
+   "X/Y" numbers, so the client sends raw text — no query syntax anywhere. */
+const printingKey = (p) => String(p).split(/\s+/).map((w, i) => (i ? w : w[0].toLowerCase() + w.slice(1))).join("");
+const slimCard = (c) => {
+  const prices = {};
+  for (const [printing, v] of Object.entries(c.variants || {})) {
+    if (v?.marketPrice != null) prices[printingKey(printing)] = { market: v.marketPrice };
+  }
+  // a card with a market but no variants map still deserves a price slot;
+  // holofoil mirrors the client's own single-price fallback
+  if (!Object.keys(prices).length && c.prices?.market != null) prices.holofoil = { market: c.prices.market };
+  return {
+    id: `ppt-${c.tcgPlayerId}`, productId: String(c.tcgPlayerId || ""),
+    name: c.name || "", number: c.cardNumber || "", rarity: c.rarity || "",
+    set: { name: c.setName || "" }, images: { small: c.imageCdnUrl200 || null },
+    ...(Object.keys(prices).length ? { tcgplayer: { prices } } : {}),
+  };
+};
+async function cardSearch(q, set, number, lang) {
+  const params = { search: number ? `${q} ${number}` : q, language: pptLang(lang), limit: "12" };
+  if (set) params.set = foldSet(set);
+  let cards = await pptCards(params);
+  // a set spelling PPT doesn't recognize shouldn't sink the search
+  if (!cards.length && set) { delete params.set; cards = await pptCards(params); }
+  return cards.map(slimCard);
+}
+
+/* GET /history?productId=<id>&days=<n>&lang=<en|jp> — a card's market price
+   over time, from PPT's per-printing daily history. Near Mint of the
+   primary printing is "the" line; every printing with data rides along in
+   byVariant so the modal can offer the reverse holo's history too. */
+const HIST_TTL = 24 * 3600 * 1000;
+async function priceHistory(productId, days, lang) {
+  const cacheId = `hist:${lang}:${productId}:${days}`;
+  const hit = await cacheGet(cacheId, HIST_TTL);
+  if (hit) return hit;
+  const cards = await pptCards({ tcgPlayerId: String(productId), includeHistory: "true", days: String(days), limit: "1", language: pptLang(lang) });
+  const c = cards.find((x) => String(x.tcgPlayerId ?? "") === String(productId));
+  if (!c) return null;
+  const seriesOf = (v) => {
+    const cond = v?.["Near Mint"] || Object.values(v || {})[0];
+    return (cond?.history || [])
+      .map((p) => ({ date: String(p.date).slice(0, 10), market: Number(p.market) }))
+      .filter((p) => p.market > 0);
+  };
+  const byVariant = {};
+  for (const [printing, v] of Object.entries(c.priceHistory?.variants || {})) {
+    const s = seriesOf(v);
+    if (s.length) byVariant[printing] = s;
+  }
+  const points = byVariant[c.prices?.primaryPrinting] || Object.values(byVariant)[0] || [];
+  if (!points.length) return null;
+  const body = {
+    card: c.name, number: c.cardNumber || null, set: c.setName || null,
+    productId: String(c.tcgPlayerId), points, byVariant,
+    window: { from: points[0].date, to: points[points.length - 1].date },
+  };
+  await cachePut(cacheId, body);
+  return body;
+}
+
+/* Resolve a ledger card (name + number + set) to PPT's product id through
+   the cached set dump — the exact, 2-credit path for graded and history
+   lookups, against a fuzzy name search's 6. Works for both languages now
+   that the dumps themselves come from PPT. */
+async function resolveProductId(name, number, set, lang) {
+  if (!set || !number) return null;
+  try {
+    const d = await pptSetData(set, lang);
+    if (!d) return null;
+    const want = normNum(number);
+    const clean = d.products.filter((p) => p.id && !/\[|\(prerelease\)/i.test(p.name));
+    const sameNum = clean.filter((p) => normNum(p.num) === want);
+    const pool = sameNum.length ? sameNum : clean.filter((p) => normNum(p.extNum) === want);
+    /* A number is not always one card. "Koraidon - 014" and "Koraidon - 014
+       (Pokemon Center Exclusive)" are both 014 in the same set and differ by
+       ten times in price, so taking the first match on number alone priced a
+       $52 card at $5. The ledger already carries the distinguishing words in
+       the card's own name — prefer the product whose qualifiers match it,
+       and only fall back to the plain first hit when nothing separates them.
+       Compared with accents folded: the ledger writes "Pokémon Center", the
+       TCGplayer catalogue writes "Pokemon Center". */
+    const qual = (s) => (foldSet(s).match(/\(([^)]*)\)/g) || []).join(" ");
+    const wantQual = qual(name);
+    const prod = (pool.length > 1 && pool.find((p) => qual(p.name) === wantQual)) || pool[0];
+    return prod ? String(prod.id) : null;
+  } catch { return null; } // dump unavailable — callers fall back to a name search
+}
+
+/* GET /graded?name=<card>&number=<num>&set=<set>&lang=<en|jp>&productId=<id>
+   — eBay-sold comps by grade. `lang=jp` asks PPT's Japanese catalogue, which
+   is a separate card with separate sold prices — not a translation of the
+   English one. A `productId` (stored on the ledger card when it was picked
+   from search) skips resolution entirely. Returns { card, set, number,
+   market, grades } where grades is { "10": avg, "9": avg, ... } for whatever
+   grades have recorded sales, plus the card-detail extras the app's card
+   modal shows: byGrade (every company+grade bucket, e.g. "cgc9_5"), raw
+   (ungraded solds), window (the date range the sales cover), image and url
+   (TCGplayer CDN). */
 const GRADED_TTL = 24 * 3600 * 1000;
 const gradedCache = new Map();
 // slim one salesByGrade bucket down to what the app renders; smartMarketPrice
@@ -164,69 +349,30 @@ const slimBucket = (e) => {
   const r2 = (n) => (Number(n) > 0 ? Math.round(Number(n) * 100) / 100 : null);
   return { price: r2(v), count: Number(e.count) || 0, median: r2(e.medianPrice), min: r2(e.minPrice), max: r2(e.maxPrice), trend: e.marketTrend || null };
 };
-async function gradedPrices(name, number, set, lang = "en") {
-  const jp = lang === "jp";
+async function gradedPrices(name, number, set, lang = "en", productId = "") {
   // the language is part of the identity of the card, so it is part of the key —
   // an English and a Japanese Umbreon are two cards with two sets of solds
-  const key = `${name}|${number}|${set}|${lang}`.toLowerCase();
+  const key = `${name}|${number}|${set}|${lang}|${productId}`.toLowerCase();
   const hit = gradedCache.get(key);
   if (hit && Date.now() - hit.t < GRADED_TTL) return hit.body;
-  const ppt = async (params) => {
-    const u = new URL("https://www.pokemonpricetracker.com/api/v2/cards");
-    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
-    u.searchParams.set("includeEbay", "true");
-    if (jp) u.searchParams.set("language", "japanese");
-    const r = await fetch(u, { headers: { authorization: `Bearer ${process.env.PPT_KEY}` } });
-    if (!r.ok) { const e = new Error(`ppt HTTP ${r.status}`); e.status = r.status; throw e; }
-    const data = await r.json();
-    // searches return a list but id lookups return one bare card object —
-    // normalize both to an array
-    const cards = data.cards ?? data.data ?? data;
-    return Array.isArray(cards) ? cards : cards && typeof cards === "object" ? [cards] : [];
-  };
-  // cheapest path first: resolve the card to its TCGplayer product id via the
-  // set dump we already cache, then ask PPT for exactly that card — 2 credits
-  // (one card with eBay data) instead of a 3-candidate name search's 6, and
-  // no chance of comps from the wrong printing. That dump is TCGplayer's English
-  // catalogue, so it can only resolve English products: a JP card skips straight
-  // to the name search, which PPT scopes by the language param above.
+  const ppt = (params) => pptCards({ ...params, includeEbay: "true", language: pptLang(lang) });
+  // cheapest path first: the caller's stored productId, else resolve one
+  // through the set dump — 2 credits (one card with eBay data) instead of a
+  // 3-candidate name search's 6, and no chance of comps for the wrong card
   let cards = [], byId = false;
-  if (!jp && set && number) {
-    let tcgpId = null;
-    try {
-      const d = await setData(set);
-      if (d) {
-        const want = normNum(number);
-        const clean = d.products.filter((p) => p.id && !/\[|\(prerelease\)/i.test(p.name));
-        const sameNum = clean.filter((p) => normNum(p.num) === want);
-        const pool = sameNum.length ? sameNum : clean.filter((p) => normNum(p.extNum) === want);
-        /* A number is not always one card. "Koraidon - 014" and "Koraidon - 014
-           (Pokemon Center Exclusive)" are both 014 in the same set and differ by
-           ten times in price, so taking the first match on number alone priced a
-           $52 card at $5. The ledger already carries the distinguishing words in
-           the card's own name — prefer the product whose qualifiers match it,
-           and only fall back to the plain first hit when nothing separates them.
-           Compared with accents folded: the ledger writes "Pokémon Center", the
-           TCGplayer catalogue writes "Pokemon Center". */
-        const qual = (s) => (foldSet(s).match(/\(([^)]*)\)/g) || []).join(" ");
-        const wantQual = qual(name);
-        const prod = (pool.length > 1 && pool.find((p) => qual(p.name) === wantQual)) || pool[0];
-        if (prod) tcgpId = prod.id;
-      }
-    } catch {} // dump unavailable — the name search below still works
-    if (tcgpId) {
-      const got = await ppt({ tcgPlayerId: String(tcgpId) });
-      // trust but verify: if PPT ever ignores the filter, don't accept arbitrary cards
-      cards = got.filter((c) => String(c.tcgPlayerId ?? "") === String(tcgpId));
-      byId = cards.length > 0;
-      // a shape/field mismatch here silently triples the lookup cost — make it visible
-      if (!cards.length) console.log(`graded: id lookup ${tcgpId} unusable, falling back to name search:`, JSON.stringify(got).slice(0, 300));
-    }
+  const tcgpId = productId || await resolveProductId(name, number, set, lang);
+  if (tcgpId) {
+    const got = await ppt({ tcgPlayerId: String(tcgpId), limit: "1" });
+    // trust but verify: if PPT ever ignores the filter, don't accept arbitrary cards
+    cards = got.filter((c) => String(c.tcgPlayerId ?? "") === String(tcgpId));
+    byId = cards.length > 0;
+    // a shape/field mismatch here silently triples the lookup cost — make it visible
+    if (!cards.length) console.log(`graded: id lookup ${tcgpId} unusable, falling back to name search:`, JSON.stringify(got).slice(0, 300));
   }
   if (!cards.length) {
     // name search: each returned card costs 2 credits with eBay data — limit 3
     // keeps a lookup at 6 credits
-    cards = await ppt({ search: name, ...(set ? { set } : {}), limit: "3" });
+    cards = await ppt({ search: name, ...(set ? { set: foldSet(set) } : {}), limit: "3" });
     // a set name PPT doesn't recognize shouldn't sink the lookup
     if (!cards.length && set) cards = await ppt({ search: name, limit: "3" });
   }
@@ -297,10 +443,10 @@ async function gradedPrices(name, number, set, lang = "en") {
 }
 
 /* POST /identify — read a photographed card with Claude and report what's on
-   it. Unlike the price routes this one costs money per call, so it lives
-   behind the token wall. Always answers with { cards: [...] }, even for one
-   card, so scanning a whole binder page later is a prompt change rather than
-   a new response shape. */
+   it. Behind the token wall like everything else that costs money per call.
+   Always answers with { cards: [...] }, even for one card, so scanning a
+   whole binder page later is a prompt change rather than a new response
+   shape. */
 const IDENTIFY_MODEL = "claude-haiku-4-5";
 const MAX_IMAGE_B64 = 5 * 1024 * 1024; // Lambda caps the whole request at 6MB
 const MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -408,30 +554,67 @@ export const handler = async (event) => {
   // CORS preflight must get a 2xx; API Gateway injects the CORS headers
   if (method === "OPTIONS") return { statusCode: 204 };
 
-  // public market data, deliberately outside the token wall — the app needs
-  // prices even on devices that haven't connected to sync
-  if (method === "GET" && event.rawPath?.endsWith("/prices")) {
-    const setName = event.queryStringParameters?.set;
-    if (!setName) return res(400, { error: "set required" });
-    try { const body = await setPrices(setName); return body ? res(200, body) : res(404, { error: "set not found" }); }
-    catch (e) { console.error("prices route failed:", e); return res(502, { error: "price source unavailable" }); }
-  }
+  /* Everything below spends someone's money — PPT credits on the card
+     routes, Anthropic tokens on /identify — so nothing answers without the
+     sync token. CORS never guarded these (curl doesn't send an Origin); the
+     token does. */
+  if (!authed(event)) return res(401, { error: "unauthorized" });
 
-  // also public market data, same deal as /prices
-  if (method === "GET" && event.rawPath?.endsWith("/catalog")) {
-    const setName = event.queryStringParameters?.set;
-    if (!setName) return res(400, { error: "set required" });
-    try { const body = await setCatalog(setName); return body ? res(200, body) : res(404, { error: "set not found" }); }
-    catch (e) { console.error("catalog route failed:", e); return res(502, { error: "catalog source unavailable" }); }
-  }
+  const qp = event.queryStringParameters || {};
+  const lang = qp.lang === "jp" ? "jp" : "en";
+  const isGet = (p) => method === "GET" && event.rawPath?.endsWith(p);
+  if ((isGet("/sets") || isGet("/prices") || isGet("/catalog") || isGet("/search") || isGet("/graded") || isGet("/history")) && !process.env.PPT_KEY)
+    return res(501, { error: "card data not configured" });
 
-  // also public market data, same deal as /prices
-  if (method === "GET" && event.rawPath?.endsWith("/graded")) {
-    if (!process.env.PPT_KEY) return res(501, { error: "graded prices not configured" });
-    const { name, number, set, lang } = event.queryStringParameters || {};
-    if (!name) return res(400, { error: "name required" });
+  if (isGet("/sets")) {
     try {
-      const body = await gradedPrices(name, number || "", set || "", lang === "jp" ? "jp" : "en");
+      const { list } = await pptSets(lang);
+      // "SV07: Stellar Crown" -> "Stellar Crown": the dropdowns and the
+      // ledger speak plain set names; pptSetData's fold matching resolves
+      // them back to the prefixed ones
+      const seen = new Set(); const names = [];
+      for (const s of list) {
+        const n = s.name.replace(/^\w{1,7}:\s+/, "");
+        if (!seen.has(n)) { seen.add(n); names.push(n); }
+      }
+      return res(200, { names });
+    } catch (e) {
+      console.error("sets route failed:", e);
+      return res(e.status === 429 ? 429 : 502, { error: e.status === 429 ? "daily card-data budget used" : "set list unavailable" });
+    }
+  }
+
+  if (isGet("/prices")) {
+    if (!qp.set) return res(400, { error: "set required" });
+    try { const body = await setPrices(qp.set, lang); return body ? res(200, body) : res(404, { error: "set not found" }); }
+    catch (e) {
+      console.error("prices route failed:", e);
+      return res(e.status === 429 ? 429 : 502, { error: e.status === 429 ? "daily card-data budget used" : "price source unavailable" });
+    }
+  }
+
+  if (isGet("/catalog")) {
+    if (!qp.set) return res(400, { error: "set required" });
+    try { const body = await setCatalog(qp.set, lang); return body ? res(200, body) : res(404, { error: "set not found" }); }
+    catch (e) {
+      console.error("catalog route failed:", e);
+      return res(e.status === 429 ? 429 : 502, { error: e.status === 429 ? "daily card-data budget used" : "catalog source unavailable" });
+    }
+  }
+
+  if (isGet("/search")) {
+    if (!qp.q) return res(400, { error: "q required" });
+    try { return res(200, { cards: await cardSearch(qp.q, qp.set || "", qp.number || "", lang) }); }
+    catch (e) {
+      console.error("search route failed:", e);
+      return res(e.status === 429 ? 429 : 502, { error: e.status === 429 ? "daily card-data budget used" : "card search unavailable" });
+    }
+  }
+
+  if (isGet("/graded")) {
+    if (!qp.name) return res(400, { error: "name required" });
+    try {
+      const body = await gradedPrices(qp.name, qp.number || "", qp.set || "", lang, qp.productId || "");
       // any sales signal counts — a card with only CGC/TAG or raw solds is
       // still worth returning even when no PSA grade has data
       const hasData = body && (Object.keys(body.grades).length || Object.keys(body.byGrade).length || body.raw);
@@ -443,7 +626,19 @@ export const handler = async (event) => {
     }
   }
 
-  if (!authed(event)) return res(401, { error: "unauthorized" });
+  if (isGet("/history")) {
+    const days = Math.min(Math.max(Number(qp.days) || 90, 7), 180);
+    try {
+      const pid = qp.productId || await resolveProductId(qp.name || "", qp.number || "", qp.set || "", lang);
+      if (!pid) return res(404, { error: "card not resolved" });
+      const body = await priceHistory(pid, days, lang);
+      return body ? res(200, body) : res(404, { error: "no price history" });
+    } catch (e) {
+      console.error("history route failed:", e);
+      if (e.status === 429) return res(429, { error: "daily card-data budget used" });
+      return res(502, { error: "price history unavailable" });
+    }
+  }
 
   // must be method-scoped: the ledger GET below matches any authed GET
   // regardless of path

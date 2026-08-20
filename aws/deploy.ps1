@@ -1,7 +1,7 @@
 # Deploys aws/index.mjs to the binderbooks-sync Lambda (us-west-2).
 #   .\deploy.ps1                             # update code only
 #   .\deploy.ps1 -PptKey "ppt_..."           # also set the pokemonpricetracker.com
-#                                            # API key the /graded route needs
+#                                            # API key every card-data route needs
 #   .\deploy.ps1 -AnthropicKey "sk-ant-..."  # also set the Anthropic API key the
 #                                            # /identify card scanner needs
 # Both switches can be given at once; each merges into the existing environment.

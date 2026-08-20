@@ -3,7 +3,10 @@
 A Pokémon card buying / selling / ripping P&L ledger. Tracks purchases, rips
 (cost vs. pulled value), sales with multi-card line items and real profit,
 graded-card inventory with a lifecycle status, and a debounced fuzzy card-search
-that pulls live TCGplayer market prices from the free pokemontcg.io API.
+with live TCGplayer market prices. Every card fact — search, images, printings,
+prices, graded eBay comps, price history — comes from one source,
+pokemonpricetracker.com, proxied through the sync Lambda so the key stays
+server-side; connecting a device to cloud sync is what turns those features on.
 
 Data is saved in your browser's **localStorage** and synced to a private AWS
 backend (DynamoDB behind a Lambda + API Gateway — see `aws/index.mjs`), so the
@@ -81,22 +84,16 @@ To work in Xcode instead — `npm run ios && open ios/BinderBooks.xcodeproj`, th
 ⌘R. Full detail, and the reason for each piece, is in
 [`ios/README.md`](ios/README.md).
 
-## Optional: pokemontcg.io API key
+## Card data needs the sync token
 
-The card search uses the free pokemontcg.io API. Without a key it's rate-limited
-and occasionally drops requests. To lift the limits:
-
-1. Get a free key at https://dev.pokemontcg.io/
-2. `cp .env.example .env`
-3. Paste your key into `.env` as `VITE_POKEMONTCG_API_KEY=...`
-4. Restart the dev server, and re-run `npm run ios:device` for the phone
-
-Vite bakes the key into the bundle at build time, so it is only as private as the
-build. That is fine here — the build goes to one phone. It is also why the keys
-that cost money (pokemonpricetracker.com, Anthropic) live on the Lambda instead.
-
-The app works without a key — it just retries on failure and shows a tappable
-retry if the API doesn't respond.
+Every card-data route (search, prices, images, comps, history) runs through the
+sync Lambda and spends metered pokemonpricetracker.com credits, so it sits
+behind the same token as the ledger sync. A device that hasn't connected to
+cloud sync still works — the local TCGplayer CSV catalog, SKU pricing and every
+24h cache keep answering — but network lookups show a "connect cloud sync"
+message instead of spending credits they can't authenticate. There is no client
+key to configure: the PPT and Anthropic keys live on the Lambda
+(`aws/deploy.sh`).
 
 ## Card scanner (Scan tab)
 
@@ -248,15 +245,12 @@ Two standalone helpers that don't need the app running:
   this; the shorter ladder in the note above is only what's worth *estimating*
   for a card still at the graders.
 - **Japanese cards:** inventory cards carry a `lang` (English / Japanese). A JP
-  card is a different print run with its own market, and both English price
-  sources — the tcgcsv TCGplayer dump and pokemontcg.io — carry English cards
-  only, so matching a JP card against them finds the English card of the same
-  name and number and prices it as that. Setting the language keeps a JP card
-  out of those sources entirely: it prices from its own eBay solds through
-  pokemonpricetracker.com's Japanese catalogue instead, its detail view shows
-  the JP card's own image and set rather than the English one's, and it is left
-  out of the TCGplayer bulk-listing CSV, which is keyed on English SKUs. Cards
-  from before this field existed read as English.
+  card is a different print run with its own market, and pokemonpricetracker
+  keeps a separate Japanese catalogue for it — so the language decides which
+  catalogue every lookup asks. A JP card prices from JP market data and its own
+  eBay solds, shows the JP card's image and set, and is left out of the
+  TCGplayer bulk-listing CSV, which is keyed on English SKUs. Cards from before
+  this field existed read as English.
 - **Rips hold lots, not just packs:** a rip is one cost against the cards that
   came out of it, which is the same shape as a lot of slabs bought together for
   one price — log the lot as the rip, then add each card as a hit. Hits carry a
