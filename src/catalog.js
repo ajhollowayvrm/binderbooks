@@ -407,6 +407,14 @@ const printingRank = (p) => PRINTINGS.indexOf(p);
    intersection is truncated before any record is read. */
 const MAX_FETCH = 1500;
 
+/* Ceilings for the substring fallback below. SCAN_HITS is well above any
+   result list the caller renders, so scoring still has candidates to rank.
+   SCAN_ROWS bounds the miss case — a query that matches nothing walks this
+   many records and gives up rather than the whole catalog. */
+const SCAN_HITS = 300;
+const SCAN_ROWS = 50000;
+let scanGen = 0; // bumps per substring scan; a cursor that sees a newer value stops
+
 /* Scoped, prefix-matched search over the catalog.
 
    Every term intersects at the index — including the set, which is
@@ -441,10 +449,37 @@ export async function searchCatalog({ set = "", q = "", limit = 40, includeCusto
     const next = new Set(lists[i]);
     ids = ids.filter((id) => next.has(id));
   }
-  if (!ids.length) return [];
 
-  const store = db.transaction(STORE, "readonly").objectStore(STORE);
-  const recs = (await Promise.all(ids.slice(0, MAX_FETCH).map((id) => reqDone(store.get(id))))).filter(Boolean);
+  let recs;
+  if (ids.length) {
+    const store = db.transaction(STORE, "readonly").objectStore(STORE);
+    recs = (await Promise.all(ids.slice(0, MAX_FETCH).map((id) => reqDone(store.get(id))))).filter(Boolean);
+  } else if (tokens.length) {
+    /* The token index is prefix-only. "zard" finds nothing, but Charizard is
+       in the catalog. When the prefixes return nothing, fall back to a
+       substring scan. A set scopes the cursor to that set, so the scan is a
+       few hundred rows. Without a set the cursor walks the catalog. Three
+       limits bound that walk: it stops after SCAN_HITS matches, after
+       SCAN_ROWS rows when the query matches nothing, and as soon as a newer
+       query starts — an abandoned scan must not run to the end of the store
+       on the main thread while the next keystroke's scan begins. */
+    const gen = ++scanGen;
+    const store = db.transaction(STORE, "readonly").objectStore(STORE);
+    const hasTok = (r, t) => `${r.product_name} ${r.title || ""} ${r.number || ""}`.toLowerCase().includes(t);
+    recs = [];
+    await new Promise((done) => {
+      const src = setKey ? store.index("by_set").openCursor(IDBKeyRange.bound([setKey, ""], [setKey, "\uffff"])) : store.openCursor();
+      let seen = 0;
+      src.onsuccess = (e) => {
+        const cur = e.target.result;
+        if (!cur || gen !== scanGen || (!setKey && ++seen > SCAN_ROWS)) return done();
+        if (tokens.every((t) => hasTok(cur.value, t))) recs.push(cur.value);
+        if (recs.length >= SCAN_HITS) return done();
+        cur.continue();
+      };
+      src.onerror = () => done();
+    });
+  } else return [];
   const usable = includeCustom ? recs : recs.filter((r) => !r.is_custom);
 
   return usable

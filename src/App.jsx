@@ -2,10 +2,10 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { flushSync } from "react-dom";
 import Papa from "papaparse";
 import {
-  LayoutDashboard, PackageOpen, ShoppingCart, Tags, Search, Archive,
+  LayoutDashboard, PackageOpen, ShoppingCart, Tags, Search,
   Plus, Trash2, Pencil, ChevronDown, ChevronRight, Sparkles, Upload, X,
   CalendarRange, ChevronLeft, RefreshCw, ExternalLink, Camera, Library,
-  LayoutGrid,
+  LayoutGrid, Wrench,
 } from "lucide-react";
 import {
   CSV_COLUMNS, importCatalogFile, catalogSets, catalogStats, searchCatalog,
@@ -14,7 +14,6 @@ import {
 import { SET_CODES } from "./setCodes.js";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import BuyRow from "./components/BuyRow.jsx";
-import InventoryRow from "./components/InventoryRow.jsx";
 import SaleRow from "./components/SaleRow.jsx";
 import RipCard from "./components/RipCard.jsx";
 import BinderCard from "./components/BinderCard.jsx";
@@ -96,6 +95,23 @@ async function cardFetch(path, params = {}) {
 /* ------------------------------------------------------------------ */
 const KEY = "cardledger:v1";
 const uid = () => Math.random().toString(36).slice(2, 10);
+
+/* Superseded cache keys, dropped once at startup. Every entry here is an
+   older version of a key whose current version is read somewhere below, so
+   nothing live is named — the ledger itself (KEY) never appears. A version
+   bump orphans its predecessor rather than rewriting it, and the dead copy
+   then sits in localStorage forever: on this developer's own profile these
+   held 36KB of the 60KB stored, most of it pre-PPT card art URLs. Add the
+   old key here whenever you bump a version. */
+for (const dead of [
+  "cardledger:setimages:v1", // art URLs from before the PPT migration; nothing reads this key now
+  "cardledger:sets:v1", "cardledger:sets:v2",
+  "cardledger:qcache:v1", "cardledger:qcache:v2",
+  "cardledger:matchcache:v1", "cardledger:matchcache:v2", // v2 keyed matches without productId
+  "cardledger:invview", // the grid/list toggle; the grid is the only view now
+  "cardledger:setprices:v1",
+  "cardledger:graded:v1",
+]) { try { localStorage.removeItem(dead); } catch {} }
 
 /* set list for the structured buy form — the Lambda's /sets route (PPT's
    catalogue with the "SV07:"-style prefixes stripped), cached for a week so
@@ -180,6 +196,17 @@ const qcacheSet = (terms, results) => {
    Lambda's PPT-backed /prices route. */
 const SETPRICE_KEY = "cardledger:setprices:v2"; // v2: entries are per-printing maps, not scalars
 const normNum = (s) => String(s || "").split("/")[0].trim().replace(/^0+(?=\w)/, "").toUpperCase();
+/* every free-text filter in the app matches one way: fold accents, split the
+   query into words, and require each word somewhere in the haystack —
+   order-free, substring, case- and accent-blind ("pokemon go", "go pok",
+   "POKÉ" all find Pokémon GO) */
+const foldText = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const fuzzyMatch = (query, ...hay) => {
+  const toks = foldText(query).split(/\s+/).filter(Boolean);
+  if (!toks.length) return true;
+  const blob = hay.map(foldText).join(" ");
+  return toks.every((t) => blob.includes(t));
+};
 
 /* printings. A card's reverse holo can be worth several times its normal
    printing, so which one a ledger card is decides what it's worth. TCGplayer
@@ -412,7 +439,6 @@ async function resolveScan(hit, sets, codes) {
    different card with different sold prices, never a translation of the same
    listing. */
 const GRADED_KEY = "cardledger:graded:v2"; // v2: entries carry byGrade/raw/image for the card modal
-try { localStorage.removeItem("cardledger:graded:v1"); } catch {}
 async function fetchGradedComps(name, set, number, lang = "en", productId = "") {
   // English keeps the old key shape, so an existing 24h cache still hits and the
   // daily PPT budget isn't re-spent on every card the moment this ships
@@ -527,7 +553,7 @@ const compCount = (r, grader, g) => r?.byGrade?.[bucketKey(grader, g)]?.count ??
    number, or null for "Raw"/"Other". That pair names the card's own sold
    bucket, which is the only honest price for a card already in a slab — what a
    CGC 9.5 sells for, not what the raw card underneath would fetch. */
-const slabOf = (grade) => {
+export const slabOf = (grade) => {
   const m = /^(\S+)\s+([\d.]+)$/.exec(String(grade || ""));
   return m && SLAB_GRADES[m[1]]?.includes(m[2]) ? { grader: m[1], grade: m[2] } : null;
 };
@@ -895,15 +921,28 @@ const cardPrice = (c, variant) => {
    means no match, never "closest". */
 const alnum = (x) => String(x ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 const nameNear = (a, b) => { const x = alnum(a), y = alnum(b); return x && y && (x === y || x.startsWith(y) || y.startsWith(x)); };
+/* A stored productId is the card's exact identity, and it outranks every
+   text guard: Prize Pack Series Cards holds two Radiant Gardevoir 069/196
+   products (one $98, one $0.20), and name + number alone cannot tell them
+   apart. The history and graded routes already key on the id; this keeps
+   the /search match on the same product. */
+const byProductId = (list, card) => {
+  if (!card.productId) return null;
+  // pinned and absent from the results is "no match", never "the nearest one"
+  return list.filter((c) => c.productId && String(c.productId) === String(card.productId));
+};
 async function lookupCardCandidates(card) {
   if (!card.name) return [];
   const lang = card.lang === "jp" ? "jp" : "en";
   try {
     if (card.number) {
       const list = await searchCards({ q: card.name, set: card.set || "", number: normNum(card.number), lang });
-      return list.filter((c) => nameNear(c.name, card.name) && normNum(c.number) === normNum(card.number));
+      return byProductId(list, card) || list.filter((c) => nameNear(c.name, card.name) && normNum(c.number) === normNum(card.number));
     }
-    if (card.set) return (await searchCards({ q: card.name, set: card.set, lang })).filter((c) => nameNear(c.name, card.name));
+    if (card.set) {
+      const list = await searchCards({ q: card.name, set: card.set, lang });
+      return byProductId(list, card) || list.filter((c) => nameNear(c.name, card.name));
+    }
   } catch { return []; }
   return []; // no number and no set — too ambiguous to match safely
 }
@@ -921,7 +960,7 @@ const matchCache = new Map();
 // card's picture never changes once printed, so a month-long TTL is safe.
 // Only a hit gets persisted, never a miss — a miss today can become a hit
 // once PPT indexes a new set, so caching "no match" would be wrong.
-const MATCHCACHE_KEY = "cardledger:matchcache:v2"; // v2: PPT-sourced matches
+const MATCHCACHE_KEY = "cardledger:matchcache:v3"; // v3: keyed by productId too, so a card pinned to one product never reuses a sibling's match
 const MATCHCACHE_TTL = 30 * 24 * 3600 * 1000;
 const matchLsRead = () => { try { return JSON.parse(localStorage.getItem(MATCHCACHE_KEY)) || {}; } catch { return {}; } };
 const matchLsGet = (key) => { const c = matchLsRead()[key]; return c && Date.now() - c.t < MATCHCACHE_TTL ? c.r : undefined; };
@@ -933,15 +972,29 @@ const matchLsPut = (key, hit) => {
     localStorage.setItem(MATCHCACHE_KEY, JSON.stringify(all));
   } catch {}
 };
-async function lookupCardMatch(card) {
-  const key = `${card.name}|${card.set || ""}|${card.number || ""}`.toLowerCase();
-  if (matchCache.has(key)) return matchCache.get(key);
+// A lookup already running for a key is shared, never repeated: a screen
+// that re-keys its effects (the binder search box, on every keystroke) asks
+// again for cards still in flight, and each ask used to spend another
+// /search call. A miss is remembered for a few minutes for the same reason —
+// long enough to cover a typing burst, short enough that a flaky call retries.
+const matchInFlight = new Map();
+const matchMiss = new Map(); // key -> time of the miss
+const MATCH_MISS_TTL = 5 * 60 * 1000;
+function lookupCardMatch(card) {
+  const key = `${card.name}|${card.set || ""}|${card.number || ""}|${card.productId || ""}`.toLowerCase();
+  if (matchCache.has(key)) return Promise.resolve(matchCache.get(key));
   const persisted = matchLsGet(key);
-  if (persisted !== undefined) { matchCache.set(key, persisted); return persisted; }
-  const list = await lookupCardCandidates(card);
-  const hit = list.find((c) => cardPrice(c) != null && c.images?.small) || list.find((c) => c.images?.small) || list[0] || null;
-  if (hit) { matchCache.set(key, hit); matchLsPut(key, hit); } // misses stay uncached so a flaky API call retries next open
-  return hit;
+  if (persisted !== undefined) { matchCache.set(key, persisted); return Promise.resolve(persisted); }
+  if (Date.now() - (matchMiss.get(key) || 0) < MATCH_MISS_TTL) return Promise.resolve(null);
+  if (matchInFlight.has(key)) return matchInFlight.get(key);
+  const p = (async () => {
+    const list = await lookupCardCandidates(card);
+    const hit = list.find((c) => cardPrice(c) != null && c.images?.small) || list.find((c) => c.images?.small) || list[0] || null;
+    if (hit) { matchCache.set(key, hit); matchLsPut(key, hit); } else matchMiss.set(key, Date.now());
+    return hit;
+  })().finally(() => matchInFlight.delete(key));
+  matchInFlight.set(key, p);
+  return p;
 }
 // Every other lookupCardMatch caller wants one card at a time (the modal).
 // A screen that renders a card's whole collection at once would otherwise
@@ -980,12 +1033,19 @@ const trendCachePut = (k, r) => {
   } catch {}
 };
 const trendMiss = new Map(); // session-only: don't re-ask for a card that just failed
-async function fetchCardTrend(card) {
+const trendPending = new Map(); // key -> promise, so a re-keyed effect shares the running call
+function fetchCardTrend(card) {
   const lang = cardLang(card);
   const key = `${card.name}|${card.set || ""}|${card.number || ""}|${lang}`.toLowerCase();
   const hit = trendCacheGet(key);
-  if (hit !== undefined) return hit;
-  if (trendMiss.has(key)) return null;
+  if (hit !== undefined) return Promise.resolve(hit);
+  if (trendMiss.has(key)) return Promise.resolve(null);
+  if (trendPending.has(key)) return trendPending.get(key);
+  const p = fetchCardTrendNow(card, key, lang).finally(() => trendPending.delete(key));
+  trendPending.set(key, p);
+  return p;
+}
+async function fetchCardTrendNow(card, key, lang) {
   try {
     const h = await cardFetch("history", { productId: card.productId || "", name: card.productId ? "" : card.name, set: card.productId ? "" : card.set, number: card.productId ? "" : card.number, lang: lang === "jp" ? "jp" : "", days: "30" });
     const pts = h?.points || [];
@@ -1035,8 +1095,17 @@ function useCardTrends(cards) {
 // per-card match cache are both module-level, so a card resolved on one
 // screen (Binder, say) is instant on the next (Inventory, Lookup) — nothing
 // here is fetched twice.
-function useCardImages(cards) {
+// The same lookups also return the rarity (id -> "Special Illustration Rare").
+// The binder tile shows it. It costs no extra request.
+const cardRarities = {}; // module-level; the tile reads it through the hook's second value
+function useDebounced(value, ms) {
+  const [v, setV] = useState(value);
+  useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t); }, [value, ms]);
+  return v;
+}
+function useCardImages(cards, withRarity = false) {
   const [images, setImages] = useState({}); // id -> url|null; a missing key means still resolving
+  const [rarities, setRarities] = useState({});
   const setKeys = [...new Set(cards.filter((c) => c.set).map((c) => `${c.set}\t${isJP(c) ? "jp" : "en"}`))].sort().join("|");
   const cardIds = cards.map((c) => c.id).join("|");
   useEffect(() => {
@@ -1053,20 +1122,26 @@ function useCardImages(cards) {
       for (const c of cards) {
         if (!c.name) { found[c.id] = null; continue; }
         const hit = c.set ? imageInSet(maps[`${c.set}\t${isJP(c) ? "jp" : "en"}`], c) : null;
+        if (hit?.rarity) cardRarities[c.id] = hit.rarity;
         if (hit?.img) found[c.id] = hit.img;
         else leftover.push(c);
       }
       setImages((s) => ({ ...s, ...found }));
+      if (withRarity) setRarities({ ...cardRarities });
       leftover.forEach((c) => {
         throttledCardMatch(c).then(
-          (m) => { if (live) setImages((s) => ({ ...s, [c.id]: m?.images?.small || null })); },
+          (m) => {
+            if (!live) return;
+            if (m?.rarity) { cardRarities[c.id] = m.rarity; if (withRarity) setRarities({ ...cardRarities }); }
+            setImages((s) => ({ ...s, [c.id]: m?.images?.small || null }));
+          },
           () => { if (live) setImages((s) => ({ ...s, [c.id]: null })); },
         );
       });
     })();
     return () => { live = false; };
   }, [setKeys, cardIds]); // eslint-disable-line react-hooks/exhaustive-deps
-  return images;
+  return withRarity ? [images, rarities] : images;
 }
 
 /* ================================================================== */
@@ -1236,8 +1311,7 @@ export default function App() {
   const TABS = [
     ["dash", "Overview", LayoutDashboard], ["month", "Monthly", CalendarRange],
     ["rips", "Rips", PackageOpen], ["buys", "Buys", ShoppingCart],
-    ["sales", "Sales", Tags], ["inv", "Inventory", Archive],
-    ["binder", "Binder", LayoutGrid],
+    ["sales", "Sales", Tags], ["inv", "Binder", LayoutGrid],
     ["look", "Lookup", Search],
     ...(__BB_SCAN__ ? [["snap", "Scan", Camera]] : []),
   ];
@@ -1259,7 +1333,6 @@ export default function App() {
         {tab === "buys" && <Buys state={state} patch={patch} />}
         {tab === "sales" && <Sales state={state} patch={patch} />}
         {tab === "inv" && <Inventory state={state} patch={patch} />}
-        {tab === "binder" && <Binder state={state} patch={patch} go={switchTab} />}
         {tab === "look" && <Lookup state={state} patch={patch} />}
         {__BB_SCAN__ && tab === "snap" && <CardSnap state={state} patch={patch} />}
       </main>
@@ -1315,9 +1388,9 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync, resolv
       </section>
       <div className="cl-grid2"><Stat label="Spent" value={fmt(spent)} tone="out" /><Stat label="Earned (net)" value={fmt(earned)} tone="in" /></div>
       {!hasFees && <div className="cl-note">No platform fees or shipping costs are entered yet, so “earned” is gross. Edit a sale to add fees for true net.</div>}
-      <Panel title="Kept inventory" action={<button className="cl-link" onClick={() => go("inv")}>Inventory ▸</button>}>
+      <Panel title="Kept inventory" action={<button className="cl-link" onClick={() => go("inv")}>Binder ▸</button>}>
         {kept.length === 0
-          ? <Empty>No cards held yet. Add keepers on the Inventory tab or from Lookup.</Empty>
+          ? <Empty>No cards held yet. Add keepers on the Binder tab or from Lookup.</Empty>
           : <div className="cl-inv-summary">
               <div><div className="cl-row-meta">Cards held</div><div className="cl-stat-num">{kept.length}</div></div>
               <div><div className="cl-row-meta">Market value</div><div className="cl-stat-num" style={{ color: "var(--holo2)" }}>{hasRange ? <span className="cl-range">{fmtRange(invR)}</span> : fmt(invVal)}</div></div>
@@ -1867,7 +1940,7 @@ export function HitForm({ initial, onAdd, onSave, onCancel }) {
         <Field label="Grade"><select className="cl-in" value={f.grade} onChange={(e) => setF({ ...f, grade: e.target.value })}>{GRADES.map((g) => <option key={g} value={g}>{g === "Raw" ? "Raw (ungraded)" : g}</option>)}</select></Field>
       </div>
       <Field label="Printing"><select className="cl-in" value={f.variant} onChange={(e) => setF({ ...f, variant: e.target.value })}><option value="">— not set —</option>{VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}</select></Field>
-      {!priceable && <div className="cl-gradeest-note">Value these by hand — the card search prices English raw singles. Each one lands in Inventory {f.grade === "Raw" ? "as a Japanese card" : `as a ${f.grade} slab`}, where “Pull slab price” and “Refresh market prices” comp it properly.</div>}
+      {!priceable && <div className="cl-gradeest-note">Value these by hand — the card search prices English raw singles. Each one lands in your Binder {f.grade === "Raw" ? "as a Japanese card" : `as a ${f.grade} slab`}, where “Pull slab price” and “Refresh market prices” comp it properly.</div>}
       {initial
         ? <div className="cl-form-actions"><button className="cl-cancel" onClick={onCancel}>Cancel</button><button className="cl-hit-add" onClick={submit}>Save changes</button></div>
         : <button className="cl-hit-add" onClick={submit}><Plus size={14} /> Add hit</button>}
@@ -2036,7 +2109,6 @@ function Sales({ state, patch }) {
   const onEditRow = useCallback((id) => { setEditId(id); setAdding(false); }, []);
   const onCancelEdit = useCallback(() => setEditId(null), []);
   const earned = state.sales.reduce((s, x) => s + saleNet(x), 0);
-  const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const noCards = (x) => !(x.cards || []).length;
   const { sigCounts, bareCount, dupExtra } = useMemo(() => {
     const sigCounts = new Map();
@@ -2046,9 +2118,9 @@ function Sales({ state, patch }) {
     return { sigCounts, bareCount, dupExtra };
   }, [state.sales]); // eslint-disable-line react-hooks/exhaustive-deps
   const isDup = (x) => sigCounts.get(saleSig(x)) > 1;
-  const blob = (x) => [x.item, x.channel, x.date, (x.cards || []).map((c) => `${c.name} ${c.set || ""} ${c.number || ""}`).join(" "), x.price, saleNet(x)].join(" ").toLowerCase();
+  const matchesQ = (x) => fuzzyMatch(q, x.item, x.channel, x.date, (x.cards || []).map((c) => `${c.name} ${c.set || ""} ${c.number || ""}`).join(" "), x.price, saleNet(x));
   const sorted = useMemo(() => [...state.sales]
-    .filter((x) => (view !== "bare" || noCards(x)) && (view !== "dups" || isDup(x)) && terms.every((t) => blob(x).includes(t)))
+    .filter((x) => (view !== "bare" || noCards(x)) && (view !== "dups" || isDup(x)) && matchesQ(x))
     .sort(view === "dups" ? (a, b) => saleSig(a).localeCompare(saleSig(b)) || byDateDesc(a, b) : byDateDesc),
   [state.sales, view, q, sigCounts]); // eslint-disable-line react-hooks/exhaustive-deps
   const [listRef] = useAutoAnimate();
@@ -2409,29 +2481,124 @@ const haptic = (kind = "light") => {
   if (window.__BINDERBOOKS_NATIVE__) window.webkit?.messageHandlers?.haptics?.postMessage(kind);
 };
 
+/* Card art persists on the device. The OS evicts the browser's HTTP cache
+   (WKWebView most of all). So every image FadeImg renders is also stored as
+   a blob in IndexedDB and served from there on every later look. No network.
+
+   Storing a blob needs a readable cross-origin response. Every art URL the
+   Lambda serves today is PPT's imageCdnUrl200 on tcgplayer-cdn.tcgplayer.com,
+   which allows one. A host that fails IMG_HOST_STRIKES times in a row is not
+   fetched again this session. Its art then renders straight from the URL.
+   One success clears the count, so a dropped connection does not disable
+   the cache for the rest of the session. */
+const IMG_DB = "binderbooks-images";
+const IMG_CAP = 500; // ~200px thumbs run 20-60KB; the cap keeps this near 15-25MB
+const IMG_HOST_STRIKES = 3;
+let imgDbP = null;
+const imgDb = () => {
+  if (!imgDbP) imgDbP = new Promise((res, rej) => {
+    const r = indexedDB.open(IMG_DB, 1);
+    r.onupgradeneeded = () => { const st = r.result.createObjectStore("img", { keyPath: "url" }); st.createIndex("t", "t"); };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  return imgDbP;
+};
+// url -> Promise<objectURL|null>. One promise per url: every tile that asks
+// while a fetch runs awaits the same result, so nothing is fetched twice and
+// no tile is left on the network copy. The object URLs live for the session
+// on purpose — they are the cache — so they are never revoked.
+const imgMem = new Map();
+const imgReady = new Map(); // url -> objectURL, for a synchronous first render
+const hostStrikes = new Map(); // host -> consecutive failures
+const hostOf = (u) => { try { return new URL(u).host; } catch { return ""; } };
+const idbReq = (req) => new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
+async function idbGet(url) {
+  try { const db = await imgDb(); return await idbReq(db.transaction("img").objectStore("img").get(url)); } catch { return null; }
+}
+async function idbPut(url, blob) {
+  try {
+    const db = await imgDb();
+    await idbReq(db.transaction("img", "readwrite").objectStore("img").put({ url, blob, t: Date.now() }));
+    // eviction in its own transaction: an awaited request inside the put
+    // transaction auto-commits it on older WebKit
+    const st = db.transaction("img", "readwrite").objectStore("img");
+    const cnt = await idbReq(st.count());
+    if (cnt > IMG_CAP) {
+      let drop = cnt - IMG_CAP;
+      st.index("t").openCursor().onsuccess = (e) => { const cur = e.target.result; if (cur && drop-- > 0) { cur.delete(); cur.continue(); } };
+    }
+  } catch {} // a full or locked store loses one blob, never the image
+}
+function cachedImageURL(url) {
+  if (!url || !/^https?:/.test(url)) return Promise.resolve(null);
+  if (imgMem.has(url)) return imgMem.get(url);
+  const p = (async () => {
+    const rec = await idbGet(url);
+    if (rec?.blob) { const o = URL.createObjectURL(rec.blob); imgReady.set(url, o); return o; }
+    const host = hostOf(url);
+    if ((hostStrikes.get(host) || 0) >= IMG_HOST_STRIKES) return null;
+    try {
+      const r = await fetch(url, { mode: "cors" });
+      if (!r.ok) throw new Error(String(r.status));
+      const blob = await r.blob();
+      const o = URL.createObjectURL(blob);
+      imgReady.set(url, o);
+      hostStrikes.delete(host);
+      idbPut(url, blob); // not awaited: the tile shows now, the store fills behind it
+      return o;
+    } catch {
+      // a CORS refusal and a dead network look the same from here; the strike
+      // count tells them apart over a few tries
+      hostStrikes.set(host, (hostStrikes.get(host) || 0) + 1);
+      return null;
+    }
+  })();
+  imgMem.set(url, p);
+  p.then((o) => { if (!o) imgMem.delete(url); }); // a miss may retry on the next mount
+  return p;
+}
 /* Card art fades in as it decodes instead of popping. The ref check covers
    cache hits — a complete image never fires onLoad, and without it a cached
-   picture would stay invisible. */
-export function FadeImg({ className = "", ...props }) {
+   picture would stay invisible.
+
+   The network URL is not rendered until the cache path has answered. One
+   download per image: the blob fetch, not the blob fetch plus an <img> load
+   of the same bytes (Safari keys its HTTP cache by request mode, so those
+   were two transfers). A cache miss falls back to the URL as before. */
+export function FadeImg({ className = "", src, ...props }) {
   const [on, setOn] = useState(false);
+  // a data:/blob: src (scan previews) is already local — render it at once
+  const first = (u) => imgReady.get(u) || (/^https?:/.test(u || "") ? null : u);
+  const [use, setUse] = useState(() => first(src));
+  useEffect(() => {
+    let live = true;
+    const f = first(src);
+    setUse(f);
+    if (!f) cachedImageURL(src).then((o) => { if (live) setUse(o || src); });
+    return () => { live = false; };
+  }, [src]);
   const ref = useCallback((el) => { if (el?.complete && el.naturalWidth) setOn(true); }, []);
-  return <img {...props} ref={ref} className={`${className} cl-imgfade${on ? " on" : ""}`} onLoad={() => setOn(true)} />;
+  if (!use) return <img {...props} className={`${className} cl-imgfade`} alt="" />;
+  return <img {...props} src={use} ref={ref} className={`${className} cl-imgfade${on ? " on" : ""}`} onLoad={() => setOn(true)} />;
 }
 
 function Inventory({ state, patch }) {
   const inv = state.inventory || [];
   const [adding, setAdding] = useState(false);
-  const [editId, setEditId] = useState(null);
   const [viewId, setViewId] = useState(null);
   const [filter, setFilter] = useState("All");
+  /* One tab, one face: the binder grid. Every per-card action (edit, delete,
+     printing, value) lives in the card modal, and everything heavyweight
+     (imports, grading, export) folds away behind Tools. */
+  const [q, setQ] = useState("");
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [gradeOpen, setGradeOpen] = useState(false);
   const add = (c) => { patch((s) => ({ inventory: [{ id: uid(), ...c }, ...(s.inventory || [])] })); setAdding(false); };
-  const upd = useCallback((c) => { patch((s) => ({ inventory: s.inventory.map((x) => (x.id === c.id ? { ...x, ...c } : x)) })); setEditId(null); }, [patch]);
+  const upd = useCallback((c) => patch((s) => ({ inventory: s.inventory.map((x) => (x.id === c.id ? { ...x, ...c } : x)) })), [patch]);
   const del = useCallback((id) => patch((s) => ({ inventory: s.inventory.filter((c) => c.id !== id) })), [patch]);
-  const onEditRow = useCallback((id) => { setEditId(id); setAdding(false); }, []);
-  const onCancelEdit = useCallback(() => setEditId(null), []);
   const onOpenRow = useCallback((id) => setViewId(id), []);
   // Send a submission: flip the cards, stamp each one's share of the cost, and
   // write the single Grading buy that carries the cash. One patch, so the whole
@@ -2888,15 +3055,36 @@ function Inventory({ state, patch }) {
   const range = invRange(live);
   const hasRange = range.lo !== range.hi;
   const FILTERS = ["All", "Kept", "At grading", "Listed", "Sold"];
-  const shown = useMemo(() => (filter === "All" ? inv : inv.filter((c) => c.status === filter)).slice().sort(byDateDesc), [inv, filter]);
-  const [listRef] = useAutoAnimate();
+  const matchesQ = (c) => fuzzyMatch(q, c.name, c.set, c.number, c.grade, c.status);
+  // the grid filters on every keystroke; the image and trend lookups wait for
+  // the typing to settle, so a burst of letters is one re-key, not five
+  const qSettled = useDebounced(q, 250);
+  /* the grid: every card that passes the pill and the search, grouped into a
+     page per set; a sold card wears its Sold badge in the grid. */
+  const gridCards = useMemo(() => inv
+    .filter((c) => matchesQ(c) && (filter === "All" || c.status === filter)) // a nameless legacy card still gets a tile, or it could never be edited or deleted
+    .sort((a, b) => (a.set || "").localeCompare(b.set || "") || normNum(a.number).localeCompare(normNum(b.number), undefined, { numeric: true }) || (a.name || "").localeCompare(b.name || "")),
+  [inv, filter, q]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pages = useMemo(() => {
+    const out = [];
+    for (const c of gridCards) {
+      const key = c.set || "Unsorted";
+      const page = out[out.length - 1]?.key === key ? out[out.length - 1] : (out.push({ key, cards: [] }), out[out.length - 1]);
+      page.cards.push(c);
+    }
+    return out;
+  }, [gridCards]);
+  const lookupCards = useMemo(() => inv.filter((c) => c.name && fuzzyMatch(qSettled, c.name, c.set, c.number, c.grade, c.status) && (filter === "All" || c.status === filter)), [inv, filter, qSettled]);
+  const [images, rarities] = useCardImages(lookupCards, true);
+  const trends = useCardTrends(useMemo(() => lookupCards.filter((c) => c.status !== "Sold"), [lookupCards]));
   const viewCard = viewId ? inv.find((c) => c.id === viewId) : null;
 
   return (
     <div className="cl-stack">
-      <Header title="Inventory" sub={`${live.length} held · ${hasRange ? fmtRange(range) : fmt(val)} market`} onAdd={() => { setAdding(!adding); setEditId(null); }} addOpen={adding} />
+      <Header title="Binder" sub={`${live.length} held · ${hasRange ? fmtRange(range) : fmt(val)} market`} onAdd={() => setAdding(!adding)} addOpen={adding} />
       {live.length > 0 && <div className="cl-grid2"><Stat label="Cost basis" value={fmt(basis)} tone="out" /><Stat label="Unrealized" value={hasRange ? <span className="cl-range">{fmtRange({ lo: range.lo - basis, hi: range.hi - basis })}</span> : fmt(val - basis)} tone={range.lo - basis >= 0 ? "in" : range.hi - basis < 0 ? "neg" : "out"} /></div>}
-      {inv.length > 0 && <div className="cl-import">
+      {inv.length > 0 && <button className="cl-import-btn" onClick={() => setToolsOpen(!toolsOpen)}><Wrench size={14} /> {toolsOpen ? "Hide tools" : "Tools — prices, grading, imports, TCGplayer export"}</button>}
+      {toolsOpen && inv.length > 0 && <div className="cl-import">
         <button className="cl-import-btn" onClick={refreshPrices} disabled={refreshing}><RefreshCw size={14} className={refreshing ? "cl-spin" : ""} /> {refreshing ? "Refreshing prices…" : "Refresh market prices (TCGplayer daily data)"}</button>
         {(state.sales || []).length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={reconcileSold}><RefreshCw size={14} /> Check against sales — mark anything already sold</button>}
         <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => { setScanOpen(!scanOpen); setSyncMsg(""); }}><Sparkles size={14} /> Grading candidates — rank raw cards by grading upside</button>
@@ -3011,15 +3199,23 @@ function Inventory({ state, patch }) {
         {syncMsg && <div className="cl-import-msg">{syncMsg}</div>}
       </div>}
       {adding && <InvForm onSave={add} onCancel={() => setAdding(false)} />}
+      {inv.length > 0 && <div className="cl-salesearch">
+        <Search size={15} className="cl-salesearch-ic" />
+        <input className="cl-in bare" placeholder="Search your cards — name, set, number" value={q} onChange={(e) => setQ(e.target.value)} />
+        {q && <button className="cl-salesearch-x" onClick={() => setQ("")}><X size={14} /></button>}
+      </div>}
       {inv.length > 0 && <div className="cl-pills">{FILTERS.map((x) => <button key={x} className={"cl-pill" + (filter === x ? " on" : "")} onClick={() => setFilter(x)}>{x}</button>)}</div>}
       {inv.length === 0 && !adding && <Empty>No cards yet. Add a keeper or a card you've sent for grading, or hit “+ Keep” from Lookup to pull one in with its market value.</Empty>}
-      <div className="cl-stack sm" ref={listRef}>
-        {shown.map((c) => (
-          <InventoryRow key={c.id} card={c} isEditing={editId === c.id} onEdit={onEditRow} onDelete={del} onOpen={onOpenRow} onSave={upd} onCancelEdit={onCancelEdit} />
-        ))}
-      </div>
-      {viewCard && <CardModal card={viewCard} onClose={() => setViewId(null)}
-        onEdit={() => { setViewId(null); setEditId(viewCard.id); setAdding(false); }}
+      {inv.length > 0 && gridCards.length === 0 && <Empty>{q ? `Nothing matches “${q}”.` : "Nothing here — check another status pill."}</Empty>}
+      {pages.map((p) => (
+        <div key={p.key} className="cl-binder-page">
+          <div className="cl-binder-page-head"><span>{p.key}</span><span className="cl-row-meta">{p.cards.length} card{p.cards.length === 1 ? "" : "s"}</span></div>
+          <BinderGrid>
+            {p.cards.map((c) => <BinderCard key={c.id} card={c} img={images[c.id]} rarity={rarities[c.id]} trend={trends[c.id]} onOpen={onOpenRow} />)}
+          </BinderGrid>
+        </div>
+      ))}
+      {viewCard && <CardModal card={viewCard} onClose={() => setViewId(null)} onSave={upd} onDelete={del}
         onValue={(v) => upd({ id: viewCard.id, value: v })} />}
     </div>
   );
@@ -3248,31 +3444,32 @@ const cmErrMsg = (s) => (s === 401 ? NO_TOKEN_MSG
   : s === 429 ? "Daily eBay-comps budget is used up — sold data comes back tomorrow."
   : s === 404 ? "No recent eBay solds found for this card."
   : "eBay sold data is unavailable right now.");
-function CardModal({ card, onClose, onEdit, onValue }) {
+function CardModal({ card, onClose, onSave, onDelete, onValue }) {
   // leaving is animated too: `closing` plays the reverse of the entrance,
   // then the real onClose unmounts. Reduced motion skips straight out.
   const [closing, setClosing] = useState(false);
+  // every per-card action lives here: the full form swaps in for the detail
+  // sections, and delete asks once before it acts
+  const [editing, setEditing] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
   const close = useCallback(() => {
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) return onClose();
     setClosing(true);
     setTimeout(onClose, 150);
   }, [onClose]);
   const [match, setMatch] = useState(null);   // /search match: null = looking, false = none found
-  const [live, setLive] = useState(null);     // market from the set dump
+  const [liveSet, setLiveSet] = useState(null);     // market from the set dump, keyed on the ledger's own set + number
+  const [liveMatch, setLiveMatch] = useState(null); // market off the /search hit — a fuzzy guess, so it ranks below the set dump
   const [comps, setComps] = useState({ state: "loading" }); // /graded body
   const [hist, setHist] = useState(null);     // /history body: null = looking, false = none
   useEffect(() => {
     let ok = true;
-    setMatch(null); setLive(null); setComps({ state: "loading" }); setHist(null);
+    setMatch(null); setLiveMatch(null); setComps({ state: "loading" }); setHist(null);
     const lang = cardLang(card);
-    // four independent slots, fired together — each fills as it lands (the
-    // first market value to arrive wins; the rest keep theirs)
-    (async () => {
-      if (!card.set || !card.number) return;
-      const m = await fetchSetPrices(card.set, false, lang);
-      const v = subPrice(m?.[normNum(card.number)], card.variant);
-      if (ok && v != null) setLive((p) => (p != null ? p : v));
-    })();
+    // three identity slots, fired together — each fills as it lands. The set
+    // dump price has its own effect below, keyed on the printing too. The two
+    // market sources are ranked, not raced: the set dump answers for the
+    // ledger's own set and number, the /search hit is a fuzzy guess.
     (async () => {
       // the set catalog the binder already warmed carries this card's art —
       // read it first so the modal never says "no image" for a card whose
@@ -3281,8 +3478,10 @@ function CardModal({ card, onClose, onEdit, onValue }) {
         const row = imageInSet(await fetchSetCatalog(card.set, lang), card);
         if (ok && row?.img) setMatch((m) => m || { images: { small: row.img }, rarity: row.rarity, set: { name: card.set }, number: row.num });
       }
-      const hit = await lookupCardMatch(card);
+      let hit = await lookupCardMatch(card);
       if (!ok) return;
+      // a card pinned to a product takes no sibling's picture, set, or price
+      if (hit && card.productId && hit.productId && String(hit.productId) !== String(card.productId)) hit = null;
       setMatch((m) => hit || m || false);
       if (!hit) return;
       let v = cardPrice(hit, card.variant);
@@ -3291,7 +3490,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
         const m = await fetchSetPrices(hit.set.name, false, lang);
         v = subPrice(m?.[normNum(hit.number)], card.variant);
       }
-      if (ok && v != null) setLive((p) => (p != null ? p : v));
+      if (ok && v != null) setLiveMatch(v);
     })();
     (async () => {
       try { const r = await fetchGradedComps(card.name, card.set, card.number, lang, card.productId || ""); if (ok) setComps({ state: "ok", data: r }); }
@@ -3304,18 +3503,37 @@ function CardModal({ card, onClose, onEdit, onValue }) {
       } catch { if (ok) setHist(false); } // 401/404/429 alike: the section just doesn't render
     })();
     return () => { ok = false; };
-  }, [card.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // an edit in the modal can change what the card is — reload on identity, not
+  // just id. The printing is not identity: a pill tap must not re-spend the
+  // history and graded credits, so `variant` is left out here on purpose.
+  }, [card.id, card.name, card.set, card.number, card.productId, card.grade, card.lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the set dump is cached a day, so re-reading it per printing is free
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") close(); };
+    let ok = true;
+    setLiveSet(null);
+    (async () => {
+      if (!card.set || !card.number) return;
+      const m = await fetchSetPrices(card.set, false, cardLang(card));
+      const v = subPrice(m?.[normNum(card.number)], card.variant);
+      if (ok && v != null) setLiveSet(v);
+    })();
+    return () => { ok = false; };
+  }, [card.id, card.set, card.number, card.variant, card.lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    // Escape backs out one layer: an open edit form first, the modal second,
+    // so a half-typed edit is never thrown away by the key that closes the sheet
+    const onKey = (e) => { if (e.key === "Escape") { if (editing) { setEditing(false); return; } if (confirmDel) { setConfirmDel(false); return; } close(); } };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
-  }, [close]);
+  }, [close, editing, confirmDel]);
 
   const data = comps.data;
   const img = (match && match.images?.small) || data?.image || null;
-  const market = live != null ? live : data?.market ?? null;
+  // the /search hit carries every printing's price, so it is re-read for the
+  // current printing here; `liveMatch` only covers the set-dump fallback above
+  const market = liveSet ?? (match ? cardPrice(match, card.variant) : null) ?? liveMatch ?? data?.market ?? null;
   const value = Number(card.value) || 0;
   const basis = invBasis(card);
   const unreal = value - basis;
@@ -3344,9 +3562,11 @@ function CardModal({ card, onClose, onEdit, onValue }) {
       return b ? { lo: b.min ?? b.price, hi: b.max ?? b.price, why: `${card.grade} eBay solds (${b.count})` } : null;
     }
     if (card.status === "At grading") {
-      const co = grader.toLowerCase();
-      const buckets = Object.entries(data.byGrade || {}).filter(([k]) => k.startsWith(co)).map(([, b]) => b.price).filter((v) => Number(v) > 0);
-      if (buckets.length) return { lo: Math.min(...buckets), hi: Math.max(...buckets), why: `${grader} solds across grades` };
+      // cardGrader directly — the `grader` const below is declared after this
+      // IIFE runs, and reading it here crashed every at-grading card's modal
+      const co = cardGrader(card);
+      const buckets = Object.entries(data.byGrade || {}).filter(([k]) => k.startsWith(co.toLowerCase())).map(([, b]) => b.price).filter((v) => Number(v) > 0);
+      if (buckets.length) return { lo: Math.min(...buckets), hi: Math.max(...buckets), why: `${co} solds across grades` };
     }
     if (data.raw) return { lo: data.raw.min ?? data.raw.price, hi: data.raw.max ?? data.raw.price, why: `raw eBay solds (${data.raw.count})` };
     return market != null ? { lo: market, hi: market, why: "TCGplayer market — no recent solds" } : null;
@@ -3367,8 +3587,10 @@ function CardModal({ card, onClose, onEdit, onValue }) {
   const ests = estGrades(card).filter((g) => Number(card.gradeEst?.[g]) > 0);
   const tcgpUrl = data?.url || `https://www.tcgplayer.com/search/pokemon/product?q=${encodeURIComponent(`${card.name} ${card.number || ""}`.trim())}`;
   // the search that finds this exact card: a slab's grade and a JP printing both
-  // pull a different set of listings, so both belong in the terms
-  const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(`pokemon ${isJP(card) ? "japanese " : ""}${card.name} ${card.number || ""} ${slabbed ? card.grade : ""}`.replace(/\s+/g, " ").trim())}&LH_Sold=1&LH_Complete=1`;
+  // pull a different set of listings, so both belong in the terms. A card at
+  // the graders searches its grader's 10 — the outcome the submission is for.
+  const gradeTerm = slabbed ? card.grade : card.status === "At grading" ? `${grader} 10` : "";
+  const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(`pokemon ${isJP(card) ? "japanese " : ""}${card.name} ${card.number || ""} ${gradeTerm}`.replace(/\s+/g, " ").trim())}&LH_Sold=1&LH_Complete=1`;
   const rawMeta = data?.raw ? [
     `${data.raw.count} sale${data.raw.count === 1 ? "" : "s"}`,
     data.raw.median != null ? `median ${fmt(data.raw.median)}` : null,
@@ -3386,7 +3608,14 @@ function CardModal({ card, onClose, onEdit, onValue }) {
           <div className="cl-cm-head">
             <div className="cl-cm-name">{card.name}</div>
             <div className="cl-row-meta">{card.set || match?.set?.name || data?.set || "set unknown"}{(card.number || match?.number || data?.number) ? ` · ${card.number || match?.number || data?.number}` : ""}{rarity ? ` · ${rarity}` : ""}</div>
-            <div className="cl-row-meta"><span className={"cl-st " + stCls(card.status)}>{statusLabel(card)}</span><span className="cl-chip">{card.grade}</span>{isJP(card) && <span className="cl-chip">JP</span>}{card.variant && <span className="cl-chip">{VARIANT_SHORT[card.variant] || card.variant}</span>}</div>
+            <div className="cl-row-meta"><span className={"cl-st " + stCls(card.status)}>{statusLabel(card)}</span><span className="cl-chip">{card.grade}</span>{isJP(card) && <span className="cl-chip">JP</span>}{!tcgPriceable(card) && card.variant && <span className="cl-chip">{VARIANT_SHORT[card.variant] || card.variant}</span>}</div>
+            {/* the printing decides the price, so it changes right here: a tap
+                writes the variant to the ledger and the market above re-reads
+                for that printing. English raw cards only — a slab or a JP card
+                prices from its own solds, where the printing is not a key. */}
+            {tcgPriceable(card) && card.status !== "Sold" && <div className="cl-cm-variants" role="radiogroup" aria-label="Printing">
+              {VARIANTS.map((v) => <button key={v} role="radio" aria-checked={card.variant === v} className={"cl-pill" + (card.variant === v ? " on" : "")} onClick={() => { if (card.variant !== v) { haptic(); onSave({ id: card.id, variant: v }); } }}>{VARIANT_SHORT[v] || v}</button>)}
+            </div>}
             <div className="cl-cm-mkt">
               <div className="cl-cm-mkt-num">{headline ? fmt(headline.v) : "—"}</div>
               {/* name what this price is for — the button below writes it into
@@ -3402,6 +3631,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
           </div>
         </div>
 
+        {editing ? <InvForm initial={card} onSave={(c) => { onSave(c); setEditing(false); }} onCancel={() => setEditing(false)} /> : <>
         <div className="cl-cm-stats">
           <div className="cl-cm-stat"><span>Ledger value</span><b>{fmt(value)}</b></div>
           <div className="cl-cm-stat"><span>Cost basis</span><b>{fmt(basis)}</b></div>
@@ -3452,8 +3682,15 @@ function CardModal({ card, onClose, onEdit, onValue }) {
         <div className="cl-cm-links">
           <a className="cl-mini" href={tcgpUrl} target="_blank" rel="noreferrer"><ExternalLink size={12} /> TCGplayer</a>
           <a className="cl-mini" href={ebayUrl} target="_blank" rel="noreferrer"><ExternalLink size={12} /> eBay solds</a>
-          <button className="cl-mini" onClick={onEdit}><Pencil size={12} /> Edit card</button>
+          <button className="cl-mini" onClick={() => { setConfirmDel(false); setEditing(true); }}><Pencil size={12} /> Edit</button>
+          <button className="cl-mini" onClick={() => setConfirmDel(true)}><Trash2 size={12} /> Delete</button>
         </div>
+        {confirmDel && <div className="cl-cm-confirm">
+          <span>Delete this card from the binder?</span>
+          <button className="cl-mini danger" onClick={() => { haptic("heavy"); onDelete(card.id); close(); }}>Delete</button>
+          <button className="cl-mini" onClick={() => setConfirmDel(false)}>Keep</button>
+        </div>}
+        </>}
       </div>
     </div>
   );
@@ -3472,59 +3709,6 @@ function CardModal({ card, onClose, onEdit, onValue }) {
 function BinderGrid({ children }) {
   const [ref] = useAutoAnimate();
   return <div className="cl-binder-grid" ref={ref}>{children}</div>;
-}
-function Binder({ state, patch, go }) {
-  const inv = state.inventory || [];
-  const [q, setQ] = useState("");
-  const [showSold, setShowSold] = useState(false);
-  const [viewId, setViewId] = useState(null);
-  const typed = q.trim().toLowerCase();
-  const cards = useMemo(() => inv
-    .filter((c) => (showSold || c.status !== "Sold") && c.name)
-    .filter((c) => !typed || c.name.toLowerCase().includes(typed) || (c.set || "").toLowerCase().includes(typed))
-    .sort((a, b) => (a.set || "").localeCompare(b.set || "") || normNum(a.number).localeCompare(normNum(b.number), undefined, { numeric: true }) || a.name.localeCompare(b.name)),
-  [inv, showSold, typed]);
-  const pages = useMemo(() => {
-    const out = [];
-    for (const c of cards) {
-      const key = c.set || "Unsorted";
-      const page = out[out.length - 1]?.key === key ? out[out.length - 1] : (out.push({ key, cards: [] }), out[out.length - 1]);
-      page.cards.push(c);
-    }
-    return out;
-  }, [cards]);
-  const viewCard = viewId ? inv.find((c) => c.id === viewId) : null;
-  const setValue = (v) => patch((s) => ({ inventory: s.inventory.map((x) => (x.id === viewCard.id ? { ...x, value: v } : x)) }));
-  const images = useCardImages(cards);
-  const trends = useCardTrends(cards);
-
-  return (
-    <div className="cl-stack">
-      <Header title="Binder" sub={`${cards.length} card${cards.length === 1 ? "" : "s"}${pages.length > 1 ? ` · ${pages.length} sets` : ""}`} />
-      {inv.length === 0
-        ? <Empty>No cards yet. Add a keeper from Inventory or Lookup and it shows up here.</Empty>
-        : <>
-          <div className="cl-salesearch">
-            <Search size={15} className="cl-salesearch-ic" />
-            <input className="cl-in bare" placeholder="Search your binder — name or set" value={q} onChange={(e) => setQ(e.target.value)} />
-            {q && <button className="cl-salesearch-x" onClick={() => setQ("")}><X size={14} /></button>}
-          </div>
-          <label className="cl-binder-soldtoggle"><input type="checkbox" checked={showSold} onChange={(e) => setShowSold(e.target.checked)} /> Show sold cards</label>
-          {cards.length === 0 && <Empty>Nothing matches “{q}”.</Empty>}
-          {pages.map((p) => (
-            <div key={p.key} className="cl-binder-page">
-              <div className="cl-binder-page-head"><span>{p.key}</span><span className="cl-row-meta">{p.cards.length} card{p.cards.length === 1 ? "" : "s"}</span></div>
-              <BinderGrid>
-                {p.cards.map((c) => <BinderCard key={c.id} card={c} img={images[c.id]} trend={trends[c.id]} onOpen={setViewId} />)}
-              </BinderGrid>
-            </div>
-          ))}
-        </>}
-      {viewCard && <CardModal card={viewCard} onClose={() => setViewId(null)}
-        onEdit={() => { setViewId(null); go?.("inv"); }}
-        onValue={setValue} />}
-    </div>
-  );
 }
 /* ================================================================== */
 /* Card lookup: the same CardSearch every other screen uses, with the
@@ -3726,7 +3910,7 @@ function CardSnap({ state, patch }) {
                 <div className="cl-cm-mkt">
                   <div className="cl-cm-mkt-num">{price != null ? fmt(price) : "—"}</div>
                   <div className="cl-cm-mkt-lab">{!priceable
-                    ? `${d.grade !== "Raw" ? d.grade : "Japanese"} — comped in Inventory`
+                    ? `${d.grade !== "Raw" ? d.grade : "Japanese"} — comped in the Binder`
                     : `TCGplayer market${d.variant ? ` · ${d.variant}` : ""}${price == null ? " — no data" : ""}`}</div>
                 </div>
               </div>
@@ -3758,7 +3942,7 @@ function CardSnap({ state, patch }) {
             </Field>
             {!priceable && <div className="cl-note" style={{ marginTop: 0 }}>
               {d.grade !== "Raw" ? `Read as a ${d.grade} slab. ` : "Read as a Japanese card. "}
-              It goes in at no value — open it in Inventory and hit {d.grade !== "Raw" ? "“Pull slab price”" : "“Refresh market prices”"} to comp it against its own eBay solds.
+              It goes in at no value — open it in the Binder and hit {d.grade !== "Raw" ? "“Pull slab price”" : "“Refresh market prices”"} to comp it against its own eBay solds.
             </div>}
             {state.rips.length > 0 && <Field label="Add a hit to"><select className="cl-in" value={ripId} onChange={(e) => setRipId(e.target.value)}><option value="">latest rip</option>{state.rips.map((r) => <option key={r.id} value={r.id}>{r.product || "Rip"}</option>)}</select></Field>}
             <div className="cl-snap-go">
@@ -4116,7 +4300,7 @@ function Fonts() {
     .cl-ac-price{font-family:'Space Grotesk';font-weight:600;color:var(--pos);font-size:13px;font-variant-numeric:tabular-nums;flex:none;}
     .cl-ac-retry{width:100%;background:none;border:none;color:#ffce9e;cursor:pointer;font-family:'Inter';}
     .cl-modal-ov{position:fixed;inset:0;z-index:60;background:rgba(6,8,13,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px;animation:ovIn .15s ease-out;}
-    .cl-modal{background:var(--surf);border:1px solid var(--line);border-radius:18px;width:100%;max-width:540px;max-height:min(88vh,780px);overflow-y:auto;padding:16px;position:relative;animation:cmIn .18s ease-out;}
+    .cl-modal{background:var(--surf);border:1px solid var(--line);border-radius:18px;width:100%;max-width:540px;max-height:min(92vh,860px);overflow-y:auto;padding:16px;position:relative;animation:cmIn .18s ease-out;}
     @keyframes cmIn{from{transform:translateY(16px);opacity:.5;}to{transform:none;opacity:1;}}
     @keyframes ovIn{from{opacity:0;}to{opacity:1;}}
     /* leaving plays the entrance in reverse; CardModal waits it out before unmounting */
@@ -4163,26 +4347,55 @@ function Fonts() {
     .cl-spark-meta{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--mut);margin-top:2px;font-variant-numeric:tabular-nums;}
     .cl-spark-meta b{color:var(--ink);font-weight:600;}
     .cl-cm-meta{font-size:12px;color:var(--mut);line-height:1.5;}
-    .cl-cm-links{display:flex;gap:6px;margin-top:10px;}
+    .cl-cm-links{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+    .cl-cm-links .cl-mini{flex:1 1 calc(50% - 6px);}
     .cl-cm-links .cl-mini{display:flex;align-items:center;justify-content:center;gap:5px;text-decoration:none;}
-    .cl-binder-soldtoggle{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--mut);cursor:pointer;}
+    .cl-cm-variants{display:flex;gap:4px;margin-top:6px;}
+    .cl-cm-variants .cl-pill{padding:4px 9px;font-size:11px;}
+    .cl-cm-confirm{display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px 12px;border:1px solid var(--neg);border-radius:10px;font-size:12.5px;color:var(--ink);}
+    .cl-cm-confirm span{flex:1;}
+    .cl-mini.danger{border-color:var(--neg);color:var(--neg);}
     .cl-binder-page-head{display:flex;justify-content:space-between;align-items:baseline;font-family:'Space Grotesk';font-weight:600;font-size:13.5px;padding:2px 1px;}
-    .cl-binder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px;margin-top:8px;}
-    .cl-binder-card{display:flex;flex-direction:column;gap:5px;background:none;border:none;padding:0;cursor:pointer;font-family:'Inter';text-align:left;}
-    .cl-binder-imgwrap{position:relative;aspect-ratio:5/7;border-radius:9px;overflow:hidden;background:var(--surf2);border:1px solid var(--line);}
+    .cl-binder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:8px;}
+    .cl-binder-card{display:flex;flex-direction:column;gap:8px;background:var(--surf);border:1px solid var(--line);border-radius:14px;padding:10px;cursor:pointer;font-family:'Inter';text-align:left;min-width:0;}
+    .cl-binder-card.sold{opacity:.62;}
+    .cl-binder-artwrap{position:relative;display:block;}
+    .cl-binder-imgwrap{position:relative;display:block;aspect-ratio:5/7;border-radius:9px;overflow:hidden;background:var(--surf2);border:1px solid var(--line);}
     .cl-binder-img{width:100%;height:100%;object-fit:contain;background:#0c0f15;}
     .cl-binder-ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:8px;text-align:center;font-size:10.5px;line-height:1.3;color:var(--mut);}
     .cl-binder-ph.named{color:var(--ink);}
-    .cl-binder-sold{position:absolute;top:5px;right:5px;background:rgba(12,14,19,.82);color:var(--mut);font-size:9px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;border-radius:5px;padding:2px 5px;}
-    .cl-binder-cap{display:flex;flex-direction:column;gap:1px;}
-    .cl-binder-name{font-size:11.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-    .cl-binder-money{font-family:'Space Grotesk';font-weight:600;font-size:11.5px;color:var(--holo2);font-variant-numeric:tabular-nums;}
-    .cl-binder-worth{display:flex;align-items:center;justify-content:space-between;gap:4px;}
+    .cl-binder-badge{position:absolute;top:6px;right:6px;background:rgba(12,14,19,.84);color:var(--mut);font-size:9px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;border-radius:5px;padding:2px 6px;}
+    .cl-binder-badge.grading{color:#f5c76a;border:1px solid rgba(245,199,106,.45);}
+    .cl-binder-badge.listed{color:var(--holo2);border:1px solid var(--line);}
+    /* the slab: a pale plastic case with the label strip on top. A graded
+       card must look graded at a glance. */
+    .cl-slab{display:flex;flex-direction:column;border-radius:10px;padding:5px;background:linear-gradient(160deg,rgba(255,255,255,.14),rgba(255,255,255,.04));border:1px solid rgba(255,255,255,.28);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 2px 8px rgba(0,0,0,.35);}
+    .cl-binder-imgwrap.in-slab{border-radius:6px;}
+    .cl-slab-label{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:5px;padding:4px 7px;border-radius:5px 5px 0 0;margin-bottom:3px;font-family:'Space Grotesk';line-height:1;}
+    .cl-slab-co{font-weight:800;font-size:11px;letter-spacing:.04em;}
+    .cl-slab-word{font-size:8.5px;font-weight:700;letter-spacing:.06em;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .cl-slab-grade{font-weight:800;font-size:14px;font-variant-numeric:tabular-nums;}
+    .cl-slab-label.psa{background:#e21d2c;color:#fff;}
+    .cl-slab-label.cgc{background:#f4f6f8;color:#0a0d12;}
+    .cl-slab-label.cgc .cl-slab-co{color:#1e5fb3;}
+    .cl-slab-label.bgs{background:#c9a227;color:#1a1405;}
+    .cl-slab-label.other{background:#1d2230;color:#fff;}
+    .cl-binder-cap{display:flex;flex-direction:column;gap:3px;min-width:0;}
+    .cl-binder-name{font-family:'Space Grotesk';font-weight:600;font-size:14px;line-height:1.25;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+    .cl-binder-line{font-size:11.5px;line-height:1.35;color:var(--mut);overflow:hidden;text-overflow:ellipsis;}
+    .cl-binder-line.chips{white-space:normal;}
+    .cl-binder-line.meta{display:flex;justify-content:space-between;gap:6px;font-size:10.5px;margin-top:2px;}
+    .cl-binder-cond{color:var(--holo2);}
+    .cl-binder-cond.psa{color:#ff5a66;font-weight:600;}
+    .cl-binder-cond.cgc{color:#6aa6ff;font-weight:600;}
+    .cl-binder-cond.bgs{color:#e0b93a;font-weight:600;}
+    .cl-binder-money{font-family:'Space Grotesk';font-weight:700;font-size:15px;color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap;}
+    .cl-binder-worth{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:4px;}
     .cl-binder-trend{display:flex;align-items:center;gap:3px;min-width:0;}
     .cl-binder-trend-svg{width:34px;height:12px;flex:none;}
-    .cl-binder-delta{font-size:9px;font-variant-numeric:tabular-nums;color:var(--mut);}
+    .cl-binder-delta{font-size:10px;font-variant-numeric:tabular-nums;color:var(--mut);}
     .cl-binder-delta.pos{color:var(--pos);}
     .cl-binder-delta.neg{color:var(--neg);}
-    @media (max-width:420px){.cl-grid3{grid-template-columns:1fr;}.cl-hero-num{font-size:40px;}.cl-inv-summary .cl-stat-num{font-size:16px;}.cl-inv-summary .cl-range{font-size:11px;}.cl-gradeest{grid-template-columns:repeat(3,1fr);}.cl-cm-img{width:116px;}.cl-cm-mkt-num{font-size:22px;}.cl-scan-ctl{grid-template-columns:1fr 1fr;}.cl-scan-go{grid-column:1/-1;}.cl-binder-grid{grid-template-columns:repeat(auto-fill,minmax(88px,1fr));}}
+    @media (max-width:420px){.cl-grid3{grid-template-columns:1fr;}.cl-hero-num{font-size:40px;}.cl-inv-summary .cl-stat-num{font-size:16px;}.cl-inv-summary .cl-range{font-size:11px;}.cl-gradeest{grid-template-columns:repeat(3,1fr);}.cl-cm-img{width:116px;}.cl-cm-mkt-num{font-size:22px;}.cl-scan-ctl{grid-template-columns:1fr 1fr;}.cl-scan-go{grid-column:1/-1;}}
   `}</style>);
 }
