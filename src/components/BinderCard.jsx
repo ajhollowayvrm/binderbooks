@@ -1,5 +1,5 @@
 import React from "react";
-import { fmt } from "../App.jsx";
+import { fmt, FadeImg } from "../App.jsx";
 
 // A card's picture, as resolved by useCardImages. undefined = still
 // looking, null = no match found (JP, a stamped print, a SKU the database
@@ -14,8 +14,8 @@ function BinderCard({ card, img, onOpen }) {
     <button className="cl-binder-card cl-row-enter" onClick={() => onOpen(card.id)} title={card.name}>
       <span className="cl-binder-imgwrap">
         {img
-          ? <img className="cl-binder-img" src={img} alt={card.name} loading="lazy" />
-          : <span className={"cl-binder-ph" + (img === null ? " named" : "")}>
+          ? <FadeImg className="cl-binder-img" src={img} alt={card.name} loading="lazy" />
+          : <span className={"cl-binder-ph" + (img === null ? " named" : " cl-shimmer")}>
               {img === null ? card.name : <span className="holo-dot" />}
             </span>}
         {card.status === "Sold" && <span className="cl-binder-sold">Sold</span>}

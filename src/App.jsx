@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { flushSync } from "react-dom";
 import Papa from "papaparse";
 import {
   LayoutDashboard, PackageOpen, ShoppingCart, Tags, Search, Archive,
@@ -11,6 +12,7 @@ import {
   getCatalogRecords, catalogRowsForSets, recordToRow, clearCatalog,
 } from "./catalog.js";
 import { SET_CODES } from "./setCodes.js";
+import { useAutoAnimate } from "@formkit/auto-animate/react";
 import BuyRow from "./components/BuyRow.jsx";
 import InventoryRow from "./components/InventoryRow.jsx";
 import SaleRow from "./components/SaleRow.jsx";
@@ -253,18 +255,25 @@ const setCatalogPut = (key, list) => {
   } catch {}
 };
 const setCatalogInFlight = new Map(); // dedupes concurrent fetches for the same set
+// a failed set fetch rests before retrying — every screen mount asking again
+// within seconds only re-spends the same rate-limited minute
+const setCatalogFailed = new Map();
+const SETCATALOG_RETRY = 5 * 60 * 1000;
 function fetchSetCatalog(setName, lang = "en") {
   const key = lang === "jp" ? `${setName}|jp` : setName;
   const cached = setCatalogGet(key);
   if (cached) return Promise.resolve(cached);
   if (setCatalogInFlight.has(key)) return setCatalogInFlight.get(key);
+  const failedAt = setCatalogFailed.get(key);
+  if (failedAt && Date.now() - failedAt < SETCATALOG_RETRY) return Promise.resolve([]);
   const p = cardFetch("catalog", { set: setName, lang: lang === "jp" ? "jp" : "" })
     .then((j) => {
       const list = j.cards || [];
       setCatalogPut(key, list);
+      setCatalogFailed.delete(key);
       return list;
     })
-    .catch(() => [])
+    .catch(() => { setCatalogFailed.set(key, Date.now()); return []; })
     .finally(() => setCatalogInFlight.delete(key));
   setCatalogInFlight.set(key, p);
   return p;
@@ -979,6 +988,16 @@ function useCardImages(cards) {
 export default function App() {
   const [state, setState] = useState(null);
   const [tab, setTab] = useState("dash");
+  /* Tab switches ride the View Transitions API where the browser has it
+     (iOS 18+ / modern Chrome): the outgoing pane cross-fades away instead of
+     vanishing, and the key={tab} entrance below still slides the new one in.
+     flushSync so React commits inside the transition's snapshot window. */
+  const switchTab = useCallback((k) => {
+    haptic("select");
+    if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      document.startViewTransition(() => { flushSync(() => setTab(k)); });
+    } else setTab(k);
+  }, []);
   const [sync, setSync] = useState(() => (syncToken() ? "checking" : "off"));
   const saving = useRef(false);
   const pushTimer = useRef(null);
@@ -1146,16 +1165,16 @@ export default function App() {
         <div className="cl-tag">card P&amp;L ledger</div>
       </header>
       <nav className="cl-tabs">
-        {TABS.map(([k, label, Icon]) => (<button key={k} className={"cl-tab" + (tab === k ? " on" : "")} onClick={() => { haptic("select"); setTab(k); }}><Icon size={15} /> <span>{label}</span></button>))}
+        {TABS.map(([k, label, Icon]) => (<button key={k} className={"cl-tab" + (tab === k ? " on" : "")} onClick={() => switchTab(k)}><Icon size={15} /> <span>{label}</span></button>))}
       </nav>
       <main className="cl-main cl-tabpane" key={tab}>
-        {tab === "dash" && <Dashboard state={state} go={setTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} resolveChoice={resolveChoice} />}
+        {tab === "dash" && <Dashboard state={state} go={switchTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} resolveChoice={resolveChoice} />}
         {tab === "month" && <Monthly state={state} />}
         {tab === "rips" && <Rips state={state} patch={patch} />}
         {tab === "buys" && <Buys state={state} patch={patch} />}
         {tab === "sales" && <Sales state={state} patch={patch} />}
         {tab === "inv" && <Inventory state={state} patch={patch} />}
-        {tab === "binder" && <Binder state={state} patch={patch} go={setTab} />}
+        {tab === "binder" && <Binder state={state} patch={patch} go={switchTab} />}
         {tab === "look" && <Lookup state={state} patch={patch} />}
         {__BB_SCAN__ && tab === "snap" && <CardSnap state={state} patch={patch} />}
       </main>
@@ -1394,13 +1413,14 @@ function Rips({ state, patch }) {
   // changing `images` reference and defeat its memoization.
   const openRip = sorted.find((r) => r.id === open);
   const hitImages = useCardImages(openRip?.hits || EMPTY_ARR);
+  const [listRef] = useAutoAnimate();
 
   return (
     <div className="cl-stack">
       <Header title="Rips" sub="Cost of the packs vs. value of what you pulled" onAdd={() => setAdding(!adding)} addOpen={adding} />
       {adding && <RipForm buys={state.buys} rippedBuyIds={new Set(state.rips.map((r) => r.buyId).filter(Boolean))} onSave={addRip} onCancel={() => setAdding(false)} />}
       {state.rips.length === 0 && !adding && <Empty>Nothing ripped yet. Log a rip — say 5 packs of Chaos Rising — then drop in each hit and watch the P&amp;L land.</Empty>}
-      <div className="cl-stack">
+      <div className="cl-stack" ref={listRef}>
         {sorted.map((r) => (
           <RipCard key={r.id} rip={r} pl={ripPL(r, state.buys)} cost={ripCostOf(r, state.buys)} isOpen={open === r.id} images={open === r.id ? hitImages : EMPTY_OBJ} onToggle={onToggle} onDelete={delRip} onAddHit={addHit} onEditHit={updHit} onDeleteHit={delHit} />
         ))}
@@ -1638,7 +1658,7 @@ function CardSearch({
     const c = r.card;
     const price = cardPrice(c, c.variant);
     return (<>
-      {c.images?.small ? <img src={c.images.small} alt="" className="cl-ac-img" loading="lazy" /> : <div className="cl-ac-img" />}
+      {c.images?.small ? <FadeImg src={c.images.small} alt="" className="cl-ac-img" loading="lazy" /> : <div className="cl-ac-img cl-shimmer" />}
       <div className="cl-ac-meta">
         <div className="cl-ac-name">{c.name}</div>
         <div className="cl-row-meta">
@@ -1751,7 +1771,7 @@ export function HitForm({ initial, onAdd, onSave, onCancel }) {
   return (
     <div className="cl-hitform">
       <CardSearch value={f.name} onChange={(v) => { setF({ ...f, name: v }); setPreview(null); }} onPick={pick} placeholder="Add a hit — try “Dedenne Perfect Order” or “Dedenne 143”" />
-      {preview && <div className="cl-hitform-preview"><img className="cl-hitform-preview-img" src={preview} alt={f.name} loading="lazy" /><span className="cl-row-meta">{f.name}</span></div>}
+      {preview && <div className="cl-hitform-preview"><FadeImg className="cl-hitform-preview-img" src={preview} alt={f.name} loading="lazy" /><span className="cl-row-meta">{f.name}</span></div>}
       <div className="cl-grid3">
         <Field label="Set"><input className="cl-in" placeholder="Set" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /></Field>
         <Field label="No."><input className="cl-in" placeholder="No." value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /></Field>
@@ -1782,13 +1802,14 @@ function Buys({ state, patch }) {
   const onCancelEdit = useCallback(() => setEditId(null), []);
   const total = useMemo(() => state.buys.reduce((s, b) => s + (Number(b.cost) || 0), 0), [state.buys]);
   const sorted = useMemo(() => [...state.buys].sort(byDateDesc), [state.buys]);
+  const [listRef] = useAutoAnimate();
 
   return (
     <div className="cl-stack">
       <Header title="Buys" sub={`Money out · ${fmt(total)} total`} onAdd={() => { setAdding(!adding); setEditId(null); }} addOpen={adding} />
       {adding && <BuyForm onSave={add} onCancel={() => setAdding(false)} />}
       {state.buys.length === 0 && !adding && <Empty>No purchases yet.</Empty>}
-      <div className="cl-stack sm">
+      <div className="cl-stack sm" ref={listRef}>
         {sorted.map((b) => (
           <BuyRow key={b.id} buy={b} isEditing={editId === b.id} onEdit={onEdit} onDelete={del} onToggleRipped={toggleRipped} onSave={upd} onCancelEdit={onCancelEdit} />
         ))}
@@ -1945,6 +1966,7 @@ function Sales({ state, patch }) {
     .filter((x) => (view !== "bare" || noCards(x)) && (view !== "dups" || isDup(x)) && terms.every((t) => blob(x).includes(t)))
     .sort(view === "dups" ? (a, b) => saleSig(a).localeCompare(saleSig(b)) || byDateDesc(a, b) : byDateDesc),
   [state.sales, view, q, sigCounts]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [listRef] = useAutoAnimate();
 
   const mergeDupes = () => {
     const groups = new Map();
@@ -2076,7 +2098,7 @@ function Sales({ state, patch }) {
       {view === "dups" && dupExtra > 0 && <button className="cl-import-btn" onClick={mergeDupes}><Trash2 size={14} /> Merge {dupExtra} duplicate{dupExtra === 1 ? "" : "s"} — keep the most complete copy of each</button>}
       {(q || view !== "all") && <div className="cl-import-msg">Showing {sorted.length} of {state.sales.length} sales</div>}
       {state.sales.length > 0 && sorted.length === 0 && <Empty>{view === "bare" ? "Every sale has card lines attached — nothing left to enrich." : view === "dups" ? "No duplicate orders found." : `No sales match “${q}”.`}</Empty>}
-      <div className="cl-stack sm">
+      <div className="cl-stack sm" ref={listRef}>
         {sorted.map((x) => (
           <SaleRow key={x.id} sale={x} inventory={state.inventory} isEditing={editId === x.id} onEdit={onEditRow} onDelete={del} onSave={upd} onCancelEdit={onCancelEdit} />
         ))}
@@ -2301,6 +2323,15 @@ const downloadFile = (name, text) => {
 const haptic = (kind = "light") => {
   if (window.__BINDERBOOKS_NATIVE__) window.webkit?.messageHandlers?.haptics?.postMessage(kind);
 };
+
+/* Card art fades in as it decodes instead of popping. The ref check covers
+   cache hits — a complete image never fires onLoad, and without it a cached
+   picture would stay invisible. */
+export function FadeImg({ className = "", ...props }) {
+  const [on, setOn] = useState(false);
+  const ref = useCallback((el) => { if (el?.complete && el.naturalWidth) setOn(true); }, []);
+  return <img {...props} ref={ref} className={`${className} cl-imgfade${on ? " on" : ""}`} onLoad={() => setOn(true)} />;
+}
 
 function Inventory({ state, patch }) {
   const inv = state.inventory || [];
@@ -2773,6 +2804,7 @@ function Inventory({ state, patch }) {
   const hasRange = range.lo !== range.hi;
   const FILTERS = ["All", "Kept", "At grading", "Listed", "Sold"];
   const shown = useMemo(() => (filter === "All" ? inv : inv.filter((c) => c.status === filter)).slice().sort(byDateDesc), [inv, filter]);
+  const [listRef] = useAutoAnimate();
   const viewCard = viewId ? inv.find((c) => c.id === viewId) : null;
 
   return (
@@ -2896,7 +2928,7 @@ function Inventory({ state, patch }) {
       {adding && <InvForm onSave={add} onCancel={() => setAdding(false)} />}
       {inv.length > 0 && <div className="cl-pills">{FILTERS.map((x) => <button key={x} className={"cl-pill" + (filter === x ? " on" : "")} onClick={() => setFilter(x)}>{x}</button>)}</div>}
       {inv.length === 0 && !adding && <Empty>No cards yet. Add a keeper or a card you've sent for grading, or hit “+ Keep” from Lookup to pull one in with its market value.</Empty>}
-      <div className="cl-stack sm">
+      <div className="cl-stack sm" ref={listRef}>
         {shown.map((c) => (
           <InventoryRow key={c.id} card={c} isEditing={editId === c.id} onEdit={onEditRow} onDelete={del} onOpen={onOpenRow} onSave={upd} onCancelEdit={onCancelEdit} />
         ))}
@@ -3132,6 +3164,14 @@ const cmErrMsg = (s) => (s === 401 ? NO_TOKEN_MSG
   : s === 404 ? "No recent eBay solds found for this card."
   : "eBay sold data is unavailable right now.");
 function CardModal({ card, onClose, onEdit, onValue }) {
+  // leaving is animated too: `closing` plays the reverse of the entrance,
+  // then the real onClose unmounts. Reduced motion skips straight out.
+  const [closing, setClosing] = useState(false);
+  const close = useCallback(() => {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return onClose();
+    setClosing(true);
+    setTimeout(onClose, 150);
+  }, [onClose]);
   const [match, setMatch] = useState(null);   // /search match: null = looking, false = none found
   const [live, setLive] = useState(null);     // market from the set dump
   const [comps, setComps] = useState({ state: "loading" }); // /graded body
@@ -3181,12 +3221,12 @@ function CardModal({ card, onClose, onEdit, onValue }) {
     return () => { ok = false; };
   }, [card.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
-  }, [onClose]);
+  }, [close]);
 
   const data = comps.data;
   const img = (match && match.images?.small) || data?.image || null;
@@ -3232,13 +3272,13 @@ function CardModal({ card, onClose, onEdit, onValue }) {
   ].filter(Boolean).join(" · ") : "";
 
   return (
-    <div className="cl-modal-ov" onClick={onClose}>
+    <div className={"cl-modal-ov" + (closing ? " closing" : "")} onClick={close}>
       <div className="cl-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <button className="cl-x cl-cm-close" onClick={onClose}><X size={16} /></button>
+        <button className="cl-x cl-cm-close" onClick={close}><X size={16} /></button>
         <div className="cl-cm-top">
           {img
-            ? <img className="cl-cm-img" src={img} alt={card.name} />
-            : <div className="cl-cm-img ph">{match === null || comps.state === "loading" ? "loading…" : "no image found"}</div>}
+            ? <FadeImg className="cl-cm-img" src={img} alt={card.name} />
+            : <div className={"cl-cm-img ph" + (match === null || comps.state === "loading" ? " cl-shimmer" : "")}>{match === null || comps.state === "loading" ? "loading…" : "no image found"}</div>}
           <div className="cl-cm-head">
             <div className="cl-cm-name">{card.name}</div>
             <div className="cl-row-meta">{card.set || match?.set?.name || data?.set || "set unknown"}{(card.number || match?.number || data?.number) ? ` · ${card.number || match?.number || data?.number}` : ""}{rarity ? ` · ${rarity}` : ""}</div>
@@ -3322,6 +3362,12 @@ function CardModal({ card, onClose, onEdit, onValue }) {
    the whole-set /catalog dump (BinderCard below, cached by fetchSetCatalog
    and lookupCardMatch) — Japanese cards included; a card that lookup can't
    pin down falls back to a name tile instead of a broken image. */
+// its own component because each set page needs its own auto-animate ref —
+// searching the binder then slides matching cards around instead of snapping
+function BinderGrid({ children }) {
+  const [ref] = useAutoAnimate();
+  return <div className="cl-binder-grid" ref={ref}>{children}</div>;
+}
 function Binder({ state, patch, go }) {
   const inv = state.inventory || [];
   const [q, setQ] = useState("");
@@ -3362,9 +3408,9 @@ function Binder({ state, patch, go }) {
           {pages.map((p) => (
             <div key={p.key} className="cl-binder-page">
               <div className="cl-binder-page-head"><span>{p.key}</span><span className="cl-row-meta">{p.cards.length} card{p.cards.length === 1 ? "" : "s"}</span></div>
-              <div className="cl-binder-grid">
+              <BinderGrid>
                 {p.cards.map((c) => <BinderCard key={c.id} card={c} img={images[c.id]} onOpen={setViewId} />)}
-              </div>
+              </BinderGrid>
             </div>
           ))}
         </>}
@@ -3707,6 +3753,20 @@ function Fonts() {
         transform: none;
       }
     }
+    /* card art fades in as it decodes; the shimmer marks a tile that is
+       still resolving, so "loading" and "no image" never look alike */
+    .cl-imgfade{opacity:0;transition:opacity .35s ease;}
+    .cl-imgfade.on{opacity:1;}
+    .cl-shimmer{background-image:linear-gradient(100deg,rgba(255,255,255,0) 40%,rgba(167,139,250,.09) 50%,rgba(255,255,255,0) 60%);background-size:200% 100%;animation:shimmer 1.3s linear infinite;}
+    @keyframes shimmer{to{background-position:-200% 0;}}
+    @media (prefers-reduced-motion:reduce){.cl-imgfade{opacity:1;transition:none;}.cl-shimmer{animation:none;}}
+    /* tab switches under the View Transitions API: the old pane drifts up
+       and out while the new pane rises in — switchTab() only starts a
+       transition when the browser has the API and motion isn't reduced */
+    ::view-transition-old(root){animation:vtOut .16s ease-in both;}
+    ::view-transition-new(root){animation:vtIn .2s ease-out both;}
+    @keyframes vtOut{to{opacity:0;transform:translateY(-6px);}}
+    @keyframes vtIn{from{opacity:0;transform:translateY(8px);}}
     /* tab-content fade-in on switch — replayed each time via key={tab} */
     .cl-tabpane{animation:tabIn .16s ease-out;}
     @keyframes tabIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
@@ -3953,7 +4013,12 @@ function Fonts() {
     .cl-modal{background:var(--surf);border:1px solid var(--line);border-radius:18px;width:100%;max-width:540px;max-height:min(88vh,780px);overflow-y:auto;padding:16px;position:relative;animation:cmIn .18s ease-out;}
     @keyframes cmIn{from{transform:translateY(16px);opacity:.5;}to{transform:none;opacity:1;}}
     @keyframes ovIn{from{opacity:0;}to{opacity:1;}}
-    @media (prefers-reduced-motion:reduce){.cl-modal{animation:none;}.cl-modal-ov{animation:none;}}
+    /* leaving plays the entrance in reverse; CardModal waits it out before unmounting */
+    .cl-modal-ov.closing{animation:ovOut .15s ease-in forwards;}
+    .cl-modal-ov.closing .cl-modal{animation:cmOut .15s ease-in forwards;}
+    @keyframes ovOut{to{opacity:0;}}
+    @keyframes cmOut{to{transform:translateY(12px);opacity:0;}}
+    @media (prefers-reduced-motion:reduce){.cl-modal{animation:none;}.cl-modal-ov{animation:none;}.cl-modal-ov.closing,.cl-modal-ov.closing .cl-modal{animation:none;}}
     .cl-cm-close{position:absolute;top:10px;right:10px;background:var(--surf2);}
     .cl-cm-top{display:flex;gap:14px;}
     .cl-cm-img{width:158px;flex:none;align-self:flex-start;border-radius:12px;background:#0c0f15;}
