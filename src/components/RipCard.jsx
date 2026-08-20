@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { ChevronDown, ChevronRight, Trash2, X } from "lucide-react";
 import { fmt, isJP, ripValue, HitForm } from "../App.jsx";
 
@@ -6,9 +6,15 @@ import { fmt, isJP, ripValue, HitForm } from "../App.jsx";
    doesn't re-render every other rip card. `pl`/`cost` are precomputed by the
    parent as numbers (cheaper prop comparison than passing the whole `buys`
    array) — P&L genuinely depends on buys, so this is an inherent coupling,
-   not a memoization bug. `onToggle`/`onDelete`/`onAddHit`/`onDeleteHit` must
-   be stable — this component calls them with its own `rip.id`. */
-function RipCard({ rip: r, pl, cost, isOpen, onToggle, onDelete, onAddHit, onDeleteHit }) {
+   not a memoization bug. `onToggle`/`onDelete`/`onAddHit`/`onEditHit`/
+   `onDeleteHit` must be stable — this component calls them with its own
+   `rip.id`. `images` is an `{id: url|null|undefined}` map for this rip's
+   hits — the caller must pass the same stable empty-object reference for
+   every rip that isn't open, or this memoization is defeated for every
+   collapsed card. Which hit is being edited stays local: a collapsed rip
+   renders no hits, so lifting it would only add a prop to keep stable. */
+function RipCard({ rip: r, pl, cost, isOpen, images, onToggle, onDelete, onAddHit, onEditHit, onDeleteHit }) {
+  const [editHitId, setEditHitId] = useState(null);
   const packLabel = r.setPacks && r.setPacks.length
     ? r.setPacks.map((p) => `${p.packs || "?"} ${p.set || "?"}`).join(" + ")
     : (r.packs ? `${r.packs} packs` : "");
@@ -21,7 +27,9 @@ function RipCard({ rip: r, pl, cost, isOpen, onToggle, onDelete, onAddHit, onDel
       {isOpen && <div className="cl-card-body">
         <div className="cl-hits">
           {(r.hits || []).length === 0 && <div className="cl-empty">No hits added.</div>}
-          {(r.hits || []).map((h) => (<div key={h.id} className="cl-hit cl-row-enter"><span className="holo-dot" /><div className="cl-hit-main"><div className="cl-hit-name">{h.name}</div><div className="cl-row-meta">{h.grade && h.grade !== "Raw" && <span className="cl-chip">{h.grade}</span>}{isJP(h) && <span className="cl-chip">JP</span>}{h.set ? `${h.set}${h.number ? ` · ${h.number}` : ""}` : ""}</div></div><div className="cl-money">{fmt(Number(h.value) || 0)}</div><button className="cl-x" onClick={() => onDeleteHit(r.id, h.id)}><X size={13} /></button></div>))}
+          {(r.hits || []).map((h) => (editHitId === h.id
+            ? <HitForm key={h.id} initial={h} onSave={(u) => { onEditHit(r.id, u); setEditHitId(null); }} onCancel={() => setEditHitId(null)} />
+            : (() => { const img = images[h.id]; return (<div key={h.id} className="cl-hit click cl-row-enter" onClick={() => setEditHitId(h.id)}><span className="cl-hit-imgwrap">{img ? <img className="cl-hit-img" src={img} alt={h.name} loading="lazy" /> : <span className={"cl-hit-ph" + (img === null ? " named" : "")}>{img === null ? h.name : <span className="holo-dot" />}</span>}</span><div className="cl-hit-main"><div className="cl-hit-name">{h.name}</div><div className="cl-row-meta">{h.grade && h.grade !== "Raw" && <span className="cl-chip">{h.grade}</span>}{isJP(h) && <span className="cl-chip">JP</span>}{h.set ? `${h.set}${h.number ? ` · ${h.number}` : ""}` : ""}</div></div><div className="cl-money">{fmt(Number(h.value) || 0)}</div><button className="cl-x" onClick={(e) => { e.stopPropagation(); onDeleteHit(r.id, h.id); }}><X size={13} /></button></div>); })()))}
         </div>
         <HitForm onAdd={(h) => onAddHit(r.id, h)} />
         <div className="cl-card-foot"><span>Pulled value {fmt(ripValue(r))}</span><button className="cl-del" onClick={() => onDelete(r.id)}><Trash2 size={13} /> Delete rip</button></div>

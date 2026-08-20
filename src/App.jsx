@@ -532,6 +532,11 @@ const SLAB_GRADES = {
   BGS: ["10", "9.5", "9", "8.5", "8", "7.5", "7", "6.5", "6", "5", "4", "3", "2", "1"],
 };
 const GRADES = ["Raw", ...GRADERS.flatMap((co) => SLAB_GRADES[co].map((g) => `${co} ${g}`)), "Other"];
+// Stable references passed to collapsed RipCards' `images` prop and to
+// useCardImages when nothing is open — a fresh [] / {} literal every render
+// would defeat both the hook's effect deps and RipCard's memo comparison.
+const EMPTY_ARR = [];
+const EMPTY_OBJ = {};
 // The /graded route keys every company's sold buckets this way: "cgc9_5", "bgs10", "psa9".
 const bucketKey = (grader, g) => String(grader).toLowerCase() + g.replace(".", "_");
 /* Read one company's ladder out of a /graded body, as { grade: price } for the
@@ -717,6 +722,18 @@ function addHitToState(s, ripId, hit) {
   const rip = s.rips.find((r) => r.id === ripId);
   const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", tcgplayerId: h.tcgplayerId || "", lang: cardLang(h), grade: h.grade || "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
   return { rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r)), inventory: [inv, ...(s.inventory || [])] };
+}
+/* Editing a hit corrects the card it names, so the inventory row it produced
+   has to follow. A Sold row does not: it is the record of what actually
+   changed hands, and rewriting it to match a later correction would restate
+   history. Same reasoning, and the same guard, as delHit. */
+function updHitInState(s, ripId, hit) {
+  return {
+    rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: (r.hits || []).map((h) => (h.id === hit.id ? { ...h, ...hit } : h)) } : r)),
+    inventory: (s.inventory || []).map((c) => (c.hitId === hit.id && c.status !== "Sold"
+      ? { ...c, name: hit.name, set: hit.set || "", number: hit.number || "", variant: hit.variant || "", tcgplayerId: hit.tcgplayerId || "", lang: cardLang(hit), grade: hit.grade || "Raw", value: Number(hit.value) || 0 }
+      : c)),
+  };
 }
 
 /* the three ways an identified card enters the ledger. Each takes a card in
@@ -1400,12 +1417,18 @@ function Rips({ state, patch }) {
     };
   }), [patch]);
   const addHit = useCallback((ripId, hit) => patch((s) => addHitToState(s, ripId, hit)), [patch]);
+  const updHit = useCallback((ripId, hit) => patch((s) => updHitInState(s, ripId, hit)), [patch]);
   const delHit = useCallback((ripId, hitId) => patch((s) => ({
     rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: r.hits.filter((h) => h.id !== hitId) } : r)),
     inventory: (s.inventory || []).filter((c) => !(c.hitId === hitId && c.status !== "Sold")),
   })), [patch]);
   const onToggle = useCallback((id) => setOpen((o) => (o === id ? null : id)), []);
   const sorted = useMemo(() => [...state.rips].sort(byDateDesc), [state.rips]);
+  // Only the expanded rip renders its hit list, so only its hits need art —
+  // resolving images for every rip's hits would feed every RipCard a
+  // changing `images` reference and defeat its memoization.
+  const openRip = sorted.find((r) => r.id === open);
+  const hitImages = useCardImages(openRip?.hits || EMPTY_ARR);
 
   return (
     <div className="cl-stack">
@@ -1414,7 +1437,7 @@ function Rips({ state, patch }) {
       {state.rips.length === 0 && !adding && <Empty>Nothing ripped yet. Log a rip — say 5 packs of Chaos Rising — then drop in each hit and watch the P&amp;L land.</Empty>}
       <div className="cl-stack">
         {sorted.map((r) => (
-          <RipCard key={r.id} rip={r} pl={ripPL(r, state.buys)} cost={ripCostOf(r, state.buys)} isOpen={open === r.id} onToggle={onToggle} onDelete={delRip} onAddHit={addHit} onDeleteHit={delHit} />
+          <RipCard key={r.id} rip={r} pl={ripPL(r, state.buys)} cost={ripCostOf(r, state.buys)} isOpen={open === r.id} images={open === r.id ? hitImages : EMPTY_OBJ} onToggle={onToggle} onDelete={delRip} onAddHit={addHit} onEditHit={updHit} onDeleteHit={delHit} />
         ))}
       </div>
     </div>
@@ -1546,6 +1569,7 @@ function CardSearch({
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(false);
   const skip = useRef(false);            // a pick must not reopen the popover
+  const mounted = useRef(false);         // nor does opening an edit form with a name already in it
   const fillSeq = useRef(0);
 
   useEffect(() => { catalogSets().then(setSets, () => setSets([])); }, []);
@@ -1635,14 +1659,28 @@ function CardSearch({
     };
     for (const c of extra) push(c, null, "x");
     for (const rec of local) push(catalogEntryCard(rec), rec.printing, "c");
-    for (const c of remote) if (!seen.has(cardDedupeKey(c))) out.push({ key: `d${c.id}`, card: c });
+    /* A catalog row already exists per printing, but the card database returns
+       one row per card with every printing's price inside it — so a reverse
+       holo the catalog hasn't got would otherwise be invisible. Split it into
+       the printings it actually carries a price for; a card with no price data
+       stays one undifferentiated row. */
+    for (const c of remote) {
+      if (seen.has(cardDedupeKey(c))) continue;
+      const prices = c.tcgplayer?.prices;
+      const variants = prices ? VARIANTS.filter((v) => prices[PTCG_VARIANT_KEY[v]]) : [];
+      if (variants.length) variants.forEach((v) => out.push({ key: `d${c.id}-${v}`, card: { ...c, variant: v }, printing: v }));
+      else out.push({ key: `d${c.id}`, card: c });
+    }
     return out.slice(0, panel ? 60 : 14);
   }, [extra, local, remote, panel]);
 
   /* Typing reopens the list. A pick sets `skip` first, because on a
      controlled box the pick itself rewrites the text and would otherwise
-     reopen the popover the user just chose from. */
+     reopen the popover the user just chose from. Mounting is not typing:
+     an edit form opens with the card's name already in the box, and popping
+     the list open over its own buttons is not what asking to edit meant. */
   useEffect(() => {
+    if (!mounted.current) { mounted.current = true; return; }
     if (skip.current) { skip.current = false; return; }
     if (searchable) setOpen(true);
   }, [typed]);
@@ -1732,31 +1770,56 @@ function CardSearch({
    so its cards are nearly always all the same on both counts — retyping
    "Japanese, CGC 9" eight times is the kind of thing that gets skipped, and a
    slab logged as an English raw is then priced as one. */
-export function HitForm({ onAdd }) {
+/* With `initial` this edits that hit in place and reports through `onSave`;
+   without it, it is the add form that lives under every rip's hit list. The
+   printing select matters most in the edit case — a hit logged off the wrong
+   search row is fixed there without retyping the card. */
+export function HitForm({ initial, onAdd, onSave, onCancel }) {
   const blank = (keep) => ({ name: "", set: "", number: "", value: "", variant: "", tcgplayerId: "", lang: keep?.lang || "en", grade: keep?.grade || "Raw" });
-  const [f, setF] = useState(blank);
-  const add = () => { if (!f.name) return; onAdd({ ...f, value: Number(f.value) || 0 }); setF(blank(f)); };
+  const [f, setF] = useState(() => (initial
+    ? { name: initial.name || "", set: initial.set || "", number: initial.number || "", value: initial.value != null ? String(initial.value) : "", variant: initial.variant || "", tcgplayerId: initial.tcgplayerId || "", lang: initial.lang || "en", grade: initial.grade || "Raw" }
+    : blank()));
+  // A card's art the moment it's picked — ephemeral, not stored on the hit
+  // itself, since this app treats images as a live lookup everywhere else.
+  const [preview, setPreview] = useState(null);
+  const submit = () => {
+    if (!f.name) return;
+    const out = { ...f, value: Number(f.value) || 0 };
+    if (initial) { onSave({ ...out, id: initial.id }); return; }
+    onAdd(out); setF(blank(f)); setPreview(null);
+  };
   // the search prices English raw singles, so its price is one. Name, set and
   // number are still worth taking for a slab or a JP card; the price is not,
   // and silently filling it is the mistake the grade field prevents.
   const priceable = f.grade === "Raw" && f.lang === "en";
   /* A catalog row carries its SKU and printing. Keep both — they are what
      let the TCGplayer upload list this hit without matching it by name. */
-  const pick = (c) => setF({
-    ...f, name: c.name, set: c.set?.name || "", number: c.number || "",
-    variant: c.variant || "", tcgplayerId: c.tcgplayerId || "",
-    value: priceable && cardPrice(c, c.variant) != null ? String(cardPrice(c, c.variant)) : "",
-  });
+  const pick = (c) => {
+    setF({
+      ...f, name: c.name, set: c.set?.name || "", number: c.number || "",
+      variant: c.variant || "", tcgplayerId: c.tcgplayerId || "",
+      value: priceable && cardPrice(c, c.variant) != null ? String(cardPrice(c, c.variant)) : "",
+    });
+    setPreview(c.images?.small || null);
+  };
   return (
     <div className="cl-hitform">
-      <CardSearch value={f.name} onChange={(v) => setF({ ...f, name: v })} onPick={pick} placeholder="Add a hit — try “Dedenne Perfect Order” or “Dedenne 143”" />
-      <div className="cl-grid3"><input className="cl-in" placeholder="Set" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /><input className="cl-in" placeholder="No." value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} placeholder="Value" /></div>
-      <div className="cl-grid2">
-        <select className="cl-in" value={f.lang} onChange={(e) => setF({ ...f, lang: e.target.value })}>{LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-        <select className="cl-in" value={f.grade} onChange={(e) => setF({ ...f, grade: e.target.value })}>{GRADES.map((g) => <option key={g} value={g}>{g === "Raw" ? "Raw (ungraded)" : g}</option>)}</select>
+      <CardSearch value={f.name} onChange={(v) => { setF({ ...f, name: v }); setPreview(null); }} onPick={pick} placeholder="Add a hit — try “Dedenne Perfect Order” or “Dedenne 143”" />
+      {preview && <div className="cl-hitform-preview"><img className="cl-hitform-preview-img" src={preview} alt={f.name} loading="lazy" /><span className="cl-row-meta">{f.name}</span></div>}
+      <div className="cl-grid3">
+        <Field label="Set"><input className="cl-in" placeholder="Set" value={f.set} onChange={(e) => setF({ ...f, set: e.target.value })} /></Field>
+        <Field label="No."><input className="cl-in" placeholder="No." value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /></Field>
+        <Field label="Value"><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} placeholder="Value" /></Field>
       </div>
+      <div className="cl-grid2">
+        <Field label="Language"><select className="cl-in" value={f.lang} onChange={(e) => setF({ ...f, lang: e.target.value })}>{LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
+        <Field label="Grade"><select className="cl-in" value={f.grade} onChange={(e) => setF({ ...f, grade: e.target.value })}>{GRADES.map((g) => <option key={g} value={g}>{g === "Raw" ? "Raw (ungraded)" : g}</option>)}</select></Field>
+      </div>
+      <Field label="Printing"><select className="cl-in" value={f.variant} onChange={(e) => setF({ ...f, variant: e.target.value })}><option value="">— not set —</option>{VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}</select></Field>
       {!priceable && <div className="cl-gradeest-note">Value these by hand — the card search prices English raw singles. Each one lands in Inventory {f.grade === "Raw" ? "as a Japanese card" : `as a ${f.grade} slab`}, where “Pull slab price” and “Refresh market prices” comp it properly.</div>}
-      <button className="cl-add-hit" onClick={add}><Plus size={14} /> Add hit</button>
+      {initial
+        ? <div className="cl-form-actions"><button className="cl-cancel" onClick={onCancel}>Cancel</button><button className="cl-hit-add" onClick={submit}>Save changes</button></div>
+        : <button className="cl-hit-add" onClick={submit}><Plus size={14} /> Add hit</button>}
     </div>
   );
 }
@@ -3608,7 +3671,7 @@ function Fonts() {
     /* hover/active-state easing, shared across every interactive class below
        instead of a transition on each — state swaps (active tab, selected
        pill, ripped toggle, disabled) ease instead of snapping */
-    .cl-tab, .cl-pill, .cl-x, .cl-save, .cl-cancel, .cl-link, .cl-row.click,
+    .cl-tab, .cl-pill, .cl-x, .cl-save, .cl-cancel, .cl-link, .cl-row.click, .cl-hit.click,
     .cl-monthnav-btn, .cl-month-row, .cl-chip-x, .cl-reset-btn, .cl-addline,
     .cl-ac-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
     .cl-del, .cl-search-btn, .cl-addbtn, .cl-reset-go {
@@ -3617,7 +3680,7 @@ function Fonts() {
     /* tap feedback — a light press-scale on every button-like tappable
        element, since the app has haptics on native but nothing visual on web */
     .cl-tab:active, .cl-pill:active, .cl-x:active, .cl-save:active:not(:disabled),
-    .cl-cancel:active, .cl-link:active:not(:disabled), .cl-row.click:active,
+    .cl-cancel:active, .cl-link:active:not(:disabled), .cl-row.click:active, .cl-hit.click:active,
     .cl-monthnav-btn:active:not(:disabled), .cl-chip-x:active, .cl-reset-btn:active,
     .cl-addline:active, .cl-ac-item:active, .cl-import-btn:active:not(:disabled),
     .cl-mini:active:not(:disabled), .cl-card-head:active, .cl-binder-card:active,
@@ -3625,12 +3688,12 @@ function Fonts() {
       transform: scale(.96);
     }
     @media (prefers-reduced-motion: reduce) {
-      .cl-tab, .cl-pill, .cl-x, .cl-save, .cl-cancel, .cl-link, .cl-row.click,
+      .cl-tab, .cl-pill, .cl-x, .cl-save, .cl-cancel, .cl-link, .cl-row.click, .cl-hit.click,
       .cl-monthnav-btn, .cl-month-row, .cl-chip-x, .cl-reset-btn, .cl-addline,
       .cl-ac-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
       .cl-del, .cl-search-btn, .cl-addbtn, .cl-reset-go { transition: none; }
       .cl-tab:active, .cl-pill:active, .cl-x:active, .cl-save:active:not(:disabled),
-      .cl-cancel:active, .cl-link:active:not(:disabled), .cl-row.click:active,
+      .cl-cancel:active, .cl-link:active:not(:disabled), .cl-row.click:active, .cl-hit.click:active,
       .cl-monthnav-btn:active:not(:disabled), .cl-chip-x:active, .cl-reset-btn:active,
       .cl-addline:active, .cl-ac-item:active, .cl-import-btn:active:not(:disabled),
       .cl-mini:active:not(:disabled), .cl-card-head:active, .cl-binder-card:active,
@@ -3740,12 +3803,21 @@ function Fonts() {
     .cl-card-body{padding:0 13px 13px;border-top:1px solid var(--line);}
     .cl-hits{display:flex;flex-direction:column;gap:6px;margin:12px 0;}
     .cl-hit{display:flex;align-items:center;gap:9px;background:var(--surf2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;}
+    .cl-hit.click{cursor:pointer;}
+    .cl-hit.click:hover{border-color:#3d465c;}
+    .cl-hit-imgwrap{position:relative;width:34px;height:47px;flex:none;border-radius:5px;overflow:hidden;background:var(--surf2);border:1px solid var(--line);}
+    .cl-hit-img{width:100%;height:100%;object-fit:contain;background:#0c0f15;}
+    .cl-hit-ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:2px;text-align:center;font-size:7.5px;line-height:1.15;color:var(--mut);}
+    .cl-hit-ph.named{color:var(--ink);}
     .cl-hit-main{flex:1;min-width:0;}
     .cl-hit-name{font-size:13px;font-weight:500;}
     .cl-card-foot{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--mut);margin-top:10px;}
     .cl-del{background:none;border:none;color:var(--neg);font-size:12px;cursor:pointer;display:flex;align-items:center;gap:5px;font-family:'Inter';}
-    .cl-hitform{background:var(--surf2);border:1px dashed var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:7px;}
+    .cl-hitform{background:var(--surf2);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:9px;}
+    .cl-hitform-preview{display:flex;align-items:center;gap:8px;}
+    .cl-hitform-preview-img{width:34px;height:47px;object-fit:contain;flex:none;border-radius:5px;background:#0c0f15;border:1px solid var(--line);}
     .cl-add-hit{display:flex;align-items:center;justify-content:center;gap:6px;background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px;font-size:12.5px;cursor:pointer;font-family:'Inter';}
+    .cl-hit-add{background:linear-gradient(110deg,#7c6df0,#a78bfa);border:none;color:#fff;border-radius:8px;padding:9px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:'Space Grotesk';display:flex;align-items:center;justify-content:center;gap:6px;}
     .cl-vhead{display:flex;justify-content:space-between;align-items:flex-end;}
     .cl-h2{font-family:'Space Grotesk';font-weight:700;font-size:21px;margin:0;letter-spacing:-.02em;}
     .cl-vsub{font-size:12.5px;color:var(--mut);margin-top:2px;}

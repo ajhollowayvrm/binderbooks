@@ -44,12 +44,26 @@ to the client is public.
 
 ## Deploying
 
-`deploy.ps1` is a PowerShell script and runs from Windows:
+From macOS or Linux:
+
+```bash
+cd aws
+./deploy.sh                              # code only
+./deploy.sh --ppt-key "ppt_..."          # also set the PPT key /graded needs
+./deploy.sh --anthropic-key "sk-ant-..." # also set the key /identify needs
+```
+
+`deploy.ps1` is the Windows twin of the same thing:
 
 ```powershell
 cd aws
 .\deploy.ps1 -AnthropicKey "sk-ant-..."
 ```
+
+**Deploy after every change to `index.mjs`.** Nothing does it automatically, and
+a Lambda running last week's code fails in ways that look like an API problem
+rather than an undeployed fix — which is how the "stop comping the wrong card"
+change sat unshipped while `/graded` kept returning the wrong card's prices.
 
 ## CORS
 

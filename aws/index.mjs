@@ -37,6 +37,12 @@ let groupsCache = null;
 // some CDNs reject UA-less requests from cloud IPs; send a normal browser UA
 const TCGCSV_HEADERS = { "user-agent": "Mozilla/5.0 (BinderBooks price sync; personal use)" };
 const normNum = (s) => String(s).split("/")[0].trim().replace(/^0+(?=\w)/, "").toUpperCase();
+/* Set names are compared with their accents stripped. The ledger stores a set
+   the way the card database spells it ("Pokémon GO") and tcgcsv spells the same
+   set without the accent ("Pokemon GO"), so an exact compare misses a set both
+   sides plainly have. Folding is only for matching — the names themselves are
+   still returned and displayed as their source spells them. */
+const foldSet = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 // pokemontcg.io promo-set names ("SWSH Black Star Promos") share no usable
 // suffix with TCGplayer's group names, so those eras get explicit aliases
 const GROUP_ALIASES = [
@@ -69,10 +75,19 @@ async function setData(setName) {
     const g = await gr.json();
     groupsCache = { t: Date.now(), list: g.results || [] };
   }
+  /* Exact name wins before any partial match, and the reason is a real card:
+     four later sets are named "<something> Base Set", and every one of them
+     ends with "base set" — so "Base Set" used to resolve to SV01: Scarlet &
+     Violet (2023) while the 1999 set it meant sat fifth in the same list.
+     That is not a search miss, it is the wrong set's prices written onto a
+     Base Set card. Same trap waits for any short set name that is also the
+     tail of a newer one, so exactness is the rule, not a special case. */
+  const fkey = foldSet(key);
   const alias = GROUP_ALIASES.find(([re]) => re.test(key))?.[1];
-  const group = (alias && groupsCache.list.find((x) => x.name.toLowerCase() === alias))
-    || groupsCache.list.find((x) => x.name.toLowerCase().endsWith(key))
-    || groupsCache.list.find((x) => x.name.toLowerCase().includes(key));
+  const group = (alias && groupsCache.list.find((x) => foldSet(x.name) === alias))
+    || groupsCache.list.find((x) => foldSet(x.name) === fkey)
+    || groupsCache.list.find((x) => foldSet(x.name).endsWith(fkey))
+    || groupsCache.list.find((x) => foldSet(x.name).includes(fkey));
   if (!group) return null;
   const [prods, prices] = await Promise.all([
     fetch(`https://tcgcsv.com/tcgplayer/3/${group.groupId}/products`, { headers: TCGCSV_HEADERS }).then((r) => { if (!r.ok) throw new Error(`products HTTP ${r.status}`); return r.json(); }),
@@ -183,7 +198,19 @@ async function gradedPrices(name, number, set, lang = "en") {
       if (d) {
         const want = normNum(number);
         const clean = d.products.filter((p) => p.id && !/\[|\(prerelease\)/i.test(p.name));
-        const prod = clean.find((p) => normNum(p.num) === want) || clean.find((p) => normNum(p.extNum) === want);
+        const sameNum = clean.filter((p) => normNum(p.num) === want);
+        const pool = sameNum.length ? sameNum : clean.filter((p) => normNum(p.extNum) === want);
+        /* A number is not always one card. "Koraidon - 014" and "Koraidon - 014
+           (Pokemon Center Exclusive)" are both 014 in the same set and differ by
+           ten times in price, so taking the first match on number alone priced a
+           $52 card at $5. The ledger already carries the distinguishing words in
+           the card's own name — prefer the product whose qualifiers match it,
+           and only fall back to the plain first hit when nothing separates them.
+           Compared with accents folded: the ledger writes "Pokémon Center", the
+           TCGplayer catalogue writes "Pokemon Center". */
+        const qual = (s) => (foldSet(s).match(/\(([^)]*)\)/g) || []).join(" ");
+        const wantQual = qual(name);
+        const prod = (pool.length > 1 && pool.find((p) => qual(p.name) === wantQual)) || pool[0];
         if (prod) tcgpId = prod.id;
       }
     } catch {} // dump unavailable — the name search below still works
