@@ -268,6 +268,24 @@ Two standalone helpers that don't need the app running:
   is dropped by "Refresh market prices" and the grading scan, reported in their
   summary line, and named on the card's detail view where you can fix the set or
   number and pull again. No comps says so; wrong comps doesn't.
+- **A stamped print is a different card, including when it has no solds:** a
+  Prize Pack Radiant Gardevoir and the plain one are both `069/196` in Prize
+  Pack Series Cards, and the parenthetical in TCGplayer's product name is all
+  that separates them. Every match now reads that parenthetical on its own,
+  never folded into the name where "Radiant Gardevoir" passes as a prefix of
+  "Radiant Gardevoir (Prize Pack)": the set dump resolves a stamped card only to
+  a stamped product, `/graded` accepts solds only from the print that was asked
+  about, and a whole-set price map lets the plain print keep its number — a
+  qualified print only fills a slot no plain card claims. Barely anyone sells
+  the stamped print, so the honest answer for one is usually *no recent solds*,
+  and the app says that instead of quietly showing you the plain card's money.
+  Picking a card out of the search pins it to that exact product wherever the
+  card database can name it unambiguously, and a pinned card is looked up by id
+  from then on.
+- **Picking a card in an edit form fills its price:** the market-value box
+  follows the card you pick, because picking one is a statement about which card
+  this is — the Prize Pack print's price should not stay at the plain print's.
+  A value you typed yourself is left alone.
 - A "Reset all data" button lives at the bottom of the Overview tab.
 - The app seeds with example data on first run; edit or delete those rows freely.
 - Card search matches substrings of the **card name** and supports multi-word

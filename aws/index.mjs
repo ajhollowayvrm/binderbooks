@@ -61,6 +61,21 @@ const nameNum = (name) => {
   const m = String(name).match(/.* - ([\w/.]+)/);
   return m && /^[A-Za-z]{0,5}\d/.test(m[1]) ? m[1] : null;
 };
+/* TCGplayer sells a stamped or patterned print as its own product, under the
+   same name and the same collector number as the plain one: "Radiant
+   Gardevoir - 069/196" and "Radiant Gardevoir - 069/196 (Prize Pack)" are both
+   069/196 in Prize Pack Series Cards, and one is worth a hundred times the
+   other. The parenthetical is the only thing separating them, so it is
+   compared on its own wherever two cards are matched — never folded into the
+   name, where a prefix test would read the plain card as the stamped one. */
+const qualOf = (name) => (foldSet(name).match(/\(([^)]*)\)/g) || []).join(" ").replace(/[^a-z0-9]+/g, "");
+// the name with TCGplayer's furniture off it: the " - 069/196" tail and every
+// parenthetical, so only the card's own name is left to compare
+const bareName = (name) => String(name ?? "").replace(/ - [\w/.]+/g, "").replace(/\s*\([^)]*\)/g, "");
+// two qualifiers describe the same print when they agree, or when one spells
+// out what the other abbreviates ("prize pack" / "prize pack series"). Absent
+// on both sides is a match; absent on one side is not.
+const qualNear = (a, b) => (!a && !b) || (!!a && !!b && (a === b || a.includes(b) || b.includes(a)));
 // one price out of a card's per-printing map, for callers that want a single
 // number. The client picks a printing deliberately when it knows the card's
 // variant; this is the "don't care" answer, and the order is load-bearing —
@@ -220,8 +235,14 @@ async function setPrices(setName, lang) {
     if (k2 !== k1 && subs[k2] == null) subs[k2] = p.subs;
   };
   const priced = d.products.filter((p) => p.market != null);
-  priced.filter((p) => /\[|\(prerelease\)/i.test(p.name)).forEach((p) => assign(p, false));
-  priced.filter((p) => !/\[|\(prerelease\)/i.test(p.name)).forEach((p) => assign(p, true));
+  // every qualified print, not just [Staff] and (Prerelease): a Prize Pack
+  // stamp or a Pokemon Center exclusive shares the plain card's number too, and
+  // letting one overwrite that slot priced the plain card as the variant. The
+  // plain print owns its number; a qualified one only fills a slot nothing
+  // plain claims.
+  const qualified = (p) => /\[|\(/.test(p.name);
+  priced.filter(qualified).forEach((p) => assign(p, false));
+  priced.filter((p) => !qualified(p)).forEach((p) => assign(p, true));
   // `prices` stays a flat { number: market } map. Clients running a cached
   // bundle read it straight into a card's value, and would write NaN — and
   // then sync it — if these became objects. Derived from `subs` rather than
@@ -327,13 +348,17 @@ async function resolveProductId(name, number, set, lang) {
        (Pokemon Center Exclusive)" are both 014 in the same set and differ by
        ten times in price, so taking the first match on number alone priced a
        $52 card at $5. The ledger already carries the distinguishing words in
-       the card's own name — prefer the product whose qualifiers match it,
-       and only fall back to the plain first hit when nothing separates them.
-       Compared with accents folded: the ledger writes "Pokémon Center", the
-       TCGplayer catalogue writes "Pokemon Center". */
-    const qual = (s) => (foldSet(s).match(/\(([^)]*)\)/g) || []).join(" ");
-    const wantQual = qual(name);
-    const prod = (pool.length > 1 && pool.find((p) => qual(p.name) === wantQual)) || pool[0];
+       the card's own name, so the qualifier decides — and it decides both
+       ways. A card whose name carries one resolves to a product carrying the
+       same one or to nothing at all: falling back to the plain print here
+       returned its id as if it were exact, and every comp downstream then
+       trusted it. A card with no qualifier prefers the plain print and only
+       falls back when the set has none. Compared with accents folded: the
+       ledger writes "Pokémon Center", the catalogue writes "Pokemon Center". */
+    const wantQual = qualOf(name);
+    const same = pool.filter((p) => qualNear(qualOf(p.name), wantQual));
+    if (same.length > 1) console.log(`resolveProductId: ${same.length} products match "${name}" ${number} ${set} — taking ${same[0].name} (${same[0].id})`);
+    const prod = same[0] || (wantQual ? null : pool[0]);
     return prod ? String(prod.id) : null;
   } catch { return null; } // dump unavailable — callers fall back to a name search
 }
@@ -379,11 +404,16 @@ async function gradedPrices(name, number, set, lang = "en", productId = "") {
     if (!cards.length) console.log(`graded: id lookup ${tcgpId} unusable, falling back to name search:`, JSON.stringify(got).slice(0, 300));
   }
   if (!cards.length) {
-    // name search: each returned card costs 2 credits with eBay data — limit 3
-    // keeps a lookup at 6 credits
-    cards = await ppt({ search: name, ...(set ? { set: foldSet(set) } : {}), limit: "3" });
+    /* name search: each returned card costs 2 credits with eBay data — limit 3
+       keeps a lookup at 6 credits. The parenthetical comes off the query: a
+       ledger card entered from the TCGplayer catalog is named "Radiant
+       Gardevoir (Prize Pack)", and searching that phrase matches nothing while
+       the bare name matches every print of the card. The qualifier is not
+       thrown away — it decides which of them is this card, below. */
+    const searchName = bareName(name).trim() || name;
+    cards = await ppt({ search: searchName, ...(set ? { set: foldSet(set) } : {}), limit: "3" });
     // a set name PPT doesn't recognize shouldn't sink the lookup
-    if (!cards.length && set) cards = await ppt({ search: name, limit: "3" });
+    if (!cards.length && set) cards = await ppt({ search: searchName, limit: "3" });
   }
   /* Which of the search results is actually the card we were asked about.
      PPT's `search` is fuzzy by design: ask for "Umbreon ex 161" and it also
@@ -403,15 +433,26 @@ async function gradedPrices(name, number, set, lang = "en", productId = "") {
   if (byId) {
     match = cards[0]; // resolved through the TCGplayer product id — already exact
   } else {
-    // narrow by name, then by set, keeping the wider pool when a filter empties it
-    const named = cards.filter((c) => near(alnum(c.name), alnum(name)));
+    /* narrow by name, then by set, keeping the wider pool when a filter empties
+       it. Names compare bare — PPT writes "Radiant Gardevoir - 069/196 (Prize
+       Pack)" where the ledger writes "Radiant Gardevoir (Prize Pack)", and a
+       prefix test on the raw strings agreed with neither. */
+    const named = cards.filter((c) => near(alnum(bareName(c.name)), alnum(bareName(name))));
     let pool = named.length ? named : cards;
     if (set) { const inSet = pool.filter((c) => near(alnum(setOf(c)), alnum(set))); if (inSet.length) pool = inSet; }
     // the number is the card's identity: given one, only that card will do.
     // Without one, only an unambiguous single candidate is safe to accept.
     const want = number ? numTail(number) : null;
-    match = want ? pool.find((c) => numTail(c.number ?? c.cardNumber) === want) || null
-      : pool.length === 1 ? pool[0] : null;
+    const pick = (list) => (want ? list.find((c) => numTail(c.number ?? c.cardNumber) === want) || null
+      : list.length === 1 ? list[0] : null);
+    /* And the number is not the whole identity. A stamped print shares it with
+       the plain card, so a Prize Pack Radiant Gardevoir used to match the plain
+       069/196 and take its eBay solds — the stamped print has barely any, and
+       the plain one's numbers landed on the card's value looking like its own.
+       A card named with a qualifier matches only a card carrying that
+       qualifier; no such candidate is no comps, which the app says out loud. */
+    const wantQual = qualOf(name);
+    match = pick(pool.filter((c) => qualNear(qualOf(c.name), wantQual))) || (wantQual ? null : pick(pool));
     if (!match) console.log(`graded: no confident match for "${name}" ${number || "(no number)"} ${set || ""} — ${cards.length} candidate(s):`, cards.map((c) => `${c.name} ${c.number ?? c.cardNumber ?? "?"}`).join(" | "));
   }
   if (!match) return null;
