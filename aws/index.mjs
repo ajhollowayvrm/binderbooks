@@ -45,6 +45,9 @@ const foldSet = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").
 const GROUP_ALIASES = [
   [/scarlet.*violet.*(black star|promo)/, "sv: scarlet & violet promo cards"],
   [/^svp\b/, "sv: scarlet & violet promo cards"],
+  // the ledger's transliteration of the Japanese set; the target only exists
+  // in the Japanese list, so English lookups fall through harmlessly
+  [/teresa festival|terastal fest/, "sv8a: terastal fest ex"],
   [/^me(ga evolution)?\b.*(black star|promo)/, "me: mega evolution promo"],
   [/^swsh\b.*(black star|promo)/, "swsh: sword & shield promo cards"],
   [/^sm\b.*(black star|promo)/, "sm promos"],
@@ -253,8 +256,14 @@ const slimCard = (c) => {
   if (!Object.keys(prices).length && c.prices?.market != null) prices.holofoil = { market: c.prices.market };
   return {
     id: `ppt-${c.tcgPlayerId}`, productId: String(c.tcgPlayerId || ""),
-    name: c.name || "", number: c.cardNumber || "", rarity: c.rarity || "",
-    set: { name: c.setName || "" }, images: { small: c.imageCdnUrl200 || null },
+    // the " - 041/086" tail and the "ME04: " prefix are TCGplayer-catalogue
+    // furniture; a picked card writes these into the ledger, so they have to
+    // arrive in the ledger's own plain vocabulary or every set splits into
+    // "Chaos Rising" and "ME04: Chaos Rising" buckets
+    name: String(c.name || "").replace(/ - [\w/.]+(?= \(|$)/, "").trim(),
+    number: c.cardNumber || "", rarity: c.rarity || "",
+    set: { name: String(c.setName || "").replace(/^\w{1,7}:\s+/, "") },
+    images: { small: c.imageCdnUrl200 || null },
     ...(Object.keys(prices).length ? { tcgplayer: { prices } } : {}),
   };
 };

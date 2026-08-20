@@ -677,6 +677,18 @@ function migrate(s) {
     s.rips = (s.rips || []).map((r) => (r.buyId && oldSig[r.buyId] && newBySig[oldSig[r.buyId]] ? { ...r, buyId: newBySig[oldSig[r.buyId]] } : r));
     s.version = 6;
   }
+  /* v7: cards from Japanese-only products were logged as English (the
+     language field arrived later), so every lookup asked the English
+     catalogue and either missed or — worse — matched a different English
+     card with the same collector number. These sets have no English print
+     run, so the correction is safe to apply wholesale. */
+  if (s.version < 7) {
+    const JP_ONLY = new Set(["mega dream", "nihil zero", "teresa festival"]);
+    const jpFix = (c) => (JP_ONLY.has(String(c.set || "").toLowerCase().trim()) && c.lang !== "jp" ? { ...c, lang: "jp" } : c);
+    s.inventory = (s.inventory || []).map(jpFix);
+    s.rips = (s.rips || []).map((r) => ({ ...r, hits: (r.hits || []).map(jpFix) }));
+    s.version = 7;
+  }
   // safety net: collapse any exact-duplicate buys on every load
   const seenBuy = new Set();
   s.buys = (s.buys || []).filter((b) => { const k = `${b.item}|${buySig(b)}`; if (seenBuy.has(k)) return false; seenBuy.add(k); return true; });
@@ -875,15 +887,23 @@ const cardPrice = (c, variant) => {
 // number, or name + set); a bare name is too ambiguous to auto-pick, so we
 // skip it rather than risk grabbing the wrong card. The server's search is
 // fuzzy, so the number filter below is the guarantee, not a nicety.
+/* The server's search is fuzzy, so the guards below are the guarantee, not
+   a nicety. Both the NAME and the number must agree: number alone once
+   matched an English Magnemite 63/165 to a Japanese Espeon ex 063/187 —
+   same "63", entirely different card — and the wrong card's image, rarity
+   and prices all rendered as if they were this card's. No name agreement
+   means no match, never "closest". */
+const alnum = (x) => String(x ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+const nameNear = (a, b) => { const x = alnum(a), y = alnum(b); return x && y && (x === y || x.startsWith(y) || y.startsWith(x)); };
 async function lookupCardCandidates(card) {
   if (!card.name) return [];
   const lang = card.lang === "jp" ? "jp" : "en";
   try {
     if (card.number) {
       const list = await searchCards({ q: card.name, set: card.set || "", number: normNum(card.number), lang });
-      return list.filter((c) => normNum(c.number) === normNum(card.number));
+      return list.filter((c) => nameNear(c.name, card.name) && normNum(c.number) === normNum(card.number));
     }
-    if (card.set) return await searchCards({ q: card.name, set: card.set, lang });
+    if (card.set) return (await searchCards({ q: card.name, set: card.set, lang })).filter((c) => nameNear(c.name, card.name));
   } catch { return []; }
   return []; // no number and no set — too ambiguous to match safely
 }
@@ -942,6 +962,71 @@ function throttledCardMatch(card) {
     cardImgInFlight < CARD_IMG_PARALLEL ? run() : cardImgQueue.push(run);
   });
 }
+/* A card's recent price direction, for the binder tiles: ~30 days of
+   market points slimmed to a dozen, plus the percent change across them.
+   One /history call per held card, throttled and cached a day — the whole
+   binder costs ~2 credits per card per day, and a card that can't resolve
+   just shows no trend rather than an error. */
+const TREND_KEY = "cardledger:trend:v1";
+const TREND_TTL = 24 * 3600 * 1000;
+const trendCacheRead = () => { try { return JSON.parse(localStorage.getItem(TREND_KEY)) || {}; } catch { return {}; } };
+const trendCacheGet = (k) => { const c = trendCacheRead()[k]; return c && Date.now() - c.t < TREND_TTL ? c.r : undefined; };
+const trendCachePut = (k, r) => {
+  try {
+    const all = trendCacheRead();
+    all[k] = { t: Date.now(), r };
+    Object.keys(all).sort((a, b) => all[b].t - all[a].t).slice(120).forEach((x) => delete all[x]);
+    localStorage.setItem(TREND_KEY, JSON.stringify(all));
+  } catch {}
+};
+const trendMiss = new Map(); // session-only: don't re-ask for a card that just failed
+async function fetchCardTrend(card) {
+  const lang = cardLang(card);
+  const key = `${card.name}|${card.set || ""}|${card.number || ""}|${lang}`.toLowerCase();
+  const hit = trendCacheGet(key);
+  if (hit !== undefined) return hit;
+  if (trendMiss.has(key)) return null;
+  try {
+    const h = await cardFetch("history", { productId: card.productId || "", name: card.productId ? "" : card.name, set: card.productId ? "" : card.set, number: card.productId ? "" : card.number, lang: lang === "jp" ? "jp" : "", days: "30" });
+    const pts = h?.points || [];
+    if (pts.length < 2) { trendMiss.set(key, 1); return null; }
+    const step = Math.max(1, Math.ceil(pts.length / 12));
+    const slim = pts.filter((_, i) => i % step === 0 || i === pts.length - 1).map((p) => p.market);
+    const delta = ((slim[slim.length - 1] - slim[0]) / slim[0]) * 100;
+    const r = { pts: slim.map((v) => Math.round(v * 100) / 100), delta: Math.round(delta * 10) / 10 };
+    trendCachePut(key, r);
+    return r;
+  } catch { trendMiss.set(key, 1); return null; }
+}
+const TREND_PARALLEL = 3;
+let trendInFlight = 0;
+const trendQueue = [];
+function throttledTrend(card) {
+  return new Promise((resolve) => {
+    const run = () => {
+      trendInFlight++;
+      fetchCardTrend(card).then(resolve, () => resolve(null)).finally(() => {
+        trendInFlight--;
+        trendQueue.shift()?.();
+      });
+    };
+    trendInFlight < TREND_PARALLEL ? run() : trendQueue.push(run);
+  });
+}
+function useCardTrends(cards) {
+  const [trends, setTrends] = useState({}); // id -> {pts, delta} | null
+  const cardIds = cards.map((c) => c.id).join("|");
+  useEffect(() => {
+    let live = true;
+    cards.forEach((c) => {
+      if (!c.name) return;
+      throttledTrend(c).then((r) => { if (live && r) setTrends((s) => ({ ...s, [c.id]: r })); });
+    });
+    return () => { live = false; };
+  }, [cardIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  return trends;
+}
+
 // One hook for every screen that wants card pictures. Cards batch by set
 // (fetchSetCatalog above resolves a whole set in one call — Japanese sets
 // included, through PPT's Japanese catalogue); whatever a set batch can't
@@ -3247,6 +3332,25 @@ function CardModal({ card, onClose, onEdit, onValue }) {
     : market != null ? { v: market, lab: `TCGplayer market${card.variant ? ` · ${card.variant}` : ""}` }
     : null;
   const held = card.date ? Math.max(0, Math.round((Date.now() - new Date(card.date + "T12:00:00").getTime()) / 864e5)) : null;
+  /* an honest range from the card's own sold data, never a model:
+     a slab reads its own grade bucket's min–max; a card at the graders
+     spans its grader's tracked buckets (it could come back any of them);
+     a raw card reads the raw solds' spread; and with no solds at all the
+     market price stands alone rather than pretending to be a range. */
+  const est = (() => {
+    if (!data) return null;
+    if (slabbed) {
+      const b = slabB;
+      return b ? { lo: b.min ?? b.price, hi: b.max ?? b.price, why: `${card.grade} eBay solds (${b.count})` } : null;
+    }
+    if (card.status === "At grading") {
+      const co = grader.toLowerCase();
+      const buckets = Object.entries(data.byGrade || {}).filter(([k]) => k.startsWith(co)).map(([, b]) => b.price).filter((v) => Number(v) > 0);
+      if (buckets.length) return { lo: Math.min(...buckets), hi: Math.max(...buckets), why: `${grader} solds across grades` };
+    }
+    if (data.raw) return { lo: data.raw.min ?? data.raw.price, hi: data.raw.max ?? data.raw.price, why: `raw eBay solds (${data.raw.count})` };
+    return market != null ? { lo: market, hi: market, why: "TCGplayer market — no recent solds" } : null;
+  })();
   const shownKeys = new Set(CM_COMPANIES.flatMap(([co]) => CM_GRADES.map((g) => bucketKey(co, g))));
   const extras = Object.entries(data?.byGrade || {})
     .flatMap(([k, b]) => {
@@ -3303,6 +3407,7 @@ function CardModal({ card, onClose, onEdit, onValue }) {
           <div className="cl-cm-stat"><span>Cost basis</span><b>{fmt(basis)}</b></div>
           <div className="cl-cm-stat"><span>Unrealized</span><b className={unreal >= 0 ? "pos" : "neg"}>{fmt(unreal)}</b></div>
         </div>
+        {est && <div className="cl-cm-est"><span>Estimated value</span><b>{Math.abs(est.hi - est.lo) < 0.005 ? fmt(est.lo) : `${fmt(est.lo)} – ${fmt(est.hi)}`}</b><span className="cl-row-meta">{est.why}</span></div>}
 
         {hist && <>
           <div className="cl-cm-sec">Market price — last 90 days</div>
@@ -3391,6 +3496,7 @@ function Binder({ state, patch, go }) {
   const viewCard = viewId ? inv.find((c) => c.id === viewId) : null;
   const setValue = (v) => patch((s) => ({ inventory: s.inventory.map((x) => (x.id === viewCard.id ? { ...x, value: v } : x)) }));
   const images = useCardImages(cards);
+  const trends = useCardTrends(cards);
 
   return (
     <div className="cl-stack">
@@ -3409,7 +3515,7 @@ function Binder({ state, patch, go }) {
             <div key={p.key} className="cl-binder-page">
               <div className="cl-binder-page-head"><span>{p.key}</span><span className="cl-row-meta">{p.cards.length} card{p.cards.length === 1 ? "" : "s"}</span></div>
               <BinderGrid>
-                {p.cards.map((c) => <BinderCard key={c.id} card={c} img={images[c.id]} onOpen={setViewId} />)}
+                {p.cards.map((c) => <BinderCard key={c.id} card={c} img={images[c.id]} trend={trends[c.id]} onOpen={setViewId} />)}
               </BinderGrid>
             </div>
           ))}
@@ -4050,6 +4156,8 @@ function Fonts() {
     .cl-cm-tr.up{color:var(--pos);}.cl-cm-tr.down{color:var(--neg);}
     .cl-cm-extra{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
     .cl-cm-foot{font-size:10.5px;color:var(--mut);margin-top:8px;}
+    .cl-cm-est{display:flex;align-items:baseline;gap:8px;margin-top:8px;background:var(--surf2);border:1px solid var(--line);border-radius:10px;padding:8px 11px;font-size:12px;color:var(--mut);}
+    .cl-cm-est b{font-family:'Space Grotesk';font-size:14px;color:var(--holo2);font-variant-numeric:tabular-nums;}
     .cl-spark{margin-top:2px;}
     .cl-spark-svg{display:block;width:100%;height:56px;touch-action:none;cursor:crosshair;}
     .cl-spark-meta{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--mut);margin-top:2px;font-variant-numeric:tabular-nums;}
@@ -4069,6 +4177,12 @@ function Fonts() {
     .cl-binder-cap{display:flex;flex-direction:column;gap:1px;}
     .cl-binder-name{font-size:11.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     .cl-binder-money{font-family:'Space Grotesk';font-weight:600;font-size:11.5px;color:var(--holo2);font-variant-numeric:tabular-nums;}
+    .cl-binder-worth{display:flex;align-items:center;justify-content:space-between;gap:4px;}
+    .cl-binder-trend{display:flex;align-items:center;gap:3px;min-width:0;}
+    .cl-binder-trend-svg{width:34px;height:12px;flex:none;}
+    .cl-binder-delta{font-size:9px;font-variant-numeric:tabular-nums;color:var(--mut);}
+    .cl-binder-delta.pos{color:var(--pos);}
+    .cl-binder-delta.neg{color:var(--neg);}
     @media (max-width:420px){.cl-grid3{grid-template-columns:1fr;}.cl-hero-num{font-size:40px;}.cl-inv-summary .cl-stat-num{font-size:16px;}.cl-inv-summary .cl-range{font-size:11px;}.cl-gradeest{grid-template-columns:repeat(3,1fr);}.cl-cm-img{width:116px;}.cl-cm-mkt-num{font-size:22px;}.cl-scan-ctl{grid-template-columns:1fr 1fr;}.cl-scan-go{grid-column:1/-1;}.cl-binder-grid{grid-template-columns:repeat(auto-fill,minmax(88px,1fr));}}
   `}</style>);
 }
