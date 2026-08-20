@@ -308,6 +308,17 @@ function fetchSetCatalog(setName, lang = "en") {
 // catalog rows carry TCGplayer product names ("Pikachu - 058/102 (Pokemon
 // Center Exclusive)") — compare with the number tail and qualifiers stripped
 const bareName = (s) => String(s || "").replace(/ - [\w/.]+/g, "").replace(/\s*\([^)]*\)/g, "").toLowerCase().trim();
+/* The qualifier bareName just removed, on its own. TCGplayer sells a stamped
+   or patterned print as its own product under the same name and the same
+   number as the plain card — "Radiant Gardevoir" and "Radiant Gardevoir
+   (Prize Pack)" are both 069/196 in Prize Pack Series Cards — so the
+   parenthetical is the only thing that tells them apart, and every place that
+   decides whether two rows are one card has to read it. Folded into the name
+   it disappears: a prefix test says the plain card is the stamped one. */
+const qualOf = (s) => (String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().match(/\(([^)]*)\)/g) || []).join(" ").replace(/[^a-z0-9]+/g, "");
+// same print when the qualifiers agree, or when one spells out what the other
+// abbreviates. Absent on both sides matches; absent on one side does not.
+const qualNear = (a, b) => { const x = qualOf(a), y = qualOf(b); return (!x && !y) || (!!x && !!y && (x === y || x.includes(y) || y.includes(x))); };
 const imageInSet = (list, card) => (list && (
   (card.number && list.find((c) => normNum(c.num) === normNum(card.number))) ||
   list.find((c) => bareName(c.name) === bareName(card.name))
@@ -438,11 +449,12 @@ async function resolveScan(hit, sets, codes) {
    is being asked about — "jp" reaches PPT's Japanese catalogue, which is a
    different card with different sold prices, never a translation of the same
    listing. */
-const GRADED_KEY = "cardledger:graded:v2"; // v2: entries carry byGrade/raw/image for the card modal
+const GRADED_KEY = "cardledger:graded:v3"; // v3: keyed by productId, so two products sharing a name and a number keep their own comps
 async function fetchGradedComps(name, set, number, lang = "en", productId = "") {
-  // English keeps the old key shape, so an existing 24h cache still hits and the
-  // daily PPT budget isn't re-spent on every card the moment this ships
-  const key = `${name}|${set}|${number}`.toLowerCase() + (lang === "jp" ? "|jp" : "");
+  // the pinned product is part of the key: Prize Pack Series Cards holds two
+  // Radiant Gardevoir 069/196 products, and without the id in here the first
+  // one looked up would answer for the other one all day
+  const key = `${name}|${set}|${number}|${productId}`.toLowerCase() + (lang === "jp" ? "|jp" : "");
   const writeCache = (r) => {
     try {
       const all = JSON.parse(localStorage.getItem(GRADED_KEY)) || {};
@@ -569,11 +581,26 @@ const alnumKey = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, "")
    one's value is silent and sticks, so every automatic use of a body is gated
    on this. The card detail view shows a near miss instead of dropping it,
    because a person looking at the screen can tell what happened. */
-const wrongCardMsg = (r) => `The sold data came back for “${r?.card || "another card"}${r?.number ? ` · ${r.number}` : ""}”, which isn't this card — check the set and number, then try again.`;
+const wrongCardMsg = (r, c) => {
+  const label = `“${r?.card || "another card"}${r?.number ? ` · ${r.number}` : ""}”`;
+  /* A near miss on the printing is its own answer, and it is the common one:
+     a stamped or patterned print shares the plain card's name and number, so
+     "check the set and number" is advice that cannot help — both are already
+     right. What is missing is solds for this print. */
+  if (c && !qualNear(r?.card, c.name) && alnumKey(bareName(r?.card)) === alnumKey(bareName(c.name)))
+    return `The only recent solds are for ${label}, a different print of this card — nobody has sold this one lately, so its value is yours to set.`;
+  return `The sold data came back for ${label}, which isn't this card — check the set and number, then try again.`;
+};
 const compsMatch = (r, c) => {
   if (!r) return false;
   if (c.number && r.number && numTail(r.number) !== numTail(c.number)) return false;
-  const a = alnumKey(r.card), b = alnumKey(c.name);
+  /* The qualifier is checked on its own, before the names go anywhere near a
+     prefix test: "radiantgardevoirprizepack" starts with "radiantgardevoir",
+     so the plain card's solds used to pass as the Prize Pack card's and land
+     on its value. Names then compare bare, because PPT answers with
+     TCGplayer's full product name and the ledger stores the trimmed one. */
+  if (!qualNear(r.card, c.name)) return false;
+  const a = alnumKey(bareName(r.card)), b = alnumKey(bareName(c.name));
   return !!a && !!b && (a === b || a.startsWith(b) || b.startsWith(a));
 };
 /* Japanese cards are their own print run with their own market. PPT carries
@@ -951,8 +978,13 @@ async function lookupCardCandidates(card) {
   } catch { return []; }
   return []; // no number and no set — too ambiguous to match safely
 }
+/* A price has to come from this exact print. The candidate filters above let a
+   near name through — "Radiant Gardevoir" answers a search for "Radiant
+   Gardevoir (Prize Pack)" — which is what the card modal wants (same art, so
+   the picture is right) and never what a price wants. No candidate carrying
+   this card's qualifier means no price, and the card keeps the value it had. */
 async function lookupCardPrice(card, variant) {
-  return (await lookupCardCandidates(card)).find((c) => cardPrice(c, variant) != null) || null;
+  return (await lookupCardCandidates(card)).find((c) => qualNear(c.name, card.name) && cardPrice(c, variant) != null) || null;
 }
 // the modal also wants a match with no price (for the image and set info):
 // prefer priced-with-image, then any image, then whatever matched. Skips the
@@ -1793,8 +1825,29 @@ function CardSearch({
       out.push({ key: `${prefix}${card.id}`, card, printing });
       seen.add(key);
     };
+    /* A catalog row names TCGplayer's SKU, which is a different namespace from
+       the card database's product id — so a card picked from the catalog knew
+       its printing exactly and still had nothing to pin its comps to, and every
+       later lookup went back to matching on name and number. Where the database
+       is already answering the same query, and exactly one of its rows is this
+       card — same bare name, same number, same parenthetical — that row's
+       productId is this card's, and taking it here costs no extra call. One row
+       is the whole condition: two products sharing all three (Prize Pack Series
+       Cards holds two Radiant Gardevoir 069/196) are exactly the case a pin must
+       not guess at. */
+    const pinnedId = (card) => {
+      const hits = remote.filter((d) => d.productId
+        && bareName(d.name) === bareName(card.name)
+        && normNum(d.number) === normNum(card.number)
+        && qualNear(d.name, card.name));
+      return hits.length === 1 ? String(hits[0].productId) : "";
+    };
     for (const c of extra) push(c, null, "x");
-    for (const rec of local) push(catalogEntryCard(rec), rec.printing, "c");
+    for (const rec of local) {
+      const card = catalogEntryCard(rec);
+      const pid = pinnedId(card);
+      push(pid ? { ...card, productId: pid } : card, rec.printing, "c");
+    }
     /* A catalog row already exists per printing, but the card database returns
        one row per card with every printing's price inside it — so a reverse
        holo the catalog hasn't got would otherwise be invisible. Split it into
@@ -1914,7 +1967,7 @@ function CardSearch({
 export function HitForm({ initial, onAdd, onSave, onCancel }) {
   const blank = (keep) => ({ name: "", set: "", number: "", value: "", variant: "", tcgplayerId: "", productId: "", lang: keep?.lang || "en", grade: keep?.grade || "Raw" });
   const [f, setF] = useState(() => (initial
-    ? { name: initial.name || "", set: initial.set || "", number: initial.number || "", value: initial.value != null ? String(initial.value) : "", variant: initial.variant || "", tcgplayerId: initial.tcgplayerId || "", lang: initial.lang || "en", grade: initial.grade || "Raw" }
+    ? { name: initial.name || "", set: initial.set || "", number: initial.number || "", value: initial.value != null ? String(initial.value) : "", variant: initial.variant || "", tcgplayerId: initial.tcgplayerId || "", productId: initial.productId || "", lang: initial.lang || "en", grade: initial.grade || "Raw" }
     : blank()));
   // A card's art the moment it's picked — ephemeral, not stored on the hit
   // itself, since this app treats images as a live lookup everywhere else.
@@ -3304,21 +3357,30 @@ export function InvForm({ initial, onSave, onCancel }) {
   // company's sold prices, and carrying them over is the exact mistake this
   // field exists to stop — a PSA 10 figure sitting under a CGC 10 label.
   const setGrader = (grader) => setF((s) => ({ ...s, grader, gradeEst: estStr(null, grader) }));
-  /* The market price is the English raw price, so it fills only a card
-     that is both. It also never overwrites a value already typed — the
-     figure in the box was put there on purpose. */
+  /* The market price is the English raw price, so it fills only a card that is
+     both. It used to fill only an empty box as well, which is right for a new
+     card and wrong for an edit: the box opens holding the card's stored value,
+     so picking the Prize Pack print of a card logged as the plain one renamed
+     it, renumbered it, pinned it — and left the old print's price sitting
+     underneath. Picking a card is a statement about which card this is, so its
+     price comes with it. A value the user typed here is still theirs: `typed`
+     records that, and a pick leaves it alone. */
+  const [typed, setTyped] = useState(false);
+  const setValue = (v) => { setTyped(true); setF((s) => ({ ...s, value: v })); };
   const pickCard = (c) => setF((s) => {
     const price = tcgPriceable(s) ? cardPrice(c, c.variant) : null;
     return { ...s, name: c.name, set: c.set?.name || "", number: c.number || "",
       variant: c.variant || s.variant, tcgplayerId: c.tcgplayerId || "", productId: c.productId || "",
-      value: s.value || (price != null ? String(price) : "") };
+      // no price on the picked row (a slab, a JP card, a row the export had no
+      // price for) leaves the field as it was rather than blanking it
+      value: typed || price == null ? s.value : String(price) };
   });
   const pullComps = async () => {
     if (comps === "loading") return;
     setComps("loading");
     try {
       const r = await fetchGradedComps(f.name, f.set, f.number, f.lang, f.productId || "");
-      if (!compsMatch(r, f)) { setComps(wrongCardMsg(r)); return; }
+      if (!compsMatch(r, f)) { setComps(wrongCardMsg(r, f)); return; }
       const got = compGrades(r, f.grader);
       // read off the ladder, not Object.keys — JS sorts "10" and "9" ahead of
       // "9.5", which would print the grades out of order
@@ -3344,7 +3406,7 @@ export function InvForm({ initial, onSave, onCancel }) {
     setSlabMsg("loading");
     try {
       const r = await fetchGradedComps(f.name, f.set, f.number, f.lang, f.productId || "");
-      if (!compsMatch(r, f)) { setSlabMsg(wrongCardMsg(r)); return; }
+      if (!compsMatch(r, f)) { setSlabMsg(wrongCardMsg(r, f)); return; }
       const b = slabComp(r, f.grade);
       if (!b) { setSlabMsg(`No recent ${f.grade} sales found for this card — the other grades it did sell in are on the card's detail view. Fill the value in manually.`); return; }
       setF((x) => ({ ...x, value: String(b.price) }));
@@ -3389,7 +3451,7 @@ export function InvForm({ initial, onSave, onCancel }) {
           {comps && <div className="cl-gradeest-note">{comps === "loading" ? `Pulling eBay ${f.grader} sold comps…` : comps}</div>}
         </div>
       </>}
-      <div className="cl-grid2"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={(v) => setF({ ...f, value: v })} /></Field></div>
+      <div className="cl-grid2"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={setValue} /></Field></div>
       {slab && <div className="cl-field">
         <div className="cl-gradeest-head"><span>Value it at what a {f.grade} slab sells for</span><button className="cl-link" disabled={!f.name || slabMsg === "loading"} onClick={pullSlab}>{slabMsg === "loading" ? "Pulling…" : "Pull slab price"}</button></div>
         {slabMsg && <div className="cl-gradeest-note">{slabMsg === "loading" ? `Pulling eBay ${f.grade} sold comps…` : slabMsg}</div>}
@@ -3689,7 +3751,7 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
             </div>
             {extras.length > 0 && <div className="cl-cm-extra">{extras.map((x) => <span key={x.label} className="cl-chip">{x.label} {fmt(x.price)} · {x.count} sold</span>)}</div>}
           </> : <div className="cl-cm-note">No graded sales recorded for this card.</div>}
-          {mismatch && <div className="cl-cm-note warn">Sold data matched “{data.card}{data.number ? ` · ${data.number}` : ""}” — that isn't this card, so these prices are for something else. Correcting this card's set and number will pull the right ones.</div>}
+          {mismatch && <div className="cl-cm-note warn">{wrongCardMsg(data, card)} The prices below are that card's.</div>}
           {data.window?.from && <div className="cl-cm-foot">Sold data {String(data.window.from).slice(0, 10)} → {String(data.window.to).slice(0, 10)} · pokemonpricetracker.com</div>}
         </>}
         {ests.length > 0 && <div className="cl-cm-foot">Your {grader} estimates: {ests.map((g) => `${g} → ${fmt(Number(card.gradeEst[g]))}`).join(" · ")}</div>}
