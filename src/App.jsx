@@ -661,9 +661,14 @@ function seed() {
   };
 }
 
+/* App settings travel inside the ledger, so one choice holds on every device
+   that syncs. Defaults first, so a ledger from before a setting existed reads
+   the default and a stored value wins. */
+const SETTINGS_DEFAULTS = { binderShowSold: true };
 function migrate(s) {
   s = { ...s };
   if (!s.inventory) s.inventory = [];
+  s.settings = { ...SETTINGS_DEFAULTS, ...(s.settings || {}) };
   // defaults first so existing values win — this runs on every local and
   // remote load, which is what back-fills `variant` onto pre-scanner cards
   // a card already at the graders before `grader` existed was estimated against
@@ -1327,7 +1332,7 @@ export default function App() {
         {TABS.map(([k, label, Icon]) => (<button key={k} className={"cl-tab" + (tab === k ? " on" : "")} onClick={() => switchTab(k)}><Icon size={15} /> <span>{label}</span></button>))}
       </nav>
       <main className="cl-main cl-tabpane" key={tab}>
-        {tab === "dash" && <Dashboard state={state} go={switchTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} resolveChoice={resolveChoice} />}
+        {tab === "dash" && <Dashboard state={state} patch={patch} go={switchTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} resolveChoice={resolveChoice} />}
         {tab === "month" && <Monthly state={state} />}
         {tab === "rips" && <Rips state={state} patch={patch} />}
         {tab === "buys" && <Buys state={state} patch={patch} />}
@@ -1341,7 +1346,9 @@ export default function App() {
 }
 
 /* ================================================================== */
-function Dashboard({ state, go, reset, sync, connectSync, disconnectSync, resolveChoice }) {
+function Dashboard({ state, patch, go, reset, sync, connectSync, disconnectSync, resolveChoice }) {
+  const settings = { ...SETTINGS_DEFAULTS, ...(state.settings || {}) };
+  const setSetting = (k, v) => patch((s) => ({ settings: { ...SETTINGS_DEFAULTS, ...(s.settings || {}), [k]: v } }));
   const [confirmReset, setConfirmReset] = useState(false);
   const sets = useSets();
   const buyCost = state.buys.reduce((s, b) => s + (Number(b.cost) || 0), 0);
@@ -1410,6 +1417,12 @@ function Dashboard({ state, go, reset, sync, connectSync, disconnectSync, resolv
             ))}</div>}
       </Panel>
       {state.rips.length > 0 && <Panel title="Rip P&L by set"><BarList data={ripBySet} tone="pl" /></Panel>}
+      <Panel title="Settings">
+        <label className="cl-setting">
+          <span><span className="cl-setting-name">Show sold cards in the Binder</span><span className="cl-row-meta">Off hides every Sold card from the grid and its set counts. The Sold pill still lists them.</span></span>
+          <input type="checkbox" className="cl-switch" checked={settings.binderShowSold} onChange={(e) => setSetting("binderShowSold", e.target.checked)} />
+        </label>
+      </Panel>
       <Panel title="Cloud sync"><SyncPanel sync={sync} connect={connectSync} disconnect={disconnectSync} choose={resolveChoice} /></Panel>
       <div className="cl-reset">
         {!confirmReset
@@ -3056,15 +3069,19 @@ function Inventory({ state, patch }) {
   const hasRange = range.lo !== range.hi;
   const FILTERS = ["All", "Kept", "At grading", "Listed", "Sold"];
   const matchesQ = (c) => fuzzyMatch(q, c.name, c.set, c.number, c.grade, c.status);
+  // the global setting: with sold cards hidden, "All" means every card still
+  // in hand, and the Sold pill is the one place they show
+  const showSold = (state.settings?.binderShowSold ?? SETTINGS_DEFAULTS.binderShowSold);
+  const passesStatus = (c) => (filter === "All" ? (showSold || c.status !== "Sold") : c.status === filter);
   // the grid filters on every keystroke; the image and trend lookups wait for
   // the typing to settle, so a burst of letters is one re-key, not five
   const qSettled = useDebounced(q, 250);
   /* the grid: every card that passes the pill and the search, grouped into a
      page per set; a sold card wears its Sold badge in the grid. */
   const gridCards = useMemo(() => inv
-    .filter((c) => matchesQ(c) && (filter === "All" || c.status === filter)) // a nameless legacy card still gets a tile, or it could never be edited or deleted
+    .filter((c) => matchesQ(c) && passesStatus(c)) // a nameless legacy card still gets a tile, or it could never be edited or deleted
     .sort((a, b) => (a.set || "").localeCompare(b.set || "") || normNum(a.number).localeCompare(normNum(b.number), undefined, { numeric: true }) || (a.name || "").localeCompare(b.name || "")),
-  [inv, filter, q]); // eslint-disable-line react-hooks/exhaustive-deps
+  [inv, filter, q, showSold]); // eslint-disable-line react-hooks/exhaustive-deps
   const pages = useMemo(() => {
     const out = [];
     for (const c of gridCards) {
@@ -3074,7 +3091,7 @@ function Inventory({ state, patch }) {
     }
     return out;
   }, [gridCards]);
-  const lookupCards = useMemo(() => inv.filter((c) => c.name && fuzzyMatch(qSettled, c.name, c.set, c.number, c.grade, c.status) && (filter === "All" || c.status === filter)), [inv, filter, qSettled]);
+  const lookupCards = useMemo(() => inv.filter((c) => c.name && fuzzyMatch(qSettled, c.name, c.set, c.number, c.grade, c.status) && passesStatus(c)), [inv, filter, qSettled, showSold]); // eslint-disable-line react-hooks/exhaustive-deps
   const [images, rarities] = useCardImages(lookupCards, true);
   const trends = useCardTrends(useMemo(() => lookupCards.filter((c) => c.status !== "Sold"), [lookupCards]));
   const viewCard = viewId ? inv.find((c) => c.id === viewId) : null;
@@ -4350,6 +4367,13 @@ function Fonts() {
     .cl-cm-links{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
     .cl-cm-links .cl-mini{flex:1 1 calc(50% - 6px);}
     .cl-cm-links .cl-mini{display:flex;align-items:center;justify-content:center;gap:5px;text-decoration:none;}
+    .cl-setting{display:flex;align-items:center;justify-content:space-between;gap:14px;cursor:pointer;}
+    .cl-setting>span:first-child{display:flex;flex-direction:column;gap:2px;min-width:0;}
+    .cl-setting-name{font-size:13.5px;color:var(--ink);}
+    .cl-switch{appearance:none;-webkit-appearance:none;width:42px;height:24px;border-radius:12px;background:var(--surf2);border:1px solid var(--line);position:relative;flex:none;cursor:pointer;transition:background .15s;}
+    .cl-switch::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--mut);transition:transform .15s,background .15s;}
+    .cl-switch:checked{background:var(--holo2);border-color:var(--holo2);}
+    .cl-switch:checked::after{transform:translateX(18px);background:#fff;}
     .cl-cm-variants{display:flex;gap:4px;margin-top:6px;}
     .cl-cm-variants .cl-pill{padding:4px 9px;font-size:11px;}
     .cl-cm-confirm{display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px 12px;border:1px solid var(--neg);border-radius:10px;font-size:12.5px;color:var(--ink);}
