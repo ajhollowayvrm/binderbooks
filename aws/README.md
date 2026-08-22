@@ -65,6 +65,12 @@ a Lambda running last week's code fails in ways that look like an API problem
 rather than an undeployed fix — which is how the "stop comping the wrong card"
 change sat unshipped while `/graded` kept returning the wrong card's prices.
 
+The web build is the half that *does* ship by itself, on every push to `main`,
+which makes the gap between the two its own hazard. The client's rate-limit
+wording reads a `kind` field that only a deployed Lambda sends; until this is
+deployed, a new bundle keeps calling every 429 the daily budget — which is
+exactly the bug it was written to fix.
+
 ## CORS
 
 `AllowOrigins` is `["*"]`, and that is deliberate.

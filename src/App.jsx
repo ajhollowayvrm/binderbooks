@@ -77,6 +77,11 @@ const syncFetch = async (method, body, since) => {
    all: the thrown 401 is what lets each caller show "connect sync" instead of
    burning a request that can only fail. */
 const NO_TOKEN_MSG = "Connect cloud sync (Overview → Cloud sync) to search the card database and pull prices.";
+// A throttle is not an exhausted budget, and saying so out loud is half the
+// point of this: the wall someone hits after a few seconds of scanning is
+// almost never the credits running out.
+const isThrottled = (e) => e?.status === 429 && e.kind === "throttle";
+const THROTTLE_MSG = "eBay sold data is rate-limited for a moment — try again in a few seconds. This is not the daily budget.";
 async function cardFetch(path, params = {}) {
   const token = syncToken();
   if (!token) { const e = new Error(NO_TOKEN_MSG); e.status = 401; throw e; }
@@ -87,7 +92,20 @@ async function cardFetch(path, params = {}) {
   try {
     const r = await fetch(`${SYNC_URL}${path}${qs.size ? `?${qs}` : ""}`, { headers: { "x-sync-token": token }, signal: ctl.signal });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
+    if (!r.ok) {
+      const e = new Error(j.error || `HTTP ${r.status}`);
+      e.status = r.status;
+      /* A 429 is two different limits (see pptFetch in aws/index.mjs): PPT's
+         per-minute request cap, which clears in seconds, or the day's credits,
+         which don't come back until tomorrow. Reading both as the budget is
+         what told people they were out of credits after a ten-second throttle.
+         A Lambda that predates the split sends neither field, and the web build
+         ships on every push while the Lambda is deployed by hand — so a bare
+         429 has to keep meaning what it has always meant here, the budget. */
+      e.kind = j.kind;
+      e.retryAfter = Number(j.retryAfter) > 0 ? Number(j.retryAfter) : undefined;
+      throw e;
+    }
     return j;
   } finally { clearTimeout(t); }
 }
@@ -450,22 +468,49 @@ async function resolveScan(hit, sets, codes) {
    different card with different sold prices, never a translation of the same
    listing. */
 const GRADED_KEY = "cardledger:graded:v3"; // v3: keyed by productId, so two products sharing a name and a number keep their own comps
+/* 300, not the 30 this kept for a long time. The grading scan walks every raw
+   held card above the value floor — hundreds of cards on a real ledger — so a
+   30-entry cache evicted its own run while the run was still going, and the
+   next run re-bought every card it had already paid for. Those are credits
+   spent to produce the "you're out of credits" message. Size against the
+   scan's candidate list, not against a round number; the trend cache next door
+   keeps 120 for the same reason.
+   The parsed map is held here rather than re-read per card, because writeCache
+   used to parse and re-serialise the whole thing on every single write — fine
+   at 30 entries, hundreds of megabytes of JSON churn across one scan at 300.
+   fetchGradedComps is the only reader and the only writer of this key, so the
+   mirror cannot go stale; a quota failure still degrades to no cache, never to
+   a broken scan, because the write stays inside its try/catch. */
+const GRADED_KEEP = 300;
+let gradedMem = null;
+const gradedCacheAll = () => {
+  if (!gradedMem) { try { gradedMem = JSON.parse(localStorage.getItem(GRADED_KEY)) || {}; } catch { gradedMem = {}; } }
+  return gradedMem;
+};
+/* Holding the map in memory is what makes a second tab a problem: writes used
+   to re-read localStorage every time, so two tabs merged by accident, and a
+   mirror that never reloads would have the second tab overwrite whatever the
+   first one had cached — re-buying comps to do it. The storage event fires only
+   in the *other* tabs, which is exactly the ones whose mirror just went stale,
+   so dropping it there re-reads the merged map on the next lookup. */
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => { if (e.key === GRADED_KEY) gradedMem = null; });
+}
 async function fetchGradedComps(name, set, number, lang = "en", productId = "") {
   // the pinned product is part of the key: Prize Pack Series Cards holds two
   // Radiant Gardevoir 069/196 products, and without the id in here the first
   // one looked up would answer for the other one all day
   const key = `${name}|${set}|${number}|${productId}`.toLowerCase() + (lang === "jp" ? "|jp" : "");
+  const all = gradedCacheAll();
   const writeCache = (r) => {
     try {
-      const all = JSON.parse(localStorage.getItem(GRADED_KEY)) || {};
       all[key] = { t: Date.now(), r };
       const keys = Object.keys(all);
-      if (keys.length > 30) keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - 30).forEach((k) => delete all[k]);
+      if (keys.length > GRADED_KEEP) keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - GRADED_KEEP).forEach((k) => delete all[k]);
       localStorage.setItem(GRADED_KEY, JSON.stringify(all));
     } catch {}
   };
-  let cached;
-  try { cached = (JSON.parse(localStorage.getItem(GRADED_KEY)) || {})[key]; } catch {}
+  const cached = all[key];
   if (cached && Date.now() - cached.t < 24 * 3600 * 1000) {
     if (cached.r?._empty) { const e = new Error("no graded comps"); e.status = 404; throw e; }
     return cached.r;
@@ -484,6 +529,40 @@ async function fetchGradedComps(name, set, number, lang = "en", productId = "") 
     // token, 429 budget exhausted, 5xx) stay uncached so they retry later
     if (e.status === 404) writeCache({ _empty: true });
     throw e;
+  }
+}
+
+/* PPT meters two things, and a bulk run has to treat them differently. The
+   per-minute cap clears in seconds, so a run pauses and picks up where it
+   stopped; the day's credits don't come back until tomorrow, so a run stops.
+   Both used to end the run with "come back tomorrow", which threw away
+   hundreds of cards' progress over a wait measured in seconds.
+   The pause is capped, and the cap is load-bearing rather than tidy: the
+   Lambda calls an unrecognisable 429 a throttle on purpose, so without a
+   ceiling a genuinely spent budget would park a scan in a retry loop forever.
+   Once the cap is spent the error rethrows with its kind intact and the caller
+   says "still rate-limited" — never "out of credits", which it doesn't know. */
+const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
+const RUN_WAIT_CAP_MS = 120_000; // total pause one run will spend
+const RUN_WAIT_MAX_S = 60;       // longest single pause honoured
+function makeThrottleWaiter() {
+  let spent = 0;
+  return async (e, onWait) => {
+    if (!isThrottled(e)) return false;
+    const secs = Math.min(Math.max(Number(e.retryAfter) || 30, 1), RUN_WAIT_MAX_S);
+    if (spent + secs * 1000 > RUN_WAIT_CAP_MS) return false;
+    spent += secs * 1000;
+    for (let left = secs; left > 0; left--) { onWait(left); await sleep(1000); }
+    return true;
+  };
+}
+// fetchGradedComps, except a per-minute throttle pauses the run and retries the
+// same card instead of throwing. Every other failure throws exactly as before,
+// so each caller's existing catch keeps its meaning.
+async function gradedCompsWaiting(args, waiter, onWait) {
+  for (;;) {
+    try { return await fetchGradedComps(...args); }
+    catch (e) { if (!(await waiter(e, onWait))) throw e; }
   }
 }
 
@@ -2740,6 +2819,7 @@ function Inventory({ state, patch }) {
     setSyncMsg(`Checking ${total} card${total === 1 ? "" : "s"}…`);
     const updates = {};
     let priced = 0, changed = 0, graded = 0, ownComps = 0, wrongCard = 0, gradedNote = "";
+    const waitOut = makeThrottleWaiter();
     const applyPrice = (c, price) => {
       updates[c.id] = { ...(updates[c.id] || {}), value: price };
       priced++;
@@ -2794,10 +2874,19 @@ function Inventory({ state, patch }) {
     for (const c of compCands) {
       if (gradedNote) break; // budget gone or route unavailable — the rest would fail the same way
       let r;
+      // this loop had no progress line of its own, which was survivable until a
+      // pause could write one — without it the countdown stayed on screen,
+      // frozen at "resuming in 1s", for the whole rest of the run
+      setSyncMsg(`Pulling eBay comps… (${priced} priced so far)`);
       try {
-        r = await fetchGradedComps(c.name, c.set, c.number, cardLang(c), c.productId || "");
+        r = await gradedCompsWaiting([c.name, c.set, c.number, cardLang(c), c.productId || ""], waitOut,
+          (left) => setSyncMsg(`Rate limited — resuming in ${left}s… (${priced} priced so far)`));
       } catch (e) {
-        if (e.status === 429) gradedNote = " · eBay comps budget used up, try the rest tomorrow";
+        // a throttle only reaches here once the run has spent its whole patience,
+        // and "still rate-limited" is all we can honestly say about it — the
+        // budget may be entirely untouched
+        if (isThrottled(e)) gradedNote = " · eBay comps are still rate-limited — run this again in a minute for the rest, it isn't the daily budget";
+        else if (e.status === 429) gradedNote = " · eBay comps budget used up, try the rest tomorrow";
         else if (e.status === 401) { gradedNote = " · " + NO_TOKEN_MSG; break; }
         else if (e.status === 501) gradedNote = " · eBay graded comps aren't set up";
         continue; // 404 / transient: just skip comps for this card
@@ -2838,7 +2927,9 @@ function Inventory({ state, patch }) {
   // cards that matter), stash a slim snapshot on each card, and rank by what
   // a PSA 10 nets over just selling raw. Snapshots live on the cards
   // themselves — they sync across devices and survive the comps cache, so a
-  // scan the daily budget cuts short just resumes on the next run.
+  // scan the daily budget cuts short just resumes on the next run. A per-minute
+  // throttle doesn't cut it short at all any more — the run pauses, waits it
+  // out and carries on, which is what it should always have done.
   const [scanOpen, setScanOpen] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanMsg, setScanMsg] = useState("");
@@ -2853,19 +2944,26 @@ function Inventory({ state, patch }) {
     setScanning(true);
     const updates = {};
     const isFresh = (c) => c.grading && Date.now() - c.grading.t < 3 * 864e5;
-    let pulled = 0, failed = 0, skipped = 0, outOfBudget = false, i = 0;
+    let pulled = 0, failed = 0, skipped = 0, i = 0;
+    let stop = ""; // "" | "throttle" | "budget" | "token" — why the run ended early
+    const waitOut = makeThrottleWaiter();
     for (const c of scanCands) {
       i++;
       if (isFresh(c)) continue; // fresh enough from a previous run
       setScanMsg(`Pulling eBay comps… ${i}/${scanCands.length} (${c.name})`);
       try {
-        const r = await fetchGradedComps(c.name, c.set, c.number, cardLang(c), c.productId || "");
+        const r = await gradedCompsWaiting([c.name, c.set, c.number, cardLang(c), c.productId || ""], waitOut,
+          (left) => setScanMsg(`Rate limited — resuming in ${left}s… (${pulled} pulled, ${i}/${scanCands.length})`));
         if (!compsMatch(r, c)) { skipped++; continue; } // solds for a different card rank nothing
         const slim = (k) => (r.byGrade?.[k] ? { p: r.byGrade[k].price, n: r.byGrade[k].count } : null);
         updates[c.id] = { grading: { t: Date.now(), raw: r.raw ? { p: r.raw.price, n: r.raw.count } : null, psa10: slim("psa10"), psa9: slim("psa9"), cgc10: slim("cgc10"), tag10: slim("tag10") } };
         pulled++;
       } catch (e) {
-        if (e.status === 429 || e.status === 401) { outOfBudget = true; break; }
+        // 401 is a token problem and never was a budget one — the sibling loop in
+        // refreshPrices has always known that, and this one reported "your daily
+        // budget ran out" to anyone whose sync token had gone missing
+        if (e.status === 401) { stop = "token"; break; }
+        if (e.status === 429) { stop = isThrottled(e) ? "throttle" : "budget"; break; }
         if (e.status === 404) updates[c.id] = { grading: { t: Date.now(), none: true } };
         else failed++; // transient failure — the next scan retries it
       }
@@ -2873,8 +2971,12 @@ function Inventory({ state, patch }) {
     if (Object.keys(updates).length) patch((s) => ({ inventory: (s.inventory || []).map((c) => (updates[c.id] ? { ...c, ...updates[c.id] } : c)) }));
     setScanning(false);
     // waiting = the card that hit the wall plus whatever after it isn't fresh
-    const waiting = outOfBudget ? 1 + scanCands.slice(i).filter((c) => !isFresh(c)).length : 0;
-    setScanMsg(outOfBudget
+    const waiting = stop ? 1 + scanCands.slice(i).filter((c) => !isFresh(c)).length : 0;
+    setScanMsg(stop === "token"
+      ? `${NO_TOKEN_MSG} ${pulled} pulled before that, ${waiting} still waiting.`
+      : stop === "throttle"
+      ? `Still rate-limited after waiting ${RUN_WAIT_CAP_MS / 1000}s — ${pulled} pulled this run, ${waiting} still waiting. Run it again in a minute; this isn't the daily budget.`
+      : stop === "budget"
       ? `Daily eBay-comps budget ran out — ${pulled} pulled this run, ${waiting} still waiting. Run it again after the daily reset to continue.`
       : failed || skipped
       ? `Done — ${pulled} pulled fresh${failed ? `, ${failed} lookup${failed === 1 ? "" : "s"} failed` : ""}${skipped ? `, ${skipped} came back for a different card and were skipped` : ""}.${failed ? " Run it again to retry those." : ""}`
@@ -3164,7 +3266,7 @@ function Inventory({ state, patch }) {
             <Field label="Grading cost"><MoneyInput value={scanFee} onChange={setScanFee} /></Field>
             <button className="cl-save cl-scan-go" disabled={scanning || !scanCands.length} onClick={runScan}>{scanning ? "Scanning…" : `Scan ${scanCands.length} card${scanCands.length === 1 ? "" : "s"}`}</button>
           </div>
-          <div className="cl-import-msg">Ranks raw held cards by what a PSA 10 nets over selling raw (recent eBay solds − raw value − grading cost). Spends the daily eBay-comps budget (~2 credits a card, highest-value cards first); results save to each card, so a scan the budget cuts short resumes next run.</div>
+          <div className="cl-import-msg">Ranks raw held cards by what a PSA 10 nets over selling raw (recent eBay solds − raw value − grading cost). Spends the daily eBay-comps budget (~2 credits a card, highest-value cards first); results save to each card, so a scan the budget cuts short resumes next run. If pokemonpricetracker rate-limits mid-scan, the run pauses and carries on by itself — that isn't the daily budget.</div>
           {scanMsg && <div className="cl-import-msg">{scanMsg}</div>}
           {ranked.length > 0 && <div className="cl-stack sm" style={{ marginTop: 9 }}>
             {ranked.map(({ c, raw, up10, up9 }) => (
@@ -3392,6 +3494,7 @@ export function InvForm({ initial, onSave, onCancel }) {
     } catch (e) {
       setComps(e.status === 401 ? NO_TOKEN_MSG
         : e.status === 501 ? "Not set up yet — the sync Lambda needs a pokemonpricetracker.com API key (see aws/deploy.sh)."
+        : isThrottled(e) ? THROTTLE_MSG
         : e.status === 429 ? "Daily eBay-comps budget is used up — try again tomorrow, or fill the values in manually."
         : e.status === 404 ? "No recent graded sales found for this card — fill the values in manually."
         : "Comps unavailable right now — fill the values in manually.");
@@ -3415,6 +3518,7 @@ export function InvForm({ initial, onSave, onCancel }) {
     } catch (e) {
       setSlabMsg(e.status === 401 ? NO_TOKEN_MSG
         : e.status === 501 ? "Not set up yet — the sync Lambda needs a pokemonpricetracker.com API key (see aws/deploy.sh)."
+        : isThrottled(e) ? THROTTLE_MSG
         : e.status === 429 ? "Daily eBay-comps budget is used up — try again tomorrow, or fill the value in manually."
         : e.status === 404 ? "No recent sales found for this card — fill the value in manually."
         : "Comps unavailable right now — fill the value in manually.");
@@ -3518,10 +3622,13 @@ function PriceSpark({ points }) {
 const CM_COMPANIES = [["psa", "PSA"], ["cgc", "CGC"], ["tag", "TAG"]];
 const CM_GRADES = ["10", "9.5", "9", "8"];
 const cmTrend = (t) => (t === "up" ? <span className="cl-cm-tr up">▲</span> : t === "down" ? <span className="cl-cm-tr down">▼</span> : null);
-const cmErrMsg = (s) => (s === 401 ? NO_TOKEN_MSG
-  : s === 501 ? "eBay comps aren't set up on the sync Lambda."
-  : s === 429 ? "Daily eBay-comps budget is used up — sold data comes back tomorrow."
-  : s === 404 ? "No recent eBay solds found for this card."
+// takes the error rather than a bare status: a 429 alone no longer says which
+// limit was hit, and the two want different sentences
+const cmErrMsg = (e) => (e.status === 401 ? NO_TOKEN_MSG
+  : e.status === 501 ? "eBay comps aren't set up on the sync Lambda."
+  : isThrottled(e) ? THROTTLE_MSG
+  : e.status === 429 ? "Daily eBay-comps budget is used up — sold data comes back tomorrow."
+  : e.status === 404 ? "No recent eBay solds found for this card."
   : "eBay sold data is unavailable right now.");
 function CardModal({ card, onClose, onSave, onDelete, onValue }) {
   // leaving is animated too: `closing` plays the reverse of the entrance,
@@ -3573,7 +3680,7 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
     })();
     (async () => {
       try { const r = await fetchGradedComps(card.name, card.set, card.number, lang, card.productId || ""); if (ok) setComps({ state: "ok", data: r }); }
-      catch (e) { if (ok) setComps({ state: "err", status: e.status || 0 }); }
+      catch (e) { if (ok) setComps({ state: "err", status: e.status || 0, kind: e.kind }); }
     })();
     (async () => {
       try {
@@ -3725,7 +3832,7 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
 
         <div className="cl-cm-sec">Recent eBay solds — raw</div>
         {comps.state === "loading" && <div className="cl-cm-note">Pulling eBay sold data…</div>}
-        {comps.state === "err" && <div className="cl-cm-note">{cmErrMsg(comps.status)}</div>}
+        {comps.state === "err" && <div className="cl-cm-note">{cmErrMsg(comps)}</div>}
         {comps.state === "ok" && (data.raw
           ? <div className="cl-cm-raw"><span className="cl-cm-raw-price">{fmt(data.raw.price)}{cmTrend(data.raw.trend)}</span><span className="cl-row-meta">{rawMeta}</span></div>
           : <div className="cl-cm-note">No recent raw solds recorded.</div>)}
