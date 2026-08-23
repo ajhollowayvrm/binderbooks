@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef, useId } from "react";
 import { flushSync } from "react-dom";
 import Papa from "papaparse";
 import {
@@ -1886,12 +1886,13 @@ const noMatchMsg = (set, q) =>
 
 function CardSearch({
   value, onChange,                 // controlled text; omit both for an internal box
-  onPick,                          // (card) => void — omit in a panel that only opens a detail view
+  onPick,                          // (card) => void — tapping a result opens a price
+                                    // preview; its "Use this card" button calls this.
+                                    // Omit for a read-only search.
   placeholder = "Search a card — name, number, or set",
-  panel = false,                   // Lookup shows a list; the forms show a popover
-  extra = NO_EXTRA,                // panel only: cards from another source, listed first
-  onOpen,                          // panel only: (card) => void — tapping a row body
-                                    // opens a read-only detail view; omit for an inert row
+  onOpen,                          // (card) => void — Lookup only. It manages its own
+                                    // preview modal (with Buy/Keep/Hit attached to it),
+                                    // so this bypasses the built-in one entirely.
 }) {
   const [own, setOwn] = useState("");
   const controlled = value !== undefined;
@@ -1904,18 +1905,15 @@ function CardSearch({
   const [remote, setRemote] = useState([]);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [open, setOpen] = useState(false);
-  const skip = useRef(false);            // a pick must not reopen the popover
-  const mounted = useRef(false);         // nor does opening an edit form with a name already in it
+  const [previewCard, setPreviewCard] = useState(null); // tapped result, shown for a look before it's picked
 
   useEffect(() => { catalogSets().then(setSets, () => setSets([])); }, []);
   const pickSet = (s) => { setSet(s); try { localStorage.setItem(CATSET_KEY, s); } catch {} };
 
   const typed = q.trim();
-  /* A picked set browses itself with an empty box, but only in the panel.
-     A form is one line on a phone, and filling it with a whole set the
-     moment it opens buries the field the user came to type in. */
-  const browsing = panel && !!set && typed.length < CARD_SEARCH_MIN;
+  // a picked set browses itself with an empty box — filling the box with a
+  // whole set the moment it opens would bury the field someone came to type in
+  const browsing = !!set && typed.length < CARD_SEARCH_MIN;
   const searchable = typed.length >= CARD_SEARCH_MIN || browsing;
 
   /* The catalog is on the device, so it needs only enough delay to skip
@@ -1968,6 +1966,50 @@ function CardSearch({
     return () => { live = false; clearTimeout(t); };
   }, [typed, set]);
 
+  /* Missing from both the on-device catalog and a name search? Browse a
+     whole TCGplayer set straight from the Lambda instead. That reaches a
+     set the seller has never exported and a card the database hasn't
+     indexed under a name search yet — a fresh promo drop is most of the
+     first week after release. Its results are handed to `rows` below as
+     another source, so they render as the same cards in the same list. */
+  const allSetNames = useSets();
+  const [browseSetName, setBrowseSetName] = useState("");
+  const [browseQ, setBrowseQ] = useState("");
+  const [browseRows, setBrowseRows] = useState(NO_EXTRA);
+  const [browseMsg, setBrowseMsg] = useState("");
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const datalistId = useId();
+  const runBrowseSet = async () => {
+    const name = browseSetName.trim();
+    if (!name || browseLoading) return;
+    setBrowseLoading(true); setBrowseMsg(""); setBrowseRows(NO_EXTRA);
+    try {
+      const j = await cardFetch("catalog", { set: name });
+      const toks = browseQ.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+      /* A collector number is not always in the product name: "Reshiram
+         (Stellar Crown Stamped)" carries 022/142 only on `num`, so a
+         name-only filter drops it the moment someone types the number
+         printed on the card. */
+      const hasTok = (p, t) =>
+        p.name.toLowerCase().includes(t) ||
+        String(p.num || "").toLowerCase().includes(t) ||
+        normNum(p.num) === normNum(t);
+      const list = (j.cards || [])
+        .filter((p) => toks.every((t) => hasTok(p, t)))
+        .sort((a, b) => (b.market || 0) - (a.market || 0))
+        .slice(0, 40)
+        .map((p) => catalogCard(j.group, p, name));
+      setBrowseRows(list.length ? list : NO_EXTRA);
+      setBrowseMsg(list.length ? `${list.length} from ${j.group}, listed above.`
+        : toks.length ? `Nothing in ${j.group} matches “${toks.join(" ")}” — empty this box to browse the whole set.`
+        : "No singles found in that set.");
+    } catch (e) {
+      setBrowseMsg(e.status === 404 ? "The price database doesn't have a set by that name — pick one from the suggestions."
+        : e.status === 401 ? NO_TOKEN_MSG
+        : "The set catalog is unavailable right now — try again.");
+    } finally { setBrowseLoading(false); }
+  };
+
   const rows = useMemo(() => {
     const seen = new Set();
     const out = [];
@@ -1993,7 +2035,7 @@ function CardSearch({
         && qualNear(d.name, card.name));
       return hits.length === 1 ? String(hits[0].productId) : "";
     };
-    for (const c of extra) push(c, null, "x");
+    for (const c of browseRows) push(c, null, "x");
     for (const rec of local) {
       const card = catalogEntryCard(rec);
       const pid = pinnedId(card);
@@ -2011,43 +2053,13 @@ function CardSearch({
       if (variants.length) variants.forEach((v) => out.push({ key: `d${c.id}-${v}`, card: { ...c, variant: v }, printing: v }));
       else out.push({ key: `d${c.id}`, card: c });
     }
-    return out.slice(0, panel ? 60 : 14);
-  }, [extra, local, remote, panel]);
+    return out.slice(0, 60);
+  }, [browseRows, local, remote]);
 
-  /* Typing reopens the list. A pick sets `skip` first, because on a
-     controlled box the pick itself rewrites the text and would otherwise
-     reopen the popover the user just chose from. Mounting is not typing:
-     an edit form opens with the card's name already in the box, and popping
-     the list open over its own buttons is not what asking to edit meant. */
-  useEffect(() => {
-    if (!mounted.current) { mounted.current = true; return; }
-    if (skip.current) { skip.current = false; return; }
-    if (searchable) setOpen(true);
-  }, [typed]);
-
-  const choose = (c) => { skip.current = true; setOpen(false); onPick?.(c); };
-
-  /* One row, one markup, for the popover forms use. The printing chip marks
-     a row that came from the catalog and therefore carries a SKU. */
-  const rowBody = (r) => {
-    const c = r.card;
-    const price = cardPrice(c, c.variant);
-    return (<>
-      {c.images?.small ? <FadeImg src={c.images.small} alt="" className="cl-ac-img" loading="lazy" /> : <div className="cl-ac-img cl-shimmer" />}
-      <div className="cl-ac-meta">
-        <div className="cl-ac-name">{c.name}</div>
-        <div className="cl-row-meta">
-          {r.printing && <span className="cl-chip">{VARIANT_SHORT[r.printing] || r.printing}</span>}
-          <span>{[c.set?.name, c.number, c.rarity].filter(Boolean).join(" · ")}</span>
-        </div>
-      </div>
-      <div className="cl-ac-price">{price != null ? fmt(price) : "—"}</div>
-    </>);
-  };
-  /* Lookup's panel: a card-art grid, same shape as the Binder — the whole
-     point of a lookup is deciding whether the card in hand is this exact
-     printing, and a thumbnail row makes that call blind. */
-  const panelBody = (r) => {
+  /* A card-art grid, the same shape as the Binder — the whole point of a
+     lookup is deciding whether the card in hand is this exact printing,
+     and a thumbnail row makes that call blind. */
+  const cardBody = (r) => {
     const c = r.card;
     const price = cardPrice(c, c.variant);
     return (<>
@@ -2073,7 +2085,7 @@ function CardSearch({
     : null;
   const statusNode = status === "retry"
     ? <button className="cl-ac-loading cl-ac-retry" onMouseDown={(e) => e.preventDefault()} onClick={() => { setFailed(false); setBusy(true); runDatabase(typed).then((l) => { setRemote(l); setBusy(false); }, (e) => { setBusy(false); setFailed(e.status === 401 ? "token" : true); }); }}>Card search didn&rsquo;t respond &mdash; tap to retry</button>
-    : status ? <div className={panel ? "cl-import-msg" : "cl-ac-loading"}>{status}</div>
+    : status ? <div className="cl-import-msg">{status}</div>
     : null;
 
   const setPicker = sets.length > 0 && (
@@ -2089,42 +2101,36 @@ function CardSearch({
       placeholder={placeholder}
       value={q}
       onChange={(e) => setQ(e.target.value)}
-      onFocus={() => searchable && setOpen(true)}
-      onBlur={panel ? undefined : () => setTimeout(() => setOpen(false), 200)}
     />
   );
 
-  if (panel) return (
+  return (
     <div className="cl-cs">
       {setPicker}
       <div className="cl-search">{box}{q && <button className="cl-search-btn" onClick={() => setQ("")}><X size={15} /></button>}</div>
       {rows.length > 0 && <div className="cl-cs-grid">
         {rows.map((r) => (
           <div key={r.key} className="cl-cs-card cl-row-enter">
-            {onPick
-              ? <button className="cl-cs-item" onClick={() => choose(r.card)}>{panelBody(r)}</button>
-              : onOpen
-                ? <button className="cl-cs-item" onClick={() => onOpen(r.card)}>{panelBody(r)}</button>
-                : <div className="cl-cs-item as-row">{panelBody(r)}</div>}
+            {onOpen
+              ? <button className="cl-cs-item" onClick={() => onOpen(r.card)}>{cardBody(r)}</button>
+              : onPick
+                ? <button className="cl-cs-item" onClick={() => setPreviewCard(r.card)}>{cardBody(r)}</button>
+                : <div className="cl-cs-item as-row">{cardBody(r)}</div>}
           </div>
         ))}
       </div>}
       {statusNode}
-    </div>
-  );
-
-  return (
-    <div className="cl-cs">
-      {setPicker}
-      <div className="cl-ac">
-        {box}
-        {open && <div className="cl-ac-pop">
-          {rows.map((r) => (
-            <button key={r.key} className="cl-ac-item cl-row-enter" onMouseDown={(e) => e.preventDefault()} onClick={() => choose(r.card)}>{rowBody(r)}</button>
-          ))}
-          {statusNode}
-        </div>}
+      <div className="cl-cat">
+        <div className="cl-row-meta">Missing from both? A new set reaches TCGplayer's catalog first — name it here and its cards join the list above:</div>
+        <div className="cl-search">
+          <input className="cl-in" list={datalistId} placeholder="Set — e.g. ME Black Star Promos" value={browseSetName} onChange={(e) => setBrowseSetName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && runBrowseSet()} />
+          <button className="cl-search-btn" onClick={runBrowseSet}><PackageOpen size={15} /></button>
+        </div>
+        <input className="cl-in" placeholder="Filter that set — leave empty for all of it" value={browseQ} onChange={(e) => setBrowseQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && runBrowseSet()} />
+        <datalist id={datalistId}>{(allSetNames || []).map((s) => <option key={s} value={s} />)}</datalist>
+        {(browseLoading || browseMsg) && <div className="cl-import-msg">{browseLoading ? "Reading TCGplayer's catalog…" : browseMsg}</div>}
       </div>
+      {previewCard && <CardPriceModal card={previewCard} onClose={() => setPreviewCard(null)} onSelect={onPick ? (c) => { setPreviewCard(null); onPick(c); } : undefined} />}
     </div>
   );
 }
@@ -3805,7 +3811,17 @@ function useCardMarketData(identity, variant) {
   const img = (match && match.images?.small) || data?.image || null;
   // the /search hit carries every printing's price, so it is re-read for the
   // current printing here; `liveMatch` only covers the set-dump fallback above
-  const market = liveSet ?? (match ? cardPrice(match, variant) : null) ?? liveMatch ?? data?.market ?? null;
+  const matchPrice = match ? cardPrice(match, variant) : null;
+  /* A known productId is only trustworthy above the set dump, not below it.
+     The set dump prices by number alone, and "Miscellaneous Cards & Products"
+     — TCGplayer's catch-all bucket for stamped and promo prints — files
+     unrelated cards under the same number on purpose (see resolveProductId's
+     Radiant Gardevoir comment for the same trap elsewhere). `match` is
+     already checked against `productId` above, so once we have one, its price
+     is the exact card; the set dump's is only ever a guess by number. Without
+     a productId there is no anchor to prefer, so the set dump — priced off
+     the card's own typed set and number — still outranks a fuzzy name match. */
+  const market = (productId && matchPrice != null ? matchPrice : null) ?? liveSet ?? matchPrice ?? liveMatch ?? data?.market ?? null;
   const rarity = match?.rarity || data?.rarity || "";
   return { match, comps, hist, data, img, market, rarity };
 }
@@ -4003,7 +4019,7 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
    nobody has bought yet doesn't have. `card` is a search-result shape
    (slimCard/catalogEntryCard/catalogCard) — its `set` is `{ name }`, not
    the ledger's plain string, so this never touches `card.set` directly. */
-function CardPriceModal({ card, onClose, onBuy, onKeep, onHit, flash }) {
+function CardPriceModal({ card, onClose, onBuy, onKeep, onHit, onSelect, flash }) {
   const [closing, setClosing] = useState(false);
   const close = useCallback(() => {
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) return onClose();
@@ -4066,6 +4082,9 @@ function CardPriceModal({ card, onClose, onBuy, onKeep, onHit, flash }) {
               {onBuy && <button className="cl-mini" onClick={() => onBuy(card)}>+ Buy</button>}
               {onKeep && <button className="cl-mini" onClick={() => onKeep(card)}>+ Keep</button>}
               {onHit && <button className="cl-mini holo-border" onClick={() => onHit(card)}>+ Hit</button>}
+            </div>}
+            {onSelect && <div className="cl-lk-actions" style={{ marginTop: 0 }}>
+              <button className="cl-mini holo-border" onClick={() => onSelect(card)}>Use this card</button>
             </div>}
             {flash && <div className="cl-flash">{flash}</div>}
           </div>
@@ -4149,43 +4168,6 @@ function Lookup({ state, patch }) {
   const [flashMsg, setFlashMsg] = useState("");
   const flash = (msg) => { setFlashMsg(msg); setTimeout(() => setFlashMsg(""), 1600); };
 
-  const sets = useSets();
-  const [catSet, setCatSet] = useState("");
-  const [catQ, setCatQ] = useState("");
-  const [catRows, setCatRows] = useState(NO_EXTRA);
-  const [catMsg, setCatMsg] = useState("");
-  const [catLoading, setCatLoading] = useState(false);
-  const browseSet = async () => {
-    const name = catSet.trim();
-    if (!name || catLoading) return;
-    setCatLoading(true); setCatMsg(""); setCatRows(NO_EXTRA);
-    try {
-      const j = await cardFetch("catalog", { set: name });
-      const toks = catQ.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
-      /* A collector number is not always in the product name: "Reshiram
-         (Stellar Crown Stamped)" carries 022/142 only on `num`, so a
-         name-only filter drops it the moment the user types the number
-         printed on the card. */
-      const hasTok = (p, t) =>
-        p.name.toLowerCase().includes(t) ||
-        String(p.num || "").toLowerCase().includes(t) ||
-        normNum(p.num) === normNum(t);
-      const list = (j.cards || [])
-        .filter((p) => toks.every((t) => hasTok(p, t)))
-        .sort((a, b) => (b.market || 0) - (a.market || 0))
-        .slice(0, 40)
-        .map((p) => catalogCard(j.group, p, name));
-      setCatRows(list.length ? list : NO_EXTRA);
-      setCatMsg(list.length ? `${list.length} from ${j.group}, listed above.`
-        : toks.length ? `Nothing in ${j.group} matches “${toks.join(" ")}” — empty this box to browse the whole set.`
-        : "No singles found in that set.");
-    } catch (e) {
-      setCatMsg(e.status === 404 ? "The price database doesn't have a set by that name — pick one from the suggestions."
-        : e.status === 401 ? NO_TOKEN_MSG
-        : "The set catalog is unavailable right now — try again.");
-    } finally { setCatLoading(false); }
-  };
-
   const rip = ripId || state.rips[0]?.id;
   const asBuy = (c) => { patch(addAsBuy(c)); flash("Added to Buys"); };
   const asKeep = (c) => { patch(addAsKeep(c)); flash("Kept in inventory"); };
@@ -4203,21 +4185,9 @@ function Lookup({ state, patch }) {
         {state.rips.map((r) => <option key={r.id} value={r.id}>+ Hit → {r.product || "Rip"}</option>)}
       </select>}
       <CardSearch
-        panel
-        extra={catRows}
         placeholder="Search a card — e.g. 091, banette dusk, or reshiram stamped"
         onOpen={setPriceCard}
       />
-      <div className="cl-cat">
-        <div className="cl-row-meta">Missing from both? A new set reaches TCGplayer's catalog first — name it here and its cards join the list above:</div>
-        <div className="cl-search">
-          <input className="cl-in" list="bb-set-list" placeholder="Set — e.g. ME Black Star Promos" value={catSet} onChange={(e) => setCatSet(e.target.value)} onKeyDown={(e) => e.key === "Enter" && browseSet()} />
-          <button className="cl-search-btn" onClick={browseSet}><PackageOpen size={15} /></button>
-        </div>
-        <input className="cl-in" placeholder="Filter that set — leave empty for all of it" value={catQ} onChange={(e) => setCatQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && browseSet()} />
-        <datalist id="bb-set-list">{(sets || []).map((s) => <option key={s} value={s} />)}</datalist>
-        {(catLoading || catMsg) && <div className="cl-import-msg">{catLoading ? "Reading TCGplayer's catalog…" : catMsg}</div>}
-      </div>
       {priceCard && <CardPriceModal card={priceCard} onClose={() => setPriceCard(null)} onBuy={asBuy} onKeep={asKeep} onHit={asHit} flash={flashMsg} />}
     </div>
   );
@@ -4433,7 +4403,7 @@ function Fonts() {
        pill, ripped toggle, disabled) ease instead of snapping */
     .cl-tab, .cl-pill, .cl-x, .cl-save, .cl-cancel, .cl-link, .cl-row.click, .cl-hit.click,
     .cl-monthnav-btn, .cl-month-row, .cl-chip-x, .cl-reset-btn, .cl-addline,
-    .cl-ac-item, .cl-cs-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
+    .cl-cs-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
     .cl-del, .cl-search-btn, .cl-addbtn, .cl-reset-go {
       transition: color .15s ease, background-color .15s ease, border-color .15s ease, opacity .15s ease, transform .1s ease;
     }
@@ -4442,7 +4412,7 @@ function Fonts() {
     .cl-tab:active, .cl-pill:active, .cl-x:active, .cl-save:active:not(:disabled),
     .cl-cancel:active, .cl-link:active:not(:disabled), .cl-row.click:active, .cl-hit.click:active,
     .cl-monthnav-btn:active:not(:disabled), .cl-chip-x:active, .cl-reset-btn:active,
-    .cl-addline:active, .cl-ac-item:active, .cl-cs-item:active, .cl-import-btn:active:not(:disabled),
+    .cl-addline:active, .cl-cs-item:active, .cl-import-btn:active:not(:disabled),
     .cl-mini:active:not(:disabled), .cl-card-head:active, .cl-binder-card:active,
     .cl-del:active, .cl-search-btn:active, .cl-addbtn:active, .cl-reset-go:active {
       transform: scale(.96);
@@ -4450,12 +4420,12 @@ function Fonts() {
     @media (prefers-reduced-motion: reduce) {
       .cl-tab, .cl-pill, .cl-x, .cl-save, .cl-cancel, .cl-link, .cl-row.click, .cl-hit.click,
       .cl-monthnav-btn, .cl-month-row, .cl-chip-x, .cl-reset-btn, .cl-addline,
-      .cl-ac-item, .cl-cs-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
+      .cl-cs-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
       .cl-del, .cl-search-btn, .cl-addbtn, .cl-reset-go { transition: none; }
       .cl-tab:active, .cl-pill:active, .cl-x:active, .cl-save:active:not(:disabled),
       .cl-cancel:active, .cl-link:active:not(:disabled), .cl-row.click:active, .cl-hit.click:active,
       .cl-monthnav-btn:active:not(:disabled), .cl-chip-x:active, .cl-reset-btn:active,
-      .cl-addline:active, .cl-ac-item:active, .cl-cs-item:active, .cl-import-btn:active:not(:disabled),
+      .cl-addline:active, .cl-cs-item:active, .cl-import-btn:active:not(:disabled),
       .cl-mini:active:not(:disabled), .cl-card-head:active, .cl-binder-card:active,
       .cl-del:active, .cl-search-btn:active, .cl-addbtn:active, .cl-reset-go:active {
         transform: none;
@@ -4694,8 +4664,8 @@ function Fonts() {
     .cl-addline{background:none;border:1px dashed var(--line);color:var(--mut);border-radius:10px;padding:9px;font-size:12.5px;cursor:pointer;font-family:'Inter';}
     .cl-addline:hover{color:var(--ink);border-color:var(--mut);}
     .cl-total-ro{display:flex;align-items:center;color:var(--out);font-variant-numeric:tabular-nums;}
-    /* the form popover stays a thumbnail list (.cl-ac-item below); Lookup's
-       panel is a card-art grid, the same shape as the Binder screen, since
+    /* every card search — Lookup, and every form's "find the card" box —
+       is the same card-art grid, the same shape as the Binder screen, since
        telling one printing from another is easier to see than to read */
     .cl-cs{display:flex;flex-direction:column;gap:8px;}
     .cl-cs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:2px;}
@@ -4709,16 +4679,7 @@ function Fonts() {
     .cl-cs-name{font-family:'Space Grotesk';font-weight:600;font-size:14px;line-height:1.25;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
     .cl-cs-line{font-size:11.5px;line-height:1.35;color:var(--mut);display:flex;flex-wrap:wrap;align-items:center;gap:5px;}
     .cl-cs-price{font-family:'Space Grotesk';font-weight:600;color:var(--pos);font-size:13px;font-variant-numeric:tabular-nums;margin-top:2px;}
-    .cl-ac{position:relative;}
-    .cl-ac-pop{position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:4px;background:var(--surf);border:1px solid var(--line);border-radius:10px;max-height:280px;overflow-y:auto;box-shadow:0 14px 34px rgba(0,0,0,.55);}
     .cl-ac-loading{padding:12px;text-align:center;color:var(--mut);font-size:12px;}
-    .cl-ac-item{display:flex;align-items:center;gap:9px;width:100%;background:none;border:none;border-bottom:1px solid var(--line);padding:8px 10px;cursor:pointer;text-align:left;color:var(--ink);font-family:'Inter';}
-    .cl-ac-item:last-child{border-bottom:none;}
-    .cl-ac-item:hover{background:var(--surf2);}
-    .cl-ac-img{width:34px;height:47px;object-fit:contain;flex:none;background:#0c0f15;border-radius:4px;}
-    .cl-ac-meta{flex:1;min-width:0;}
-    .cl-ac-name{font-size:13px;font-weight:600;}
-    .cl-ac-price{font-family:'Space Grotesk';font-weight:600;color:var(--pos);font-size:13px;font-variant-numeric:tabular-nums;flex:none;}
     .cl-ac-retry{width:100%;background:none;border:none;color:#ffce9e;cursor:pointer;font-family:'Inter';}
     .cl-modal-ov{position:fixed;inset:0;z-index:60;background:rgba(6,8,13,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px;animation:ovIn .15s ease-out;}
     .cl-modal{background:var(--surf);border:1px solid var(--line);border-radius:18px;width:100%;max-width:540px;max-height:min(92vh,860px);overflow-y:auto;padding:16px;position:relative;animation:cmIn .18s ease-out;}
