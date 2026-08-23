@@ -492,7 +492,11 @@ const gradedCacheAll = () => {
    mirror that never reloads would have the second tab overwrite whatever the
    first one had cached — re-buying comps to do it. The storage event fires only
    in the *other* tabs, which is exactly the ones whose mirror just went stale,
-   so dropping it there re-reads the merged map on the next lookup. */
+   so dropping it there re-reads the merged map on the next lookup — and
+   writeCache asks for the map again at write time rather than closing over the
+   one read before the network call, because that gap is the whole window in
+   which the other tab writes. Net cost: one parse per *contended* write, not
+   one per write, which is what the mirror was for. */
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => { if (e.key === GRADED_KEY) gradedMem = null; });
 }
@@ -504,10 +508,11 @@ async function fetchGradedComps(name, set, number, lang = "en", productId = "") 
   const all = gradedCacheAll();
   const writeCache = (r) => {
     try {
-      all[key] = { t: Date.now(), r };
-      const keys = Object.keys(all);
-      if (keys.length > GRADED_KEEP) keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - GRADED_KEEP).forEach((k) => delete all[k]);
-      localStorage.setItem(GRADED_KEY, JSON.stringify(all));
+      const cur = gradedCacheAll(); // re-read only if another tab invalidated us
+      cur[key] = { t: Date.now(), r };
+      const keys = Object.keys(cur);
+      if (keys.length > GRADED_KEEP) keys.sort((a, b) => cur[a].t - cur[b].t).slice(0, keys.length - GRADED_KEEP).forEach((k) => delete cur[k]);
+      localStorage.setItem(GRADED_KEY, JSON.stringify(cur));
     } catch {}
   };
   const cached = all[key];

@@ -144,8 +144,15 @@ const rateLimitInfo = (r, bodyText) => {
   const remRaw = r.headers.get("x-ratelimit-remaining");
   const rem = remRaw == null || remRaw === "" ? NaN : Number(remRaw);
   const said = String(bodyText || "").slice(0, 300).toLowerCase();
-  const kind = /per[- ]minute|rate limit|too many requests|slow down/.test(said) ? "throttle"
-    : /daily|per[- ]day|credit|quota|budget|month|upgrade/.test(said) ? "budget"
+  /* Period words go first, and the reason is one phrasing: "daily rate limit
+     exceeded". Testing the throttle words first matched "rate limit" and never
+     looked at "daily", so the long cap read as the short one. A period word
+     only ever qualifies the long cap, so it wins outright; the generic throttle
+     words come next, which keeps "rate limit exceeded, 480 credits remaining"
+     a throttle rather than letting the bare word "credit" below it decide. */
+  const kind = /daily|per[- ]day|monthly|per[- ]month/.test(said) ? "budget"
+    : /per[- ]minute|rate limit|too many requests|slow down/.test(said) ? "throttle"
+    : /credit|quota|budget|upgrade/.test(said) ? "budget"
     : after != null && after >= BUDGET_MIN_S ? "budget"
     : "throttle";
   return {
@@ -160,8 +167,12 @@ async function pptFetch(path, params) {
     const u = new URL(`${PPT_BASE}/${path}`);
     for (const [k, v] of Object.entries(params)) if (v != null && v !== "") u.searchParams.set(k, v);
     const ctl = new AbortController();
-    // beat API Gateway's 30s cut-off, same reasoning as identifyCards
-    const t = setTimeout(() => ctl.abort(), 25_000);
+    /* Beat API Gateway's 30s cut-off, same reasoning as identifyCards — but
+       measured against what this request has already spent, not from zero. A
+       retry that waited out a throttle and then got its own full 25s could
+       overrun the gateway and come back as an opaque 5xx, which the client
+       counts as a transient failure rather than the throttle it was. */
+    const t = setTimeout(() => ctl.abort(), Math.min(25_000, Math.max(1_000, GW_BUDGET_MS + 5_000 - (Date.now() - started))));
     try {
       const r = await fetch(u, { headers: { authorization: `Bearer ${process.env.PPT_KEY}` }, signal: ctl.signal });
       if (r.status === 429) {
@@ -280,7 +291,14 @@ async function pptSetData(setName, lang = "en") {
      are TCGplayer names ("Koraidon - 014 (Pokemon Center Exclusive)"), so
      nameNum and the qualifier matching carry over unchanged. Per-printing
      prices come from the card's top-level `variants` map — prices.variants
-     and prices.conditions are deprecated upstream (removal Aug 2026). */
+     and prices.conditions are deprecated upstream (removal Aug 2026).
+     Worth being exact about what that does and doesn't threaten, because the
+     note used to imply a dependency that doesn't exist: nothing here reads
+     prices.variants or prices.conditions at all. What the code does still lean
+     on is `prices.market` (the fallback below, in slimCard, and — with no
+     variants fallback whatsoever — in gradedPrices) and `prices.primaryPrinting`
+     (priceHistory's choice of "the" line). Those are the ones to check against
+     the live docs; the two named in the deprecation are already unused. */
   const products = raw.map((c) => {
     const subs = {};
     for (const [printing, v] of Object.entries(c.variants || {})) {
@@ -399,6 +417,13 @@ async function priceHistory(productId, days, lang) {
     const s = seriesOf(v);
     if (s.length) byVariant[printing] = s;
   }
+  /* Without primaryPrinting this quietly falls to whichever printing enumerates
+     first, and a reverse holo's history then renders as the card's own line —
+     wrong data rather than absent data, which is the failure mode this file
+     works hardest to avoid. It can't be fixed from here (nothing else names the
+     primary), so make it visible instead. */
+  if (!c.prices?.primaryPrinting && Object.keys(byVariant).length > 1)
+    console.log(`history: no primaryPrinting for ${c.tcgPlayerId} — drawing ${Object.keys(byVariant)[0]} of ${Object.keys(byVariant).join("/")}`);
   const points = byVariant[c.prices?.primaryPrinting] || Object.values(byVariant)[0] || [];
   if (!points.length) return null;
   const body = {
@@ -453,6 +478,14 @@ async function resolveProductId(name, number, set, lang) {
    (ungraded solds), window (the date range the sales cover), image and url
    (TCGplayer CDN). */
 const GRADED_TTL = 24 * 3600 * 1000;
+/* A miss expires sooner than a hit. resolveProductId swallows every error on
+   purpose ("dump unavailable — callers fall back to a name search"), so a miss
+   is not always a fact about the card: one failed set-dump fetch pushes a
+   perfectly matchable card down the fuzzy path, and if that can't pin it either
+   the sentinel would lock it to "no comps" for a full day on every device.
+   Hours, not a day — telling a real miss from a bad afternoon isn't worth
+   threading a flag back through that deliberate blanket catch. */
+const GRADED_NONE_TTL = 6 * 3600 * 1000;
 /* Comps live in the same DynamoDB table as the set dumps now, for exactly the
    reason cacheGet already spells out — and /graded is the route where a
    container-local Map hurt most, because it is the one billed per card rather
@@ -468,9 +501,21 @@ const GRADED_TTL = 24 * 3600 * 1000;
    plain 069/196 — and serving one card's solds as the other's is the failure
    this file spends most of its comments preventing. foldSet runs before the
    squash, so a qualifier survives into the id as "-prize-pack". */
+/* FNV-1a over the untouched identity. The squashed form below is for human
+   eyes on a DynamoDB console; this is what actually keeps two cards apart,
+   because the squash is lossy by design and lossy in a way that bites hardest
+   where the money is: [^a-z0-9]+ reduces every kana run to one "-", so
+   "ブラッキーex" and "リザードンex" both keyed to graded:jp:::-ex and Umbreon
+   served Charizard's eBay solds for a day. It also closes the truncation
+   collisions the slices below only make unlikely. */
+const keyHash = (s) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36);
+};
 const gradedId = (name, number, set, lang, pid) => (pid
   ? `graded:${lang}:id:${String(pid).replace(/[^A-Za-z0-9]/g, "").slice(0, 24)}`
-  : `graded:${lang}:${foldSet(set).replace(/[^a-z0-9]+/g, "-").slice(0, 48)}:${normNum(number).toLowerCase().slice(0, 12)}:${foldSet(name).replace(/[^a-z0-9]+/g, "-").slice(0, 120)}`);
+  : `graded:${lang}:${foldSet(set).replace(/[^a-z0-9]+/g, "-").slice(0, 48)}:${normNum(number).toLowerCase().slice(0, 12)}:${foldSet(name).replace(/[^a-z0-9]+/g, "-").slice(0, 120)}:${keyHash(`${name}|${number}|${set}`)}`);
 // slim one salesByGrade bucket down to what the app renders; smartMarketPrice
 // is their recency-filtered figure — raw averages skew low/stale
 const slimBucket = (e) => {
@@ -484,7 +529,10 @@ async function gradedPrices(name, number, set, lang = "en", productId = "") {
   // an English and a Japanese Umbreon are two cards with two sets of solds
   const reqId = gradedId(name, number, set, lang, productId);
   const hit = await cacheGet(reqId, GRADED_TTL);
-  if (hit) return hit.none ? null : hit;
+  if (hit && !hit.none) return hit;
+  // the sentinel carries its own stamp so it can expire sooner than a real hit
+  // without cacheGet having to hand back two different TTLs
+  if (hit?.none && Date.now() - hit.t < GRADED_NONE_TTL) return null;
   const ppt = (params) => pptCards({ ...params, includeEbay: "true", language: pptLang(lang) });
   // cheapest path first: the caller's stored productId, else resolve one
   // through the set dump — 2 credits (one card with eBay data) instead of a
@@ -568,7 +616,7 @@ async function gradedPrices(name, number, set, lang = "en", productId = "") {
      remembering. The client already negative-caches this (GRADED_KEY in
      App.jsx); not doing it here meant every device, and every cleared browser,
      re-bought the same miss. */
-  if (!match) { await cachePut(reqId, { none: true }); return null; }
+  if (!match) { await cachePut(reqId, { none: true, t: Date.now() }); return null; }
   // salesByGrade.psaN: smartMarketPrice is their recency-filtered market
   // price; raw averages skew low because they include months-old sales
   const grades = {}, sales = {};
@@ -602,7 +650,14 @@ async function gradedPrices(name, number, set, lang = "en", productId = "") {
     rarity: match.rarity || null,
   };
   await cachePut(reqId, body);
-  if (idId) await cachePut(idId, body);
+  /* Only when the product itself answered. byId false means the id lookup came
+     back unusable and the *fuzzy name search* found this card instead — writing
+     that under the product's key asserts a match the product never returned,
+     and every later card carrying that productId would read it as its own
+     comps for a day, on every device. Same trap as resolveProductId's qualifier
+     check and the confident-match test above: an unverified match is not
+     allowed to speak for a card. */
+  if (idId && byId) await cachePut(idId, body);
   return body;
 }
 
