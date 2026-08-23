@@ -3,7 +3,8 @@
 // The whole ledger is one JSON blob in the "binderbooks" DynamoDB table;
 // writes are conditional on updatedAt so an out-of-date device gets a 409
 // instead of clobbering newer data. The same table holds the card-data
-// caches (set dumps, price history) under their own ids — see cacheGet.
+// caches (set dumps, price history, eBay comps) under their own ids — see
+// cacheGet.
 // Every card fact the app shows — search, prices, printings, images,
 // graded comps, price history — comes from pokemonpricetracker.com (PPT),
 // and every route that reaches it sits behind the sync token, because PPT
@@ -25,6 +26,16 @@ const res = (code, body) => ({
   headers: { "content-type": "application/json" },
   body: JSON.stringify(body),
 });
+/* A 429 says which limit it was, because the two need different sentences and
+   different behaviour: a per-minute throttle clears in seconds and a bulk run
+   should pause and carry on, a spent daily budget clears tomorrow and a run
+   should stop. `error` keeps its old wording for the budget case, so a client
+   running an older bundle shows exactly what it showed before — `kind` and
+   `retryAfter` are additive, and a client that ignores them behaves the way it
+   always did. See pptFetch for how the two are told apart. */
+const rateRes = (e, budgetMsg, what) => (e.kind === "throttle"
+  ? res(429, { error: `${what} is rate-limited right now — try again in a moment`, kind: "throttle", retryAfter: e.retryAfter || THROTTLE_DEFAULT_S })
+  : res(429, { error: budgetMsg, kind: "budget" }));
 
 const authed = (event) => {
   const got = Buffer.from(String(event.headers?.["x-sync-token"] || ""));
@@ -84,23 +95,102 @@ const collapse = (sub) => (sub ? sub["Normal"] ?? sub["Holofoil"] ?? Object.valu
 /* --- the PPT client ---------------------------------------------------- */
 // PPT bills credits on the requested `limit`, never on the rows that come
 // back — a bare list call defaults to limit=50 and costs 50 credits even
-// when one card matches, so every list call here names its limit. A 429
-// carries Retry-After: a short one is the per-minute cap (wait it out,
-// once), a long one is the daily budget (surface it — retrying can't help).
+// when one card matches, so every list call here names its limit.
+/* A 429 from PPT is two different problems wearing one status code, and this
+   comment used to claim the code told them apart while it never did: a
+   Retry-After of ten seconds or less was waited out, and *everything else*
+   fell through as the daily budget. Everything else includes a 60-second
+   per-minute cap, and includes a 429 with no Retry-After at all, because
+   Number(null) is NaN and NaN > 0 is false. So people who had spent almost
+   nothing were told they were out of credits until tomorrow, and both bulk
+   runs threw away the rest of their queue on the strength of it.
+   The two are separated deliberately now, and an unreadable 429 is called a
+   throttle on purpose: calling a spent budget a throttle costs one wasted
+   wait, and calling a throttle a spent budget costs someone the rest of their
+   day. The callers cap how long they will wait, which is what makes that
+   asymmetry safe to lean on. */
+const THROTTLE_DEFAULT_S = 30;  // what "wait" means when a 429 says nothing else
+const BUDGET_MIN_S = 300;       // no per-minute cap ever asks for five minutes
+const GW_BUDGET_MS = 20_000;    // API Gateway cuts the whole request off at 30s
 const PPT_BASE = "https://www.pokemonpricetracker.com/api/v2";
 const pptLang = (lang) => (lang === "jp" ? "japanese" : "english");
+/* Retry-After and x-ratelimit-reset go through the same parser, because
+   neither format is contractual here: RFC 7231 lets Retry-After be a delta or
+   an HTTP-date, and a reset stamp turns up as a delta, as epoch seconds or as
+   epoch milliseconds depending on who wrote it. Anything that doesn't parse
+   answers null rather than a number — a guess at this layer becomes the wrong
+   sentence on someone's screen. */
+const asSeconds = (raw) => {
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  if (Number.isFinite(n)) {
+    if (n > 1e12) return Math.max(0, Math.round((n - Date.now()) / 1000));  // epoch ms
+    if (n > 1e9) return Math.max(0, Math.round(n - Date.now() / 1000));     // epoch seconds
+    return n > 0 ? Math.round(n) : null;                                    // a plain delta
+  }
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, Math.round((at - Date.now()) / 1000)) : null;
+};
+/* Which limit a 429 was. Plain wording in the body decides when there is any,
+   the headers decide when they parse, and the fallback is the throttle.
+   `remaining` is logged and never branched on: PPT's header names aren't
+   documented anywhere in this repo, and the log is how we learn them without
+   a guess becoming load-bearing in the classifier. */
+const rateLimitInfo = (r, bodyText) => {
+  const after = asSeconds(r.headers.get("retry-after")) ?? asSeconds(r.headers.get("x-ratelimit-reset"));
+  // Number(null) is 0, so an absent header would log as "remaining=0" — the
+  // one reading most likely to send the next person debugging this back to the
+  // wrong conclusion. An absent header is unknown, not empty.
+  const remRaw = r.headers.get("x-ratelimit-remaining");
+  const rem = remRaw == null || remRaw === "" ? NaN : Number(remRaw);
+  const said = String(bodyText || "").slice(0, 300).toLowerCase();
+  /* Period words go first, and the reason is one phrasing: "daily rate limit
+     exceeded". Testing the throttle words first matched "rate limit" and never
+     looked at "daily", so the long cap read as the short one. A period word
+     only ever qualifies the long cap, so it wins outright; the generic throttle
+     words come next, which keeps "rate limit exceeded, 480 credits remaining"
+     a throttle rather than letting the bare word "credit" below it decide. */
+  const kind = /daily|per[- ]day|monthly|per[- ]month/.test(said) ? "budget"
+    : /per[- ]minute|rate limit|too many requests|slow down/.test(said) ? "throttle"
+    : /credit|quota|budget|upgrade/.test(said) ? "budget"
+    : after != null && after >= BUDGET_MIN_S ? "budget"
+    : "throttle";
+  return {
+    kind,
+    retryAfter: after == null ? THROTTLE_DEFAULT_S : Math.min(Math.max(after, 1), BUDGET_MIN_S),
+    remaining: Number.isFinite(rem) ? rem : null,
+  };
+};
 async function pptFetch(path, params) {
+  const started = Date.now();
   for (let attempt = 0; ; attempt++) {
     const u = new URL(`${PPT_BASE}/${path}`);
     for (const [k, v] of Object.entries(params)) if (v != null && v !== "") u.searchParams.set(k, v);
     const ctl = new AbortController();
-    // beat API Gateway's 30s cut-off, same reasoning as identifyCards
-    const t = setTimeout(() => ctl.abort(), 25_000);
+    /* Beat API Gateway's 30s cut-off, same reasoning as identifyCards — but
+       measured against what this request has already spent, not from zero. A
+       retry that waited out a throttle and then got its own full 25s could
+       overrun the gateway and come back as an opaque 5xx, which the client
+       counts as a transient failure rather than the throttle it was. */
+    const t = setTimeout(() => ctl.abort(), Math.min(25_000, Math.max(1_000, GW_BUDGET_MS + 5_000 - (Date.now() - started))));
     try {
       const r = await fetch(u, { headers: { authorization: `Bearer ${process.env.PPT_KEY}` }, signal: ctl.signal });
-      if (r.status === 429 && attempt === 0) {
-        const wait = Number(r.headers.get("retry-after"));
-        if (wait > 0 && wait <= 10) { await new Promise((ok) => setTimeout(ok, wait * 1000)); continue; }
+      if (r.status === 429) {
+        const info = rateLimitInfo(r, await r.text().catch(() => ""));
+        console.log(`ppt 429 ${path}: kind=${info.kind} retryAfter=${info.retryAfter} remaining=${info.remaining ?? "?"}`);
+        /* Only a wait that fits inside this request can be absorbed here — the
+           gateway hangs up at 30s and the fetch above gives up at 25, so a
+           60-second throttle is not something the Lambda can sit out. It goes
+           back to the client with its retryAfter instead, and the client is
+           what pauses the run and picks it up again. */
+        const wait = info.kind === "throttle" ? info.retryAfter : 0;
+        if (attempt === 0 && wait > 0 && Date.now() - started + wait * 1000 < GW_BUDGET_MS) {
+          await new Promise((ok) => setTimeout(ok, wait * 1000));
+          continue;
+        }
+        const e = new Error(`ppt HTTP 429 (${info.kind})`);
+        e.status = 429; e.kind = info.kind; e.retryAfter = info.retryAfter;
+        throw e;
       }
       if (!r.ok) { const e = new Error(`ppt HTTP ${r.status}`); e.status = r.status; throw e; }
       return await r.json();
@@ -116,13 +206,13 @@ async function pptCards(params) {
 }
 
 /* --- the card-data cache ------------------------------------------------ */
-/* Set dumps, the set list and price history live in the same DynamoDB table
-   as the ledger, under their own ids ("set:en:base set", "sets:jp",
-   "hist:en:1234:90"). A Lambda's in-memory Map dies with its container, and
-   every cold start would otherwise re-buy the same set at its full card
-   count in credits. The item stores the JSON as a string so the 400 KB size
-   guard is exact; anything over the cap stays memory-only — caching must
-   never fail a request. */
+/* Set dumps, the set list, price history and eBay comps live in the same
+   DynamoDB table as the ledger, under their own ids ("set:en:base set",
+   "sets:jp", "hist:en:1234:90", "graded:en:id:558123"). A Lambda's in-memory
+   Map dies with its container, and every cold start would otherwise re-buy the
+   same set at its full card count in credits. The item stores the JSON as a
+   string so the 400 KB size guard is exact; anything over the cap stays
+   memory-only — caching must never fail a request. */
 const memCache = new Map();
 async function cacheGet(id, ttl) {
   const m = memCache.get(id);
@@ -201,7 +291,14 @@ async function pptSetData(setName, lang = "en") {
      are TCGplayer names ("Koraidon - 014 (Pokemon Center Exclusive)"), so
      nameNum and the qualifier matching carry over unchanged. Per-printing
      prices come from the card's top-level `variants` map — prices.variants
-     and prices.conditions are deprecated upstream (removal Aug 2026). */
+     and prices.conditions are deprecated upstream (removal Aug 2026).
+     Worth being exact about what that does and doesn't threaten, because the
+     note used to imply a dependency that doesn't exist: nothing here reads
+     prices.variants or prices.conditions at all. What the code does still lean
+     on is `prices.market` (the fallback below, in slimCard, and — with no
+     variants fallback whatsoever — in gradedPrices) and `prices.primaryPrinting`
+     (priceHistory's choice of "the" line). Those are the ones to check against
+     the live docs; the two named in the deprecation are already unused. */
   const products = raw.map((c) => {
     const subs = {};
     for (const [printing, v] of Object.entries(c.variants || {})) {
@@ -320,6 +417,13 @@ async function priceHistory(productId, days, lang) {
     const s = seriesOf(v);
     if (s.length) byVariant[printing] = s;
   }
+  /* Without primaryPrinting this quietly falls to whichever printing enumerates
+     first, and a reverse holo's history then renders as the card's own line —
+     wrong data rather than absent data, which is the failure mode this file
+     works hardest to avoid. It can't be fixed from here (nothing else names the
+     primary), so make it visible instead. */
+  if (!c.prices?.primaryPrinting && Object.keys(byVariant).length > 1)
+    console.log(`history: no primaryPrinting for ${c.tcgPlayerId} — drawing ${Object.keys(byVariant)[0]} of ${Object.keys(byVariant).join("/")}`);
   const points = byVariant[c.prices?.primaryPrinting] || Object.values(byVariant)[0] || [];
   if (!points.length) return null;
   const body = {
@@ -374,7 +478,44 @@ async function resolveProductId(name, number, set, lang) {
    (ungraded solds), window (the date range the sales cover), image and url
    (TCGplayer CDN). */
 const GRADED_TTL = 24 * 3600 * 1000;
-const gradedCache = new Map();
+/* A miss expires sooner than a hit. resolveProductId swallows every error on
+   purpose ("dump unavailable — callers fall back to a name search"), so a miss
+   is not always a fact about the card: one failed set-dump fetch pushes a
+   perfectly matchable card down the fuzzy path, and if that can't pin it either
+   the sentinel would lock it to "no comps" for a full day on every device.
+   Hours, not a day — telling a real miss from a bad afternoon isn't worth
+   threading a flag back through that deliberate blanket catch. */
+const GRADED_NONE_TTL = 6 * 3600 * 1000;
+/* Comps live in the same DynamoDB table as the set dumps now, for exactly the
+   reason cacheGet already spells out — and /graded is the route where a
+   container-local Map hurt most, because it is the one billed per card rather
+   than per set: 2 credits for an exact id lookup, 6 for a name search. Every
+   cold start and every parallel container re-bought comps this Lambda had
+   already paid for, which is most of why a scan reached PPT's rate cap at all.
+   cacheGet keeps its own memCache in front, so a warm container is still
+   answering from memory.
+   The id has to be a bounded, stable string built out of whatever someone
+   typed into a ledger card. The caps below are generous rather than tight,
+   because the one collision that would actually hurt is two prints whose names
+   differ only past the cut — "Radiant Gardevoir (Prize Pack)" against the
+   plain 069/196 — and serving one card's solds as the other's is the failure
+   this file spends most of its comments preventing. foldSet runs before the
+   squash, so a qualifier survives into the id as "-prize-pack". */
+/* FNV-1a over the untouched identity. The squashed form below is for human
+   eyes on a DynamoDB console; this is what actually keeps two cards apart,
+   because the squash is lossy by design and lossy in a way that bites hardest
+   where the money is: [^a-z0-9]+ reduces every kana run to one "-", so
+   "ブラッキーex" and "リザードンex" both keyed to graded:jp:::-ex and Umbreon
+   served Charizard's eBay solds for a day. It also closes the truncation
+   collisions the slices below only make unlikely. */
+const keyHash = (s) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36);
+};
+const gradedId = (name, number, set, lang, pid) => (pid
+  ? `graded:${lang}:id:${String(pid).replace(/[^A-Za-z0-9]/g, "").slice(0, 24)}`
+  : `graded:${lang}:${foldSet(set).replace(/[^a-z0-9]+/g, "-").slice(0, 48)}:${normNum(number).toLowerCase().slice(0, 12)}:${foldSet(name).replace(/[^a-z0-9]+/g, "-").slice(0, 120)}:${keyHash(`${name}|${number}|${set}`)}`);
 // slim one salesByGrade bucket down to what the app renders; smartMarketPrice
 // is their recency-filtered figure — raw averages skew low/stale
 const slimBucket = (e) => {
@@ -386,15 +527,29 @@ const slimBucket = (e) => {
 async function gradedPrices(name, number, set, lang = "en", productId = "") {
   // the language is part of the identity of the card, so it is part of the key —
   // an English and a Japanese Umbreon are two cards with two sets of solds
-  const key = `${name}|${number}|${set}|${lang}|${productId}`.toLowerCase();
-  const hit = gradedCache.get(key);
-  if (hit && Date.now() - hit.t < GRADED_TTL) return hit.body;
+  const reqId = gradedId(name, number, set, lang, productId);
+  const hit = await cacheGet(reqId, GRADED_TTL);
+  if (hit && !hit.none) return hit;
+  // the sentinel carries its own stamp so it can expire sooner than a real hit
+  // without cacheGet having to hand back two different TTLs
+  if (hit?.none && Date.now() - hit.t < GRADED_NONE_TTL) return null;
   const ppt = (params) => pptCards({ ...params, includeEbay: "true", language: pptLang(lang) });
   // cheapest path first: the caller's stored productId, else resolve one
   // through the set dump — 2 credits (one card with eBay data) instead of a
   // 3-candidate name search's 6, and no chance of comps for the wrong card
   let cards = [], byId = false;
   const tcgpId = productId || await resolveProductId(name, number, set, lang);
+  /* A card the ledger has no productId for still resolves to one through the
+     set dump, and the same card looked up from a device that does carry the id
+     lands on a different key — two keys, and the same comps bought twice. One
+     more DynamoDB read closes that, and writes the answer back under the key
+     this caller asked with so the second lookup is a single read. */
+  let idId = "";
+  if (tcgpId && !productId) {
+    idId = gradedId("", "", "", lang, tcgpId);
+    const idHit = await cacheGet(idId, GRADED_TTL);
+    if (idHit) { await cachePut(reqId, idHit); return idHit.none ? null : idHit; }
+  }
   if (tcgpId) {
     const got = await ppt({ tcgPlayerId: String(tcgpId), limit: "1" });
     // trust but verify: if PPT ever ignores the filter, don't accept arbitrary cards
@@ -455,7 +610,13 @@ async function gradedPrices(name, number, set, lang = "en", productId = "") {
     match = pick(pool.filter((c) => qualNear(qualOf(c.name), wantQual))) || (wantQual ? null : pick(pool));
     if (!match) console.log(`graded: no confident match for "${name}" ${number || "(no number)"} ${set || ""} — ${cards.length} candidate(s):`, cards.map((c) => `${c.name} ${c.number ?? c.cardNumber ?? "?"}`).join(" | "));
   }
-  if (!match) return null;
+  /* "No confident match" is the most expensive answer this function has: it
+     means a 6-credit name search that pinned nothing down. It is also stable
+     for a card whose name, number and set haven't changed, so it is worth
+     remembering. The client already negative-caches this (GRADED_KEY in
+     App.jsx); not doing it here meant every device, and every cleared browser,
+     re-bought the same miss. */
+  if (!match) { await cachePut(reqId, { none: true, t: Date.now() }); return null; }
   // salesByGrade.psaN: smartMarketPrice is their recency-filtered market
   // price; raw averages skew low because they include months-old sales
   const grades = {}, sales = {};
@@ -488,7 +649,15 @@ async function gradedPrices(name, number, set, lang = "en", productId = "") {
     url: match.tcgPlayerUrl || null,
     rarity: match.rarity || null,
   };
-  gradedCache.set(key, { t: Date.now(), body });
+  await cachePut(reqId, body);
+  /* Only when the product itself answered. byId false means the id lookup came
+     back unusable and the *fuzzy name search* found this card instead — writing
+     that under the product's key asserts a match the product never returned,
+     and every later card carrying that productId would read it as its own
+     comps for a day, on every device. Same trap as resolveProductId's qualifier
+     check and the confident-match test above: an unverified match is not
+     allowed to speak for a card. */
+  if (idId && byId) await cachePut(idId, body);
   return body;
 }
 
@@ -630,7 +799,8 @@ export const handler = async (event) => {
       return res(200, { names });
     } catch (e) {
       console.error("sets route failed:", e);
-      return res(e.status === 429 ? 429 : 502, { error: e.status === 429 ? "daily card-data budget used" : "set list unavailable" });
+      if (e.status === 429) return rateRes(e, "daily card-data budget used", "the card database");
+      return res(502, { error: "set list unavailable" });
     }
   }
 
@@ -639,7 +809,8 @@ export const handler = async (event) => {
     try { const body = await setPrices(qp.set, lang); return body ? res(200, body) : res(404, { error: "set not found" }); }
     catch (e) {
       console.error("prices route failed:", e);
-      return res(e.status === 429 ? 429 : 502, { error: e.status === 429 ? "daily card-data budget used" : "price source unavailable" });
+      if (e.status === 429) return rateRes(e, "daily card-data budget used", "the card database");
+      return res(502, { error: "price source unavailable" });
     }
   }
 
@@ -648,7 +819,8 @@ export const handler = async (event) => {
     try { const body = await setCatalog(qp.set, lang); return body ? res(200, body) : res(404, { error: "set not found" }); }
     catch (e) {
       console.error("catalog route failed:", e);
-      return res(e.status === 429 ? 429 : 502, { error: e.status === 429 ? "daily card-data budget used" : "catalog source unavailable" });
+      if (e.status === 429) return rateRes(e, "daily card-data budget used", "the card database");
+      return res(502, { error: "catalog source unavailable" });
     }
   }
 
@@ -657,7 +829,8 @@ export const handler = async (event) => {
     try { return res(200, { cards: await cardSearch(qp.q, qp.set || "", qp.number || "", lang) }); }
     catch (e) {
       console.error("search route failed:", e);
-      return res(e.status === 429 ? 429 : 502, { error: e.status === 429 ? "daily card-data budget used" : "card search unavailable" });
+      if (e.status === 429) return rateRes(e, "daily card-data budget used", "the card database");
+      return res(502, { error: "card search unavailable" });
     }
   }
 
@@ -671,7 +844,7 @@ export const handler = async (event) => {
       return hasData ? res(200, body) : res(404, { error: "no graded comps" });
     } catch (e) {
       console.error("graded route failed:", e);
-      if (e.status === 429) return res(429, { error: "daily comps budget used" });
+      if (e.status === 429) return rateRes(e, "daily comps budget used", "eBay sold data");
       return res(502, { error: "graded price source unavailable" });
     }
   }
@@ -685,7 +858,7 @@ export const handler = async (event) => {
       return body ? res(200, body) : res(404, { error: "no price history" });
     } catch (e) {
       console.error("history route failed:", e);
-      if (e.status === 429) return res(429, { error: "daily card-data budget used" });
+      if (e.status === 429) return rateRes(e, "daily card-data budget used", "the card database");
       return res(502, { error: "price history unavailable" });
     }
   }

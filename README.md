@@ -95,6 +95,37 @@ message instead of spending credits they can't authenticate. There is no client
 key to configure: the PPT and Anthropic keys live on the Lambda
 (`aws/deploy.sh`).
 
+### What costs credits, and which wall you hit
+
+PPT bills by credit and always has — moving every card fact onto one source
+didn't remove the meter, PPT *is* the meter. Roughly:
+
+- **A card's eBay solds: ~2 credits**, when the card carries the TCGplayer
+  product id it was picked with. Without one it's 6, because the lookup falls
+  back to a fuzzy name search over three candidates.
+- **A whole-set price dump: the set's card count, once.** Every dump, price
+  history and comps lookup is cached in DynamoDB for 24h, so a second device —
+  or a Lambda cold start — re-reads them for free instead of re-buying them.
+- **The binder's price trends: ~2 credits per held card per day.**
+- **The grading scan:** one lookup per candidate card that isn't already fresh
+  within 3 days. It's the expensive button, which is why it goes
+  highest-value-first.
+
+Two different limits answer with the same HTTP status, and they mean opposite
+things:
+
+- **"Rate-limited"** is PPT's per-minute request cap. It clears in seconds, and
+  costs you nothing. A bulk run (*Refresh market prices*, the grading scan)
+  pauses, counts down in its own progress line, and carries on where it left
+  off; a single lookup says to try again in a moment.
+- **"Daily budget used up"** means the day's credits really are gone, and only
+  the daily reset brings them back. A scan stops and reports how many cards are
+  still waiting; run it again after the reset and it picks those up.
+
+Before these were told apart, both said *come back tomorrow* — so a ten-second
+throttle mid-scan looked like a spent day's budget and threw away the rest of
+the run.
+
 ## Card scanner (Scan tab)
 
 Photograph a card and the **Scan** tab fills in its name, collector number, set
