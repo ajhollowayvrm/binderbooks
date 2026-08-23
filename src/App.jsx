@@ -831,6 +831,31 @@ function migrate(s) {
     s.rips = (s.rips || []).map((r) => ({ ...r, hits: (r.hits || []).map(jpFix) }));
     s.version = 7;
   }
+  /* v8: rip pulls used to enter the binder at basis 0 — the rip carried the
+     cost, so a pull that later sold showed no profit at all. Now a pull's
+     basis is its slice of the rip's cost (ripHitShares). Stamp costAuto on
+     every rip pull that never had a cost entered by hand, write the shares —
+     Sold rows included, one time only: their 0 was a placeholder, never a
+     recorded cost, so this writes history down rather than restating it —
+     and carry the share onto the sale lines that reference them, which is
+     what makes those past sales finally show a profit. */
+  if (s.version < 8) {
+    s.inventory = s.inventory.map((c) => (c.hitId && !(Number(c.cost) > 0) ? { ...c, costAuto: true } : c));
+    const shares = {};
+    (s.rips || []).forEach((r) => Object.assign(shares, ripHitShares(r, s.buys)));
+    s.inventory = s.inventory.map((c) => (c.costAuto && shares[c.hitId] != null ? { ...c, cost: shares[c.hitId] } : c));
+    const byInv = new Map(s.inventory.map((c) => [c.id, c]));
+    s.sales = (s.sales || []).map((x) => ({ ...x, cards: (x.cards || []).map((l) => {
+      const c = l.invId ? byInv.get(l.invId) : null;
+      return c?.hitId && !(Number(l.basis) > 0) ? { ...l, basis: invBasis(c) } : l;
+    }) }));
+    s.version = 8;
+  }
+  // every load, not only v8: a pull's basis is derived, so shares that moved
+  // while this device was away (a buy corrected elsewhere, a ledger synced in
+  // from before this existed) re-derive here. Sold rows and hand-entered
+  // bases keep their numbers — syncRipBasis skips both.
+  s.inventory = syncRipBasis(s);
   // safety net: collapse any exact-duplicate buys on every load
   const seenBuy = new Set();
   s.buys = (s.buys || []).filter((b) => { const k = `${b.item}|${buySig(b)}`; if (seenBuy.has(k)) return false; seenBuy.add(k); return true; });
@@ -841,29 +866,63 @@ export const fmt = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString(
 export const ripValue = (r) => (r.hits || []).reduce((s, h) => s + (Number(h.value) || 0), 0);
 export const ripCostOf = (r, buys) => (r.buyId ? (Number((buys || []).find((b) => b.id === r.buyId)?.cost) || 0) : (Number(r.cost) || 0));
 export const ripPL = (r, buys) => ripValue(r) - ripCostOf(r, buys);
+/* What one hit cost: its slice of the rip's cost, weighted by pull value —
+   the $500 chase out of a $300 box carries most of the box, a $2 filler
+   almost none. The slices always sum back to the rip's cost (stray rounding
+   cents land on the biggest hit), so the binder's cost basis stays equal to
+   the cash that actually went out. Hits with no value split evenly. */
+export function ripHitShares(r, buys) {
+  const hits = r.hits || [];
+  const out = {};
+  hits.forEach((h) => { out[h.id] = 0; });
+  const cost = ripCostOf(r, buys);
+  if (!hits.length || !cost) return out;
+  const total = ripValue(r);
+  hits.forEach((h) => { out[h.id] = Math.round((total > 0 ? (cost * (Number(h.value) || 0)) / total : cost / hits.length) * 100) / 100; });
+  const drift = Math.round((cost - hits.reduce((a, h) => a + out[h.id], 0)) * 100) / 100;
+  if (drift) { const big = hits.reduce((a, h) => (out[h.id] > out[a.id] ? h : a), hits[0]); out[big.id] = Math.round((out[big.id] + drift) * 100) / 100; }
+  return out;
+}
+/* Re-derive every rip pull's basis from its rip. A pull's basis is a derived
+   number, not an entered one, so any change that moves a share — a hit
+   logged, edited or deleted, a linked buy's cost corrected — funnels through
+   here. Two kinds of rows keep their own number: a Sold row (it records what
+   the card cost when it changed hands, and a later edit to the rip must not
+   restate that), and a row whose basis the user typed over (costAuto cleared —
+   their number is a statement about what it cost, and it's theirs). */
+function syncRipBasis(s) {
+  const shares = {};
+  (s.rips || []).forEach((r) => Object.assign(shares, ripHitShares(r, s.buys)));
+  return (s.inventory || []).map((c) => (c.costAuto && c.status !== "Sold" && shares[c.hitId] != null && shares[c.hitId] !== (Number(c.cost) || 0)
+    ? { ...c, cost: shares[c.hitId] }
+    : c));
+}
 /* a logged hit is a card you now hold — mirror it into inventory as a rip pull.
-   Basis stays 0 because the rip already carries the cost, which is the whole
-   point of logging one: a lot of slabs bought together is one cost against the
-   cards it produced, the same shape as packs against what came out of them.
+   Its basis is its share of what the rip cost (see ripHitShares), which is the
+   whole point of logging one: a lot of slabs bought together is one cost against
+   the cards it produced, the same shape as packs against what came out of them —
+   and a pull that later sells shows a real profit against that share.
    `lang` and `grade` ride along, because a JP booster box yields JP cards and a
    lot of slabs yields graded ones — neither is priced like an English raw. */
 function addHitToState(s, ripId, hit) {
   const h = { id: uid(), ...hit };
   const rip = s.rips.find((r) => r.id === ripId);
-  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", tcgplayerId: h.tcgplayerId || "", productId: h.productId || "", lang: cardLang(h), grade: h.grade || "Raw", status: "Kept", source: "Rip pull", cost: 0, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
-  return { rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r)), inventory: [inv, ...(s.inventory || [])] };
+  const inv = { id: uid(), hitId: h.id, name: h.name, set: h.set || "", number: h.number || "", variant: h.variant || "", tcgplayerId: h.tcgplayerId || "", productId: h.productId || "", lang: cardLang(h), grade: h.grade || "Raw", status: "Kept", source: "Rip pull", cost: 0, costAuto: true, gradingCost: 0, gradingShip: 0, value: Number(h.value) || 0, date: rip?.date || today() };
+  const rips = s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), h] } : r));
+  // a new hit moves every sibling's share, so the whole rip re-derives
+  return { rips, inventory: syncRipBasis({ ...s, rips, inventory: [inv, ...(s.inventory || [])] }) };
 }
 /* Editing a hit corrects the card it names, so the inventory row it produced
    has to follow. A Sold row does not: it is the record of what actually
    changed hands, and rewriting it to match a later correction would restate
    history. Same reasoning, and the same guard, as delHit. */
 function updHitInState(s, ripId, hit) {
-  return {
-    rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: (r.hits || []).map((h) => (h.id === hit.id ? { ...h, ...hit } : h)) } : r)),
-    inventory: (s.inventory || []).map((c) => (c.hitId === hit.id && c.status !== "Sold"
-      ? { ...c, name: hit.name, set: hit.set || "", number: hit.number || "", variant: hit.variant || "", tcgplayerId: hit.tcgplayerId || "", productId: hit.productId || "", lang: cardLang(hit), grade: hit.grade || "Raw", value: Number(hit.value) || 0 }
-      : c)),
-  };
+  const rips = s.rips.map((r) => (r.id === ripId ? { ...r, hits: (r.hits || []).map((h) => (h.id === hit.id ? { ...h, ...hit } : h)) } : r));
+  const inventory = (s.inventory || []).map((c) => (c.hitId === hit.id && c.status !== "Sold"
+    ? { ...c, name: hit.name, set: hit.set || "", number: hit.number || "", variant: hit.variant || "", tcgplayerId: hit.tcgplayerId || "", productId: hit.productId || "", lang: cardLang(hit), grade: hit.grade || "Raw", value: Number(hit.value) || 0 }
+    : c));
+  // an edited value moves every hit's share of the cost, not just this one's
+  return { rips, inventory: syncRipBasis({ ...s, rips, inventory }) };
 }
 
 /* the three ways an identified card enters the ledger. Each takes a card in
@@ -1689,10 +1748,12 @@ function Rips({ state, patch }) {
   }), [patch]);
   const addHit = useCallback((ripId, hit) => patch((s) => addHitToState(s, ripId, hit)), [patch]);
   const updHit = useCallback((ripId, hit) => patch((s) => updHitInState(s, ripId, hit)), [patch]);
-  const delHit = useCallback((ripId, hitId) => patch((s) => ({
-    rips: s.rips.map((r) => (r.id === ripId ? { ...r, hits: r.hits.filter((h) => h.id !== hitId) } : r)),
-    inventory: (s.inventory || []).filter((c) => !(c.hitId === hitId && c.status !== "Sold")),
-  })), [patch]);
+  const delHit = useCallback((ripId, hitId) => patch((s) => {
+    const rips = s.rips.map((r) => (r.id === ripId ? { ...r, hits: r.hits.filter((h) => h.id !== hitId) } : r));
+    const inventory = (s.inventory || []).filter((c) => !(c.hitId === hitId && c.status !== "Sold"));
+    // the departed hit's slice of the cost redistributes across what's left
+    return { rips, inventory: syncRipBasis({ ...s, rips, inventory }) };
+  }), [patch]);
   const onToggle = useCallback((id) => setOpen((o) => (o === id ? null : id)), []);
   const sorted = useMemo(() => [...state.rips].sort(byDateDesc), [state.rips]);
   // Only the expanded rip renders its hit list, so only its hits need art —
@@ -2103,8 +2164,10 @@ function Buys({ state, patch }) {
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState(null);
   const add = useCallback((b) => { patch((s) => ({ buys: [{ id: uid(), ...b }, ...s.buys] })); setAdding(false); }, [patch]);
-  const upd = useCallback((b) => { patch((s) => ({ buys: s.buys.map((x) => (x.id === b.id ? { ...x, ...b, seed: false } : x)) })); setEditId(null); }, [patch]);
-  const del = useCallback((id) => patch((s) => ({ buys: s.buys.filter((b) => b.id !== id) })), [patch]);
+  // a rip linked to a buy prices its pulls off the buy's cost, so a corrected
+  // or deleted buy re-derives those pulls' bases too
+  const upd = useCallback((b) => { patch((s) => { const buys = s.buys.map((x) => (x.id === b.id ? { ...x, ...b, seed: false } : x)); return { buys, inventory: syncRipBasis({ ...s, buys }) }; }); setEditId(null); }, [patch]);
+  const del = useCallback((id) => patch((s) => { const buys = s.buys.filter((b) => b.id !== id); return { buys, inventory: syncRipBasis({ ...s, buys }) }; }), [patch]);
   const toggleRipped = useCallback((id) => patch((s) => ({ buys: s.buys.map((b) => (b.id === id ? { ...b, ripped: !b.ripped } : b)) })), [patch]);
   const onEdit = useCallback((id) => { setEditId(id); setAdding(false); }, []);
   const onCancelEdit = useCallback(() => setEditId(null), []);
@@ -2747,7 +2810,12 @@ function Inventory({ state, patch }) {
   const [refreshing, setRefreshing] = useState(false);
   const [gradeOpen, setGradeOpen] = useState(false);
   const add = (c) => { patch((s) => ({ inventory: [{ id: uid(), ...c }, ...(s.inventory || [])] })); setAdding(false); };
-  const upd = useCallback((c) => patch((s) => ({ inventory: s.inventory.map((x) => (x.id === c.id ? { ...x, ...c } : x)) })), [patch]);
+  // typing a different basis onto a rip pull is a statement about what it
+  // cost — the card is the user's to price from then on, so the rip stops
+  // deriving it (costAuto clears). Every other edit leaves the wiring alone.
+  const upd = useCallback((c) => patch((s) => ({ inventory: s.inventory.map((x) => (x.id === c.id
+    ? { ...x, ...c, ...(x.costAuto && c.cost != null && (Number(c.cost) || 0) !== (Number(x.cost) || 0) ? { costAuto: false } : {}) }
+    : x)) })), [patch]);
   const del = useCallback((id) => patch((s) => ({ inventory: s.inventory.filter((c) => c.id !== id) })), [patch]);
   const onOpenRow = useCallback((id) => setViewId(id), []);
   // Send a submission: flip the cards, stamp each one's share of the cost, and
@@ -3561,6 +3629,7 @@ export function InvForm({ initial, onSave, onCancel }) {
         </div>
       </>}
       <div className="cl-grid2"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={setValue} /></Field></div>
+      {initial?.costAuto && <div className="cl-gradeest-note">This basis is the card's slice of what its rip cost, split across the pulls by value, so selling it shows a real profit. Typing a different number makes the basis yours — the rip stops updating it.</div>}
       {slab && <div className="cl-field">
         <div className="cl-gradeest-head"><span>Value it at what a {f.grade} slab sells for</span><button className="cl-link" disabled={!f.name || slabMsg === "loading"} onClick={pullSlab}>{slabMsg === "loading" ? "Pulling…" : "Pull slab price"}</button></div>
         {slabMsg && <div className="cl-gradeest-note">{slabMsg === "loading" ? `Pulling eBay ${f.grade} sold comps…` : slabMsg}</div>}
