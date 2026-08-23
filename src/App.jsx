@@ -161,7 +161,10 @@ const DESC_RARITY = { full: ["illustration", "ultra", "full"], art: ["illustrati
 const parseQuery = (q) => {
   const sets = cachedSets();
   // "143/190" printed on a card means card 143 — the denominator is set size
-  let tokens = q.replace(/(\d+)\s*\/\s*\d+/g, "$1").replace(/[^\w\s-]/g, " ").trim().split(/\s+/).filter(Boolean);
+  // an apostrophe is part of the name, not a separator — "N's Reshiram" split
+  // into "N", "s", "Reshiram" used to reach PPT as "N s Reshiram", and PPT
+  // ranked plain Reshiram cards over the one the stray "s" was diluting
+  let tokens = q.replace(/(\d+)\s*\/\s*\d+/g, "$1").replace(/[‘’]/g, "'").replace(/[^\w\s'-]/g, " ").trim().split(/\s+/).filter(Boolean);
   // a set name in the query becomes a set filter ("ampharos chaos rising")
   let setFilter = null;
   if (sets?.length) {
@@ -1883,11 +1886,12 @@ const noMatchMsg = (set, q) =>
 
 function CardSearch({
   value, onChange,                 // controlled text; omit both for an internal box
-  onPick,                          // (card) => void — omit in a panel that only shows actions
+  onPick,                          // (card) => void — omit in a panel that only opens a detail view
   placeholder = "Search a card — name, number, or set",
   panel = false,                   // Lookup shows a list; the forms show a popover
-  actions,                         // panel only: (card) => JSX rendered under each row
   extra = NO_EXTRA,                // panel only: cards from another source, listed first
+  onOpen,                          // panel only: (card) => void — tapping a row body
+                                    // opens a read-only detail view; omit for an inert row
 }) {
   const [own, setOwn] = useState("");
   const controlled = value !== undefined;
@@ -1929,7 +1933,9 @@ function CardSearch({
   const runDatabase = async (text) => {
     const { q: term, set: setFilter, number, descriptors, first } = parseQuery(text);
     const want = [...new Set(descriptors.flatMap((d) => DESC_RARITY[d] || []))];
-    const found = await searchCards({ q: term, set: setFilter, number });
+    // a set named in the text itself wins over the picker, same as parseQuery's
+    // own rule that in-query signals override everything else
+    const found = await searchCards({ q: term, set: setFilter || set, number });
     const list = found.sort((a, b) => {
       const av = a.name.toLowerCase().startsWith(first) ? 0 : 1;
       const bv = b.name.toLowerCase().startsWith(first) ? 0 : 1;
@@ -1941,14 +1947,14 @@ function CardSearch({
       }
       return (cardPrice(b) || 0) - (cardPrice(a) || 0);
     }).slice(0, 14);
-    qcacheSet(text.toLowerCase(), list);
+    qcacheSet(`${set}|${text.toLowerCase()}`, list);
     return list;
   };
 
   useEffect(() => {
     setFailed(false);
     if (typed.length < CARD_SEARCH_MIN) { setRemote([]); setBusy(false); return; }
-    const cached = qcacheGet(typed.toLowerCase());
+    const cached = qcacheGet(`${set}|${typed.toLowerCase()}`);
     if (cached) { setRemote(cached); setBusy(false); return; }
     let live = true;
     setBusy(true);
@@ -1960,7 +1966,7 @@ function CardSearch({
         (e) => { if (live) { setRemote([]); setBusy(false); setFailed(e.status === 401 ? "token" : true); } });
     }, 900);
     return () => { live = false; clearTimeout(t); };
-  }, [typed]);
+  }, [typed, set]);
 
   const rows = useMemo(() => {
     const seen = new Set();
@@ -2021,8 +2027,8 @@ function CardSearch({
 
   const choose = (c) => { skip.current = true; setOpen(false); onPick?.(c); };
 
-  /* One row, one markup, both modes. The printing chip marks a row that
-     came from the catalog and therefore carries a SKU. */
+  /* One row, one markup, for the popover forms use. The printing chip marks
+     a row that came from the catalog and therefore carries a SKU. */
   const rowBody = (r) => {
     const c = r.card;
     const price = cardPrice(c, c.variant);
@@ -2036,6 +2042,26 @@ function CardSearch({
         </div>
       </div>
       <div className="cl-ac-price">{price != null ? fmt(price) : "—"}</div>
+    </>);
+  };
+  /* Lookup's panel: a card-art grid, same shape as the Binder — the whole
+     point of a lookup is deciding whether the card in hand is this exact
+     printing, and a thumbnail row makes that call blind. */
+  const panelBody = (r) => {
+    const c = r.card;
+    const price = cardPrice(c, c.variant);
+    return (<>
+      <span className="cl-cs-artwrap">
+        {c.images?.small ? <FadeImg src={c.images.small} alt="" className="cl-cs-img" loading="lazy" /> : <span className="cl-cs-ph cl-shimmer" />}
+      </span>
+      <span className="cl-cs-cap">
+        <span className="cl-cs-name">{c.name}</span>
+        <span className="cl-cs-line">
+          {r.printing && <span className="cl-chip">{VARIANT_SHORT[r.printing] || r.printing}</span>}
+          <span>{[c.set?.name, c.number, c.rarity].filter(Boolean).join(" · ")}</span>
+        </span>
+        <span className="cl-cs-price">{price != null ? fmt(price) : "—"}</span>
+      </span>
     </>);
   };
 
@@ -2072,13 +2098,14 @@ function CardSearch({
     <div className="cl-cs">
       {setPicker}
       <div className="cl-search">{box}{q && <button className="cl-search-btn" onClick={() => setQ("")}><X size={15} /></button>}</div>
-      {rows.length > 0 && <div className="cl-cs-rows">
+      {rows.length > 0 && <div className="cl-cs-grid">
         {rows.map((r) => (
           <div key={r.key} className="cl-cs-card cl-row-enter">
             {onPick
-              ? <button className="cl-ac-item" onClick={() => choose(r.card)}>{rowBody(r)}</button>
-              : <div className="cl-ac-item as-row">{rowBody(r)}</div>}
-            {actions && <div className="cl-lk-actions">{actions(r.card)}</div>}
+              ? <button className="cl-cs-item" onClick={() => choose(r.card)}>{panelBody(r)}</button>
+              : onOpen
+                ? <button className="cl-cs-item" onClick={() => onOpen(r.card)}>{panelBody(r)}</button>
+                : <div className="cl-cs-item as-row">{panelBody(r)}</div>}
           </div>
         ))}
       </div>}
@@ -3704,6 +3731,84 @@ const cmErrMsg = (e) => (e.status === 401 ? NO_TOKEN_MSG
   : e.status === 429 ? "Daily eBay-comps budget is used up — sold data comes back tomorrow."
   : e.status === 404 ? "No recent eBay solds found for this card."
   : "eBay sold data is unavailable right now.");
+/* Every PPT-backed fact about one card, shared by CardModal (a ledger card)
+   and CardPriceModal (a bare search result) — neither reads anything past
+   `identity`, so this owns nothing ledger-specific. Pulls four slots in
+   parallel through the Lambda: the whole-set dump for a live market price,
+   /search for the card image/details, /graded for recent eBay solds (raw +
+   slabbed), and /history for the price line. */
+function useCardMarketData(identity, variant) {
+  const { id, name, set, number, productId, lang } = identity;
+  const [match, setMatch] = useState(null);   // /search match: null = looking, false = none found
+  const [liveSet, setLiveSet] = useState(null);     // market from the set dump, keyed on the card's own set + number
+  const [liveMatch, setLiveMatch] = useState(null); // market off the /search hit — a fuzzy guess, so it ranks below the set dump
+  const [comps, setComps] = useState({ state: "loading" }); // /graded body
+  const [hist, setHist] = useState(null);     // /history body: null = looking, false = none
+  useEffect(() => {
+    let ok = true;
+    setMatch(null); setLiveMatch(null); setComps({ state: "loading" }); setHist(null);
+    // three identity slots, fired together — each fills as it lands. The set
+    // dump price has its own effect below, keyed on the printing too. The two
+    // market sources are ranked, not raced: the set dump answers for the
+    // card's own set and number, the /search hit is a fuzzy guess.
+    (async () => {
+      // the set catalog the binder already warmed carries this card's art —
+      // read it first so the caller never says "no image" for a card whose
+      // tile is showing one
+      if (set) {
+        const row = imageInSet(await fetchSetCatalog(set, lang), identity);
+        if (ok && row?.img) setMatch((m) => m || { images: { small: row.img }, rarity: row.rarity, set: { name: set }, number: row.num });
+      }
+      let hit = await lookupCardMatch(identity);
+      if (!ok) return;
+      // a card pinned to a product takes no sibling's picture, set, or price
+      if (hit && productId && hit.productId && String(hit.productId) !== String(productId)) hit = null;
+      setMatch((m) => hit || m || false);
+      if (!hit) return;
+      let v = cardPrice(hit, variant);
+      // caller's card missing set/number: the match names them, so its set dump can still price it
+      if (v == null && hit.set?.name && hit.number && !(set && number)) {
+        const m = await fetchSetPrices(hit.set.name, false, lang);
+        v = subPrice(m?.[normNum(hit.number)], variant);
+      }
+      if (ok && v != null) setLiveMatch(v);
+    })();
+    (async () => {
+      try { const r = await fetchGradedComps(name, set, number, lang, productId || ""); if (ok) setComps({ state: "ok", data: r }); }
+      catch (e) { if (ok) setComps({ state: "err", status: e.status || 0, kind: e.kind }); }
+    })();
+    (async () => {
+      try {
+        const h = await cardFetch("history", { productId: productId || "", name: productId ? "" : name, set: productId ? "" : set, number: productId ? "" : number, lang: lang === "jp" ? "jp" : "", days: "90" });
+        if (ok) setHist(h?.points?.length > 1 ? h : false);
+      } catch { if (ok) setHist(false); } // 401/404/429 alike: the section just doesn't render
+    })();
+    return () => { ok = false; };
+  // identity, not id alone — a rename or a set/number edit changes what this
+  // is. The printing is not identity: a pill tap must not re-spend the
+  // history and graded credits, so `variant` is left out here on purpose.
+  }, [id, name, set, number, productId, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the set dump is cached a day, so re-reading it per printing is free
+  useEffect(() => {
+    let ok = true;
+    setLiveSet(null);
+    (async () => {
+      if (!set || !number) return;
+      const m = await fetchSetPrices(set, false, lang);
+      const v = subPrice(m?.[normNum(number)], variant);
+      if (ok && v != null) setLiveSet(v);
+    })();
+    return () => { ok = false; };
+  }, [id, set, number, variant, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const data = comps.data;
+  const img = (match && match.images?.small) || data?.image || null;
+  // the /search hit carries every printing's price, so it is re-read for the
+  // current printing here; `liveMatch` only covers the set-dump fallback above
+  const market = liveSet ?? (match ? cardPrice(match, variant) : null) ?? liveMatch ?? data?.market ?? null;
+  const rarity = match?.rarity || data?.rarity || "";
+  return { match, comps, hist, data, img, market, rarity };
+}
 function CardModal({ card, onClose, onSave, onDelete, onValue }) {
   // leaving is animated too: `closing` plays the reverse of the entrance,
   // then the real onClose unmounts. Reduced motion skips straight out.
@@ -3717,68 +3822,10 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
     setClosing(true);
     setTimeout(onClose, 150);
   }, [onClose]);
-  const [match, setMatch] = useState(null);   // /search match: null = looking, false = none found
-  const [liveSet, setLiveSet] = useState(null);     // market from the set dump, keyed on the ledger's own set + number
-  const [liveMatch, setLiveMatch] = useState(null); // market off the /search hit — a fuzzy guess, so it ranks below the set dump
-  const [comps, setComps] = useState({ state: "loading" }); // /graded body
-  const [hist, setHist] = useState(null);     // /history body: null = looking, false = none
-  useEffect(() => {
-    let ok = true;
-    setMatch(null); setLiveMatch(null); setComps({ state: "loading" }); setHist(null);
-    const lang = cardLang(card);
-    // three identity slots, fired together — each fills as it lands. The set
-    // dump price has its own effect below, keyed on the printing too. The two
-    // market sources are ranked, not raced: the set dump answers for the
-    // ledger's own set and number, the /search hit is a fuzzy guess.
-    (async () => {
-      // the set catalog the binder already warmed carries this card's art —
-      // read it first so the modal never says "no image" for a card whose
-      // tile is showing one
-      if (card.set) {
-        const row = imageInSet(await fetchSetCatalog(card.set, lang), card);
-        if (ok && row?.img) setMatch((m) => m || { images: { small: row.img }, rarity: row.rarity, set: { name: card.set }, number: row.num });
-      }
-      let hit = await lookupCardMatch(card);
-      if (!ok) return;
-      // a card pinned to a product takes no sibling's picture, set, or price
-      if (hit && card.productId && hit.productId && String(hit.productId) !== String(card.productId)) hit = null;
-      setMatch((m) => hit || m || false);
-      if (!hit) return;
-      let v = cardPrice(hit, card.variant);
-      // ledger card missing set/number: the match names them, so its set dump can still price it
-      if (v == null && hit.set?.name && hit.number && !(card.set && card.number)) {
-        const m = await fetchSetPrices(hit.set.name, false, lang);
-        v = subPrice(m?.[normNum(hit.number)], card.variant);
-      }
-      if (ok && v != null) setLiveMatch(v);
-    })();
-    (async () => {
-      try { const r = await fetchGradedComps(card.name, card.set, card.number, lang, card.productId || ""); if (ok) setComps({ state: "ok", data: r }); }
-      catch (e) { if (ok) setComps({ state: "err", status: e.status || 0, kind: e.kind }); }
-    })();
-    (async () => {
-      try {
-        const h = await cardFetch("history", { productId: card.productId || "", name: card.productId ? "" : card.name, set: card.productId ? "" : card.set, number: card.productId ? "" : card.number, lang: lang === "jp" ? "jp" : "", days: "90" });
-        if (ok) setHist(h?.points?.length > 1 ? h : false);
-      } catch { if (ok) setHist(false); } // 401/404/429 alike: the section just doesn't render
-    })();
-    return () => { ok = false; };
-  // an edit in the modal can change what the card is — reload on identity, not
-  // just id. The printing is not identity: a pill tap must not re-spend the
-  // history and graded credits, so `variant` is left out here on purpose.
-  }, [card.id, card.name, card.set, card.number, card.productId, card.grade, card.lang]); // eslint-disable-line react-hooks/exhaustive-deps
-  // the set dump is cached a day, so re-reading it per printing is free
-  useEffect(() => {
-    let ok = true;
-    setLiveSet(null);
-    (async () => {
-      if (!card.set || !card.number) return;
-      const m = await fetchSetPrices(card.set, false, cardLang(card));
-      const v = subPrice(m?.[normNum(card.number)], card.variant);
-      if (ok && v != null) setLiveSet(v);
-    })();
-    return () => { ok = false; };
-  }, [card.id, card.set, card.number, card.variant, card.lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { match, comps, hist, data, img, market, rarity } = useCardMarketData(
+    { id: card.id, name: card.name, set: card.set || "", number: card.number || "", productId: card.productId || "", lang: cardLang(card) },
+    card.variant
+  );
   useEffect(() => {
     // Escape backs out one layer: an open edit form first, the modal second,
     // so a half-typed edit is never thrown away by the key that closes the sheet
@@ -3789,15 +3836,9 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
   }, [close, editing, confirmDel]);
 
-  const data = comps.data;
-  const img = (match && match.images?.small) || data?.image || null;
-  // the /search hit carries every printing's price, so it is re-read for the
-  // current printing here; `liveMatch` only covers the set-dump fallback above
-  const market = liveSet ?? (match ? cardPrice(match, card.variant) : null) ?? liveMatch ?? data?.market ?? null;
   const value = Number(card.value) || 0;
   const basis = invBasis(card);
   const unreal = value - basis;
-  const rarity = match?.rarity || data?.rarity || "";
   /* What this card is worth, and it is not always the TCGplayer market price.
      A card in a slab is worth what that slab sells for, so it reads its own
      grade's sold bucket — and if no one has sold one lately there is no honest
@@ -3956,6 +3997,126 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
   );
 }
 
+/* Read-only price/history/comps view for a bare search result — the
+   PriceCharting/TCGplayer-style "just look" path CardModal can't offer,
+   since CardModal needs a ledger record (cost, status, grade) a card
+   nobody has bought yet doesn't have. `card` is a search-result shape
+   (slimCard/catalogEntryCard/catalogCard) — its `set` is `{ name }`, not
+   the ledger's plain string, so this never touches `card.set` directly. */
+function CardPriceModal({ card, onClose, onBuy, onKeep, onHit, flash }) {
+  const [closing, setClosing] = useState(false);
+  const close = useCallback(() => {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return onClose();
+    setClosing(true);
+    setTimeout(onClose, 150);
+  }, [onClose]);
+  const lang = cardLang(card);
+  const pricedVariants = VARIANTS.filter((v) => card.tcgplayer?.prices?.[PTCG_VARIANT_KEY[v]]);
+  const [variant, setVariant] = useState(card.variant || pricedVariants[0] || "");
+  const { comps, hist, data, img, market, rarity } = useCardMarketData(
+    { id: card.id, name: card.name, set: card.set?.name || "", number: card.number || "", productId: card.productId || card.tcgplayerId || "", lang },
+    variant
+  );
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
+  }, [close]);
+
+  const headline = market != null ? { v: market, lab: `TCGplayer market${variant ? ` · ${variant}` : ""}` } : null;
+  const shownKeys = new Set(CM_COMPANIES.flatMap(([co]) => CM_GRADES.map((g) => bucketKey(co, g))));
+  const extras = Object.entries(data?.byGrade || {})
+    .flatMap(([k, b]) => {
+      if (shownKeys.has(k)) return [];
+      const m = k.match(/^([a-z]+)([\d_]+)$/);
+      return m ? [{ label: `${m[1].toUpperCase()} ${m[2].replace("_", ".")}`, ...b }] : [];
+    })
+    .sort((a, b) => b.price - a.price);
+  const anyGraded = Object.keys(data?.byGrade || {}).length > 0;
+  const mismatch = data && !compsMatch(data, card);
+  const tcgpUrl = data?.url || `https://www.tcgplayer.com/search/pokemon/product?q=${encodeURIComponent(`${card.name} ${card.number || ""}`.trim())}`;
+  const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(`pokemon ${isJP(card) ? "japanese " : ""}${card.name} ${card.number || ""}`.replace(/\s+/g, " ").trim())}&LH_Sold=1&LH_Complete=1`;
+  const rawMeta = data?.raw ? [
+    `${data.raw.count} sale${data.raw.count === 1 ? "" : "s"}`,
+    data.raw.median != null ? `median ${fmt(data.raw.median)}` : null,
+    data.raw.min != null && data.raw.max != null ? `${fmt(data.raw.min)} – ${fmt(data.raw.max)}` : null,
+  ].filter(Boolean).join(" · ") : "";
+
+  return (
+    <div className={"cl-modal-ov" + (closing ? " closing" : "")} onClick={close}>
+      <div className="cl-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <button className="cl-x cl-cm-close" onClick={close}><X size={16} /></button>
+        <div className="cl-cm-top">
+          {img
+            ? <FadeImg className="cl-cm-img" src={img} alt={card.name} />
+            : <div className={"cl-cm-img ph" + (comps.state === "loading" ? " cl-shimmer" : "")}>{comps.state === "loading" ? "loading…" : "no image found"}</div>}
+          <div className="cl-cm-head">
+            <div className="cl-cm-name">{card.name}</div>
+            <div className="cl-row-meta">{card.set?.name || data?.set || "set unknown"}{(card.number || data?.number) ? ` · ${card.number || data?.number}` : ""}{rarity ? ` · ${rarity}` : ""}</div>
+            {pricedVariants.length > 1 && <div className="cl-cm-variants" role="radiogroup" aria-label="Printing">
+              {pricedVariants.map((v) => <button key={v} role="radio" aria-checked={variant === v} className={"cl-pill" + (variant === v ? " on" : "")} onClick={() => { if (variant !== v) { haptic(); setVariant(v); } }}>{VARIANT_SHORT[v] || v}</button>)}
+            </div>}
+            <div className="cl-cm-mkt">
+              <div className="cl-cm-mkt-num">{headline ? fmt(headline.v) : "—"}</div>
+              <div className="cl-cm-mkt-lab">{headline ? headline.lab : `TCGplayer market${variant ? ` · ${variant}` : ""} — no data`}</div>
+            </div>
+            {(onBuy || onKeep || onHit) && <div className="cl-lk-actions" style={{ marginTop: 0 }}>
+              {onBuy && <button className="cl-mini" onClick={() => onBuy(card)}>+ Buy</button>}
+              {onKeep && <button className="cl-mini" onClick={() => onKeep(card)}>+ Keep</button>}
+              {onHit && <button className="cl-mini holo-border" onClick={() => onHit(card)}>+ Hit</button>}
+            </div>}
+            {flash && <div className="cl-flash">{flash}</div>}
+          </div>
+        </div>
+
+        {hist && <>
+          <div className="cl-cm-sec">Market price — last 90 days</div>
+          <PriceSpark points={hist.points} />
+        </>}
+
+        <div className="cl-cm-sec">Recent eBay solds — raw</div>
+        {comps.state === "loading" && <div className="cl-cm-note">Pulling eBay sold data…</div>}
+        {comps.state === "err" && <div className="cl-cm-note">{cmErrMsg(comps)}</div>}
+        {comps.state === "ok" && (data.raw
+          ? <div className="cl-cm-raw"><span className="cl-cm-raw-price">{fmt(data.raw.price)}{cmTrend(data.raw.trend)}</span><span className="cl-row-meta">{rawMeta}</span></div>
+          : <div className="cl-cm-note">No recent raw solds recorded.</div>)}
+
+        {comps.state === "ok" && <>
+          <div className="cl-cm-sec">Graded eBay solds</div>
+          {anyGraded ? <>
+            <div className="cl-cm-grid">
+              <span />
+              {CM_COMPANIES.map(([co, label]) => <span key={co} className="cl-cm-co">{label}</span>)}
+              {CM_GRADES.map((g) => (
+                <React.Fragment key={g}>
+                  <span className="cl-cm-g">{g}</span>
+                  {CM_COMPANIES.map(([co]) => {
+                    const b = data.byGrade?.[bucketKey(co, g)];
+                    return (
+                      <span key={co} className="cl-cm-cell">
+                        {b ? <><span className="cl-money">{fmt(b.price)}{cmTrend(b.trend)}</span><span className="cl-cm-cnt">{b.count} sold</span></> : <span className="cl-cm-none">—</span>}
+                      </span>);
+                  })}
+                </React.Fragment>
+              ))}
+            </div>
+            {extras.length > 0 && <div className="cl-cm-extra">{extras.map((x) => <span key={x.label} className="cl-chip">{x.label} {fmt(x.price)} · {x.count} sold</span>)}</div>}
+          </> : <div className="cl-cm-note">No graded sales recorded for this card.</div>}
+          {mismatch && <div className="cl-cm-note warn">{wrongCardMsg(data, card)} The prices below are that card's.</div>}
+          {data.window?.from && <div className="cl-cm-foot">Sold data {String(data.window.from).slice(0, 10)} → {String(data.window.to).slice(0, 10)} · pokemonpricetracker.com</div>}
+        </>}
+
+        <div className="cl-cm-links">
+          <a className="cl-mini" href={tcgpUrl} target="_blank" rel="noreferrer"><ExternalLink size={12} /> TCGplayer</a>
+          <a className="cl-mini" href={ebayUrl} target="_blank" rel="noreferrer"><ExternalLink size={12} /> eBay solds</a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ================================================================== */
 /* Binder: every held card as one image, grouped into a page per set —
    the shelf-of-binders view of the same rows Inventory lists as text.
@@ -3982,8 +4143,11 @@ function BinderGrid({ children }) {
    same list rather than in a second list of their own. */
 function Lookup({ state, patch }) {
   const [ripId, setRipId] = useState("");
-  const [flashes, setFlashes] = useState({});
-  const flash = (id, t) => { setFlashes((f) => ({ ...f, [id]: t })); setTimeout(() => setFlashes((f) => ({ ...f, [id]: null })), 1600); };
+  const [priceCard, setPriceCard] = useState(null); // tapped row, shown read-only — no ledger record needed
+  // one flash at a time: Buy/Keep/Hit now live inside the price modal, and
+  // only the card that modal shows can ever be the one just acted on
+  const [flashMsg, setFlashMsg] = useState("");
+  const flash = (msg) => { setFlashMsg(msg); setTimeout(() => setFlashMsg(""), 1600); };
 
   const sets = useSets();
   const [catSet, setCatSet] = useState("");
@@ -4023,12 +4187,12 @@ function Lookup({ state, patch }) {
   };
 
   const rip = ripId || state.rips[0]?.id;
-  const asBuy = (c) => { patch(addAsBuy(c)); flash(c.id, "Added to Buys"); };
-  const asKeep = (c) => { patch(addAsKeep(c)); flash(c.id, "Kept in inventory"); };
+  const asBuy = (c) => { patch(addAsBuy(c)); flash("Added to Buys"); };
+  const asKeep = (c) => { patch(addAsKeep(c)); flash("Kept in inventory"); };
   const asHit = (c) => {
-    if (!rip) { flash(c.id, "Make a rip first"); return; }
+    if (!rip) { flash("Make a rip first"); return; }
     patch(addAsHit(c, rip));
-    flash(c.id, "Added as hit");
+    flash("Added as hit");
   };
 
   return (
@@ -4042,14 +4206,7 @@ function Lookup({ state, patch }) {
         panel
         extra={catRows}
         placeholder="Search a card — e.g. 091, banette dusk, or reshiram stamped"
-        actions={(c) => (<>
-          <div className="cl-lk-actions" style={{ marginTop: 0 }}>
-            <button className="cl-mini" onClick={() => asBuy(c)}>+ Buy</button>
-            <button className="cl-mini" onClick={() => asKeep(c)}>+ Keep</button>
-            <button className="cl-mini holo-border" onClick={() => asHit(c)}>+ Hit</button>
-          </div>
-          {flashes[c.id] && <div className="cl-flash">{flashes[c.id]}</div>}
-        </>)}
+        onOpen={setPriceCard}
       />
       <div className="cl-cat">
         <div className="cl-row-meta">Missing from both? A new set reaches TCGplayer's catalog first — name it here and its cards join the list above:</div>
@@ -4061,6 +4218,7 @@ function Lookup({ state, patch }) {
         <datalist id="bb-set-list">{(sets || []).map((s) => <option key={s} value={s} />)}</datalist>
         {(catLoading || catMsg) && <div className="cl-import-msg">{catLoading ? "Reading TCGplayer's catalog…" : catMsg}</div>}
       </div>
+      {priceCard && <CardPriceModal card={priceCard} onClose={() => setPriceCard(null)} onBuy={asBuy} onKeep={asKeep} onHit={asHit} flash={flashMsg} />}
     </div>
   );
 }
@@ -4275,7 +4433,7 @@ function Fonts() {
        pill, ripped toggle, disabled) ease instead of snapping */
     .cl-tab, .cl-pill, .cl-x, .cl-save, .cl-cancel, .cl-link, .cl-row.click, .cl-hit.click,
     .cl-monthnav-btn, .cl-month-row, .cl-chip-x, .cl-reset-btn, .cl-addline,
-    .cl-ac-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
+    .cl-ac-item, .cl-cs-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
     .cl-del, .cl-search-btn, .cl-addbtn, .cl-reset-go {
       transition: color .15s ease, background-color .15s ease, border-color .15s ease, opacity .15s ease, transform .1s ease;
     }
@@ -4284,7 +4442,7 @@ function Fonts() {
     .cl-tab:active, .cl-pill:active, .cl-x:active, .cl-save:active:not(:disabled),
     .cl-cancel:active, .cl-link:active:not(:disabled), .cl-row.click:active, .cl-hit.click:active,
     .cl-monthnav-btn:active:not(:disabled), .cl-chip-x:active, .cl-reset-btn:active,
-    .cl-addline:active, .cl-ac-item:active, .cl-import-btn:active:not(:disabled),
+    .cl-addline:active, .cl-ac-item:active, .cl-cs-item:active, .cl-import-btn:active:not(:disabled),
     .cl-mini:active:not(:disabled), .cl-card-head:active, .cl-binder-card:active,
     .cl-del:active, .cl-search-btn:active, .cl-addbtn:active, .cl-reset-go:active {
       transform: scale(.96);
@@ -4292,12 +4450,12 @@ function Fonts() {
     @media (prefers-reduced-motion: reduce) {
       .cl-tab, .cl-pill, .cl-x, .cl-save, .cl-cancel, .cl-link, .cl-row.click, .cl-hit.click,
       .cl-monthnav-btn, .cl-month-row, .cl-chip-x, .cl-reset-btn, .cl-addline,
-      .cl-ac-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
+      .cl-ac-item, .cl-cs-item, .cl-import-btn, .cl-mini, .cl-card-head, .cl-binder-card,
       .cl-del, .cl-search-btn, .cl-addbtn, .cl-reset-go { transition: none; }
       .cl-tab:active, .cl-pill:active, .cl-x:active, .cl-save:active:not(:disabled),
       .cl-cancel:active, .cl-link:active:not(:disabled), .cl-row.click:active, .cl-hit.click:active,
       .cl-monthnav-btn:active:not(:disabled), .cl-chip-x:active, .cl-reset-btn:active,
-      .cl-addline:active, .cl-ac-item:active, .cl-import-btn:active:not(:disabled),
+      .cl-addline:active, .cl-ac-item:active, .cl-cs-item:active, .cl-import-btn:active:not(:disabled),
       .cl-mini:active:not(:disabled), .cl-card-head:active, .cl-binder-card:active,
       .cl-del:active, .cl-search-btn:active, .cl-addbtn:active, .cl-reset-go:active {
         transform: none;
@@ -4536,18 +4694,21 @@ function Fonts() {
     .cl-addline{background:none;border:1px dashed var(--line);color:var(--mut);border-radius:10px;padding:9px;font-size:12.5px;cursor:pointer;font-family:'Inter';}
     .cl-addline:hover{color:var(--ink);border-color:var(--mut);}
     .cl-total-ro{display:flex;align-items:center;color:var(--out);font-variant-numeric:tabular-nums;}
-    /* one card search, one row style: the popover in a form and the list
-       on the Lookup tab render the same .cl-ac-item */
+    /* the form popover stays a thumbnail list (.cl-ac-item below); Lookup's
+       panel is a card-art grid, the same shape as the Binder screen, since
+       telling one printing from another is easier to see than to read */
     .cl-cs{display:flex;flex-direction:column;gap:8px;}
-    .cl-cs-rows{display:flex;flex-direction:column;gap:7px;}
-    .cl-cs-card{border:1px solid var(--line);border-radius:10px;background:var(--surf);overflow:hidden;}
-    .cl-cs-card .cl-ac-item{border-bottom:none;}
-    .cl-cs-card .cl-ac-item.as-row{cursor:default;}
-    .cl-cs-card .cl-lk-actions{margin:0;padding:0 10px 9px;}
-    /* three buttons share a padded row on a phone — "+ Keep" wrapped to a
-       second line and made the row twice as tall as its neighbours */
-    .cl-cs-card .cl-lk-actions .cl-mini{white-space:nowrap;padding:7px 2px;}
-    .cl-cs-card .cl-flash{padding:0 10px 8px;margin-top:0;}
+    .cl-cs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:2px;}
+    .cl-cs-card{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:14px;background:var(--surf);overflow:hidden;}
+    .cl-cs-item{display:flex;flex-direction:column;gap:8px;width:100%;background:none;border:none;padding:10px;cursor:pointer;text-align:left;color:var(--ink);font-family:'Inter';}
+    .cl-cs-item.as-row{cursor:default;}
+    .cl-cs-artwrap{position:relative;display:block;aspect-ratio:5/7;border-radius:9px;overflow:hidden;background:var(--surf2);border:1px solid var(--line);}
+    .cl-cs-img{width:100%;height:100%;object-fit:contain;background:#0c0f15;}
+    .cl-cs-ph{position:absolute;inset:0;}
+    .cl-cs-cap{display:flex;flex-direction:column;gap:3px;min-width:0;}
+    .cl-cs-name{font-family:'Space Grotesk';font-weight:600;font-size:14px;line-height:1.25;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+    .cl-cs-line{font-size:11.5px;line-height:1.35;color:var(--mut);display:flex;flex-wrap:wrap;align-items:center;gap:5px;}
+    .cl-cs-price{font-family:'Space Grotesk';font-weight:600;color:var(--pos);font-size:13px;font-variant-numeric:tabular-nums;margin-top:2px;}
     .cl-ac{position:relative;}
     .cl-ac-pop{position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:4px;background:var(--surf);border:1px solid var(--line);border-radius:10px;max-height:280px;overflow-y:auto;box-shadow:0 14px 34px rgba(0,0,0,.55);}
     .cl-ac-loading{padding:12px;text-align:center;color:var(--mut);font-size:12px;}
