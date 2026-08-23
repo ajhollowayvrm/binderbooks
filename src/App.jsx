@@ -1330,7 +1330,7 @@ function useCardImages(cards, withRarity = false) {
 /* ================================================================== */
 export default function App() {
   const [state, setState] = useState(null);
-  const [tab, setTab] = useState("dash");
+  const [tab, setTab] = useState("inv");
   /* Tab switches ride the View Transitions API where the browser has it
      (iOS 18+ / modern Chrome): the outgoing pane cross-fades away instead of
      vanishing, and the key={tab} entrance below still slides the new one in.
@@ -1492,9 +1492,9 @@ export default function App() {
   // camera feature, so it ships in the phone app and on the dev server, and the
   // hosted web build leaves it out. Hence a built list rather than a fixed one.
   const TABS = [
+    ["inv", "Binder", LayoutGrid], ["sales", "Sales", Tags],
+    ["buys", "Buys", ShoppingCart], ["rips", "Rips", PackageOpen],
     ["dash", "Overview", LayoutDashboard], ["month", "Monthly", CalendarRange],
-    ["rips", "Rips", PackageOpen], ["buys", "Buys", ShoppingCart],
-    ["sales", "Sales", Tags], ["inv", "Binder", LayoutGrid],
     ["look", "Lookup", Search],
     ...(__BB_SCAN__ ? [["snap", "Scan", Camera]] : []),
   ];
