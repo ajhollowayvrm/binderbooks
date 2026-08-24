@@ -2504,27 +2504,84 @@ function Buys({ state, patch }) {
     </div>
   );
 }
-/* `groups` is [label, names][] — English first, then Japanese. The labels
-   render as optgroups, so a Japanese set reads as one at the moment of the
-   pick. PPT indexes the Japanese catalogue months behind the English one, so
-   "Other / type it…" stays: a set that released this summer is not in either
-   list, and the ledger still has to be able to name it. */
+/* `groups` is [label, names][] — English first, then Japanese. Together the
+   two catalogues run to several hundred names, and a <select> cannot carry
+   that many: iOS renders one as a wheel, and nobody reaches "Stellar Crown"
+   by spinning past four hundred rows. So this field filters instead of
+   listing. One box narrows both catalogues at once, and every row carries
+   its language, so a Japanese set still reads as one at the moment of the
+   pick.
+
+   What you type is also what gets stored, which is why there is no "Other /
+   type it…" branch any more. PPT indexes the Japanese catalogue months
+   behind the English one, so a set that released this summer is in neither
+   list — and the name already in the box is already the answer. */
+const SET_ROWS_MAX = 40; // enough to be worth scrolling, few enough to stay a list
 function SetPicker({ groups, value, onChange, allowEmpty }) {
-  const known = (gs, v) => (gs || []).some(([, names]) => names.includes(v));
-  // "other" switches the set dropdown to free text — for sets the API
-  // doesn't have yet, or when the API is unavailable
-  const [other, setOther] = useState(() => !!value && (groups ? !known(groups, value) : true));
-  if (other) return <input className="cl-in" placeholder="Set name" value={value} onChange={(e) => onChange(e.target.value)} />;
+  const text = String(value || "");
+  const inputRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [ix, setIx] = useState(-1); // arrow-key cursor; -1 means nothing is highlighted
+  const [typed, setTyped] = useState(false); // has a key landed since this field took focus?
+  const rows = useMemo(() => {
+    const all = (groups || []).flatMap(([label, names]) =>
+      names.map((name) => ({ name, tag: label === "Japanese" ? "JP" : "EN" })));
+    const q = text.trim().toLowerCase();
+    /* Coming back to a finished field, the name in the box is an exact match
+       and filtering on it leaves the one row already picked. Show everything
+       instead — a field you return to is a field you want to change. Only
+       when nothing has been typed yet, though: mid-word the same rule fires
+       on the last letter of a name you spelled out, and the list you had
+       narrowed to one row explodes back to four hundred. */
+    if (!q || (!typed && all.some((r) => r.name.toLowerCase() === q))) return all;
+    const hit = all.filter((r) => r.name.toLowerCase().includes(q));
+    // A name that starts with what you typed is the one you meant, so it
+    // sorts first: "black" puts "Black Bolt" above "SWSH Black Star Promos".
+    const starts = (r) => r.name.toLowerCase().startsWith(q);
+    return [...hit.filter(starts), ...hit.filter((r) => !starts(r))];
+  }, [groups, text, typed]);
+  const shown = rows.slice(0, SET_ROWS_MAX);
+  const hidden = rows.length - shown.length;
+  const listed = open && shown.length > 0;
+
+  const pick = (name) => { onChange(name); setOpen(false); setIx(-1); inputRef.current?.blur(); };
+  const onKey = (e) => {
+    if (e.key === "Escape") { setOpen(false); setIx(-1); return; }
+    if (!listed) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setIx((i) => (i + 1) % shown.length); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setIx((i) => (i <= 0 ? shown.length : i) - 1); }
+    else if (e.key === "Enter" && ix >= 0) { e.preventDefault(); pick(shown[ix].name); }
+  };
   return (
-    <select className="cl-in" value={value} onChange={(e) => { const v = e.target.value; if (v === "__other") { setOther(true); onChange(""); } else onChange(v); }}>
-      <option value="" disabled={!allowEmpty}>{groups === null ? "Loading sets…" : allowEmpty ? "— optional —" : "Set…"}</option>
-      {(groups || []).map(([label, names]) => (
-        <optgroup key={label} label={label}>
-          {names.map((s) => <option key={s} value={s}>{s}</option>)}
-        </optgroup>
-      ))}
-      <option value="__other">Other / type it…</option>
-    </select>
+    <div className="cl-setpick">
+      <input
+        ref={inputRef} className="cl-in" value={text}
+        placeholder={groups === null ? "Loading sets…" : allowEmpty ? "Set — optional" : "Set…"}
+        autoComplete="off" autoCorrect="off" spellCheck={false}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); setIx(-1); setTyped(true); }}
+        onFocus={() => { setOpen(true); setTyped(false); }}
+        onBlur={() => { setOpen(false); setIx(-1); }}
+        onKeyDown={onKey}
+      />
+      {/* The list swallows its own mousedown so the input never loses focus.
+          Without that the blur above closes the list before the click on a
+          row can land, and every pick reads as a miss. */}
+      {!!text && <button className="cl-setpick-clear" aria-label="Clear the set"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => { onChange(""); setIx(-1); inputRef.current?.focus(); }}><X size={13} /></button>}
+      {listed && (
+        <div className="cl-setpick-list" onMouseDown={(e) => e.preventDefault()}>
+          {shown.map((r, i) => (
+            <button key={`${r.tag}|${r.name}`} className={"cl-setpick-row" + (i === ix ? " on" : "")}
+              onClick={() => pick(r.name)}>
+              <span className="cl-setpick-name">{r.name}</span>
+              <span className={"cl-setpick-tag" + (r.tag === "JP" ? " jp" : "")}>{r.tag}</span>
+            </button>
+          ))}
+          {hidden > 0 && <div className="cl-setpick-more">{hidden} more — keep typing to narrow the list</div>}
+        </div>
+      )}
+    </div>
   );
 }
 function LineRow({ line, groups, onChange, onRemove, removable }) {
@@ -4814,6 +4871,9 @@ function CardSnap({ state, patch }) {
   // English only, and deliberately: resolveScan matches against the English
   // catalogue, and a JP photo skips it entirely (see onPhoto below)
   const sets = useSets();
+  // The Set field below is a different question. It stores a name, and a JP
+  // photo lands here with a Japanese set to name, so its picker gets both.
+  const groups = useSetGroups();
   const codes = useSetCodes();
   const camRef = useRef(null);
   const libRef = useRef(null);
@@ -4921,7 +4981,7 @@ function CardSnap({ state, patch }) {
             {!d.card && d.lang !== "jp" && <div className="cl-note" style={{ marginTop: 10 }}>No catalog match, so there's no market price yet. Correct the set or number and hit Re-match, or add it as-is and set the value by hand.</div>}
             <Field label="Card"><input className="cl-in" value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} /></Field>
             <div className="cl-grid2">
-              <Field label="Set"><SetPicker sets={sets} value={d.set} onChange={(v) => setD({ ...d, set: v })} allowEmpty /></Field>
+              <Field label="Set"><SetPicker groups={groups} value={d.set} onChange={(v) => setD({ ...d, set: v })} allowEmpty /></Field>
               <Field label="Number"><input className="cl-in" value={d.number} onChange={(e) => setD({ ...d, number: e.target.value })} /></Field>
             </div>
             <div className="cl-grid2">
@@ -5129,6 +5189,26 @@ function Fonts() {
        whatever the cascade does. The two-class selector fixes the width too,
        for the day this stops being a flex row. */
     .cl-setline .cl-setline-packs{flex:0 0 78px;width:78px;}
+    /* The set field filters a few hundred names, so its list is an overlay:
+       in the flow it would push the packs box and the save button down on
+       every keystroke. z-index 20 clears the tab bar at 5 and stays under
+       the modals at 60. No ancestor of a SetPicker clips, so the overlay
+       does not need a portal. */
+    .cl-setpick{position:relative;}
+    .cl-setpick .cl-in{padding-right:40px;}
+    .cl-setpick-clear{position:absolute;right:2px;top:50%;transform:translateY(-50%);width:44px;height:44px;display:grid;place-items:center;background:none;border:none;padding:0;color:var(--mut);cursor:pointer;}
+    .cl-setpick-clear:active{color:var(--ink);}
+    .cl-setpick-list{position:absolute;z-index:20;top:calc(100% + 4px);left:0;right:0;background:var(--surf2);border:1px solid var(--line);border-radius:11px;padding:4px;box-shadow:0 14px 34px rgba(6,8,13,.6);
+      /* dvh for the same reason the modal uses it: the keyboard is open the
+         whole time this list is, and vh does not notice it. overscroll-behavior
+         keeps a flick at the end of the list off the page behind it. */
+      max-height:44vh;max-height:44dvh;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}
+    .cl-setpick-row{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:44px;padding:9px 10px;background:none;border:none;border-radius:8px;color:var(--ink);text-align:left;font-family:'Inter';font-size:13.5px;cursor:pointer;transition:background-color .12s ease;}
+    .cl-setpick-row.on,.cl-setpick-row:hover{background:var(--surf);}
+    .cl-setpick-name{line-height:1.3;overflow-wrap:anywhere;}
+    .cl-setpick-tag{flex:none;font-size:9.5px;font-weight:700;letter-spacing:.06em;padding:2px 6px;border-radius:5px;border:1px solid var(--line);color:var(--mut);}
+    .cl-setpick-tag.jp{color:var(--holo2);border-color:#3a3350;}
+    .cl-setpick-more{padding:8px 10px 6px;margin-top:4px;border-top:1px solid var(--line);font-size:11.5px;color:var(--mut);}
     .cl-stat{background:var(--surf);border:1px solid var(--line);border-radius:14px;padding:14px;}
     .cl-stat-label{font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em;}
     .cl-stat-num{font-family:'Space Grotesk';font-weight:600;font-size:24px;margin-top:4px;font-variant-numeric:tabular-nums;letter-spacing:-.02em;}
