@@ -263,15 +263,32 @@ async function pptSetData(setName, lang = "en") {
      Violet (2023) while the 1999 set it meant sat fifth in the same list.
      That is not a search miss, it is the wrong set's prices written onto a
      Base Set card. Same trap waits for any short set name that is also the
-     tail of a newer one, so exactness is the rule, not a special case. */
+     tail of a newer one, so exactness is the rule, not a special case.
+
+     The partial matches carry the same danger one step further, and `find`
+     hid it: the list is sorted newest first, so the first partial hit is the
+     newest set whose name contains this one, taken without ever checking it
+     was the only one. "First Partner Pack Series 3" against a catalogue
+     holding several First Partner Pack groups returned one series' whole card
+     dump for another series' cards, and the client cached that for 30 days.
+
+     So a partial match must be unique to count. An ambiguous name resolves to
+     nothing, which costs a name tile; the wrong group costs the wrong picture
+     and the wrong price on every card in the set. matchSetName in the client
+     refuses ambiguity for the same reason. */
   const key = setName.toLowerCase();
   const fkey = foldSet(key);
   const alias = GROUP_ALIASES.find(([re]) => re.test(key))?.[1];
+  const only = (pred) => { const hits = list.filter(pred); return hits.length === 1 ? hits[0] : null; };
   const group = (alias && list.find((x) => foldSet(x.name) === alias))
     || list.find((x) => foldSet(x.name) === fkey)
-    || list.find((x) => foldSet(x.name).endsWith(fkey))
-    || list.find((x) => foldSet(x.name).includes(fkey));
-  if (!group) return null;
+    || only((x) => foldSet(x.name).endsWith(fkey))
+    || only((x) => foldSet(x.name).includes(fkey));
+  if (!group) {
+    const near = list.filter((x) => foldSet(x.name).includes(fkey)).map((x) => x.name);
+    if (near.length > 1) console.warn(`set "${setName}" is ambiguous, refusing:`, near.join(" | "));
+    return null;
+  }
   // fetchAllInSet with no limit/offset returns the whole set in one response,
   // billed once at its card count; page defensively anyway in case a set
   // ever outgrows one response
@@ -362,7 +379,9 @@ async function setCatalog(setName, lang) {
    search, slimmed to the exact shape the client has always consumed (its
    cardPrice() reads tcgplayer.prices keyed normal/holofoil/reverseHolofoil,
    its rows split per priced printing). PPT's search takes plain words and
-   "X/Y" numbers, so the client sends raw text — no query syntax anywhere. */
+   "X/Y" numbers, so the client sends raw text — no query syntax anywhere.
+   Answers { cards, setDropped }; setDropped means the set filter was asked
+   for, matched nothing, and was removed before the retry. */
 const printingKey = (p) => String(p).split(/\s+/).map((w, i) => (i ? w : w[0].toLowerCase() + w.slice(1))).join("");
 const slimCard = (c) => {
   const prices = {};
@@ -389,9 +408,14 @@ async function cardSearch(q, set, number, lang) {
   const params = { search: number ? `${q} ${number}` : q, language: pptLang(lang), limit: "12" };
   if (set) params.set = foldSet(set);
   let cards = await pptCards(params);
-  // a set spelling PPT doesn't recognize shouldn't sink the search
-  if (!cards.length && set) { delete params.set; cards = await pptCards(params); }
-  return cards.map(slimCard);
+  /* A set spelling PPT doesn't recognize shouldn't sink the search. But the
+     retry is unscoped, so what comes back is every set's cards, and a caller
+     that asked for one set used to read them as that set's — a Mudkip from
+     any set answered a search for a Mudkip in First Partner Pack Series 3.
+     Say what happened, and let the caller decide what it can still trust. */
+  let setDropped = false;
+  if (!cards.length && set) { delete params.set; cards = await pptCards(params); setDropped = true; }
+  return { cards: cards.map(slimCard), setDropped };
 }
 
 /* GET /history?productId=<id>&days=<n>&lang=<en|jp> — a card's market price
@@ -826,7 +850,7 @@ export const handler = async (event) => {
 
   if (isGet("/search")) {
     if (!qp.q) return res(400, { error: "q required" });
-    try { return res(200, { cards: await cardSearch(qp.q, qp.set || "", qp.number || "", lang) }); }
+    try { return res(200, await cardSearch(qp.q, qp.set || "", qp.number || "", lang)); }
     catch (e) {
       console.error("search route failed:", e);
       if (e.status === 429) return rateRes(e, "daily card-data budget used", "the card database");
