@@ -357,7 +357,13 @@ Two standalone helpers that don't need the app running:
   catalogue every lookup asks. A JP card prices from JP market data and its own
   eBay solds, shows the JP card's image and set, and is left out of the
   TCGplayer bulk-listing CSV, which is keyed on English SKUs. Cards from before
-  this field existed read as English.
+  this field existed read as English. The set dropdowns on a buy and on a rip
+  list both catalogues under an English and a Japanese heading, because a
+  Japanese box is a thing the ledger has to be able to name. The set browsers
+  and the photo scanner stay English: each one follows the pick with a request
+  to the English catalogue. Note that pokemonpricetracker indexes the Japanese
+  catalogue months behind the English one, so a set that released this summer
+  is in neither list — "Other / type it…" is the way in for those.
 - **Rips hold lots, not just packs:** a rip is one cost against the cards that
   came out of it, which is the same shape as a lot of slabs bought together for
   one price — log the lot as the rip, then add each card as a hit. Hits carry a

@@ -214,7 +214,7 @@ const uid = () => Math.random().toString(36).slice(2, 10);
    old key here whenever you bump a version. */
 for (const dead of [
   "cardledger:setimages:v1", // art URLs from before the PPT migration; nothing reads this key now
-  "cardledger:sets:v1", "cardledger:sets:v2",
+  "cardledger:sets:v1", "cardledger:sets:v2", "cardledger:sets:v3", // v3 held one English list; v4 holds both languages
   "cardledger:qcache:v1", "cardledger:qcache:v2",
   "cardledger:matchcache:v1", "cardledger:matchcache:v2", // v2 keyed matches without productId
   "cardledger:invview", // the grid/list toggle; the grid is the only view now
@@ -227,21 +227,36 @@ for (const dead of [
    catalogue with the "SV07:"-style prefixes stripped), cached for a week so
    the dropdown opens instantly. The printed expansion codes the scanner
    resolves ("PRE" -> "Prismatic Evolutions") live in src/setCodes.js now —
-   PPT's set list doesn't carry them. */
-const SETS_KEY = "cardledger:sets:v3"; // v3: PPT names, no ptcgoCode
+   PPT's set list doesn't carry them.
+
+   Both catalogues load, because a Japanese box is a thing the ledger has to
+   name and the English list can never name it. They stay apart in storage
+   rather than merging into one array: the dropdowns want every set, and the
+   scanner and the set browsers want the one language whose catalogue they
+   are about to ask. A flat merged list cannot tell those two apart. */
+const SETS_KEY = "cardledger:sets:v4"; // v4: English and Japanese, kept apart
 let setsPromise = null;
+/* The Japanese half is optional on purpose. PPT indexes it far behind the
+   English one, and a JP outage must not leave the buy form with no sets at
+   all — English alone is the working app, English missing is not. */
 async function fetchSets() {
-  const data = await cardFetch("sets", {});
-  const names = [...new Set(data.names || [])];
-  if (!names.length) throw new Error("empty");
-  try { localStorage.setItem(SETS_KEY, JSON.stringify({ t: Date.now(), names })); } catch {}
-  return { names };
+  const [en, jp] = await Promise.all([
+    cardFetch("sets", {}).then((d) => [...new Set(d.names || [])]),
+    cardFetch("sets", { lang: "jp" }).then((d) => [...new Set(d.names || [])]).catch(() => []),
+  ]);
+  if (!en.length) throw new Error("empty");
+  try { localStorage.setItem(SETS_KEY, JSON.stringify({ t: Date.now(), en, jp })); } catch {}
+  return { en, jp };
 }
 /* card-search cache: query -> slimmed results, 24h TTL, ~30 most recent
    queries kept. Repeat searches are instant and rate-limit failures drop. */
 const QCACHE_KEY = "cardledger:qcache:v3"; // v3: keyed by raw text, PPT-sourced rows
 const QCACHE_TTL = 24 * 3600 * 1000;
-const cachedSets = () => { try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); return c?.names || null; } catch { return null; } };
+/* One language's names. The default is English because every caller that
+   reads this cache — query parsing, the scanner's set match — is on an
+   English path, and a Japanese name reaching either one names a set that
+   path's catalogue does not hold. */
+const cachedSets = (lang = "en") => { try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); return (lang === "jp" ? c?.jp : c?.en) || null; } catch { return null; } };
 // words that describe a variant, not a card name — "ampharos full art" should
 // search name:*ampharos* and float Illustration/Ultra Rares, not find nothing
 const SEARCH_STOP = new Set(["full", "art", "fullart", "alt", "illustration", "special", "secret", "rainbow", "hyper", "holo", "reverse", "foil", "textured", "sir", "ir", "promo"]);
@@ -724,19 +739,50 @@ async function gradedCompsWaiting(args, waiter, onWait) {
   }
 }
 
-function useSets() {
-  const [sets, setSets] = useState(() => {
-    try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); if (c && Date.now() - c.t < 7 * 864e5 && c.names?.length) return c.names; } catch {}
+/* Both lists, or null while they load. One hook loads the pair; the two
+   hooks below pick what a caller actually wants out of it. */
+function useSetPair() {
+  const [pair, setPair] = useState(() => {
+    try { const c = JSON.parse(localStorage.getItem(SETS_KEY)); if (c && Date.now() - c.t < 7 * 864e5 && c.en?.length) return { en: c.en, jp: c.jp || [] }; } catch {}
     return null;
   });
   useEffect(() => {
-    if (sets) return;
+    if (pair) return;
     if (!setsPromise) setsPromise = fetchSets();
     let live = true;
-    setsPromise.then((d) => live && setSets(d.names)).catch(() => { setsPromise = null; if (live) setSets([]); });
+    setsPromise.then((d) => live && setPair({ en: d.en, jp: d.jp || [] })).catch(() => { setsPromise = null; if (live) setPair({ en: [], jp: [] }); });
     return () => { live = false; };
-  }, [sets]);
-  return sets; // null = loading, [] = unavailable, [...] = loaded
+  }, [pair]);
+  return pair;
+}
+/* The English names alone. Every caller that follows the pick with a request
+   — the set browsers, the scanner's match — asks the English catalogue, so a
+   Japanese name here would name a set that request cannot resolve. */
+function useSets() {
+  const pair = useSetPair();
+  return pair ? pair.en : null; // null = loading, [] = unavailable, [...] = loaded
+}
+/* Every set, grouped by language, for the pickers that only write a name
+   down. A buy line and a rip row are text: the card's own `lang` field
+   decides which catalogue prices it later, never the name typed here. Set
+   names that both catalogues share ("Black Bolt") sit under English only —
+   the stored value is the same string either way, so a second copy would
+   change nothing and read as a mistake. */
+function useSetGroups() {
+  const pair = useSetPair();
+  return useMemo(() => {
+    if (!pair) return null;
+    const en = pair.en || [];
+    const seen = new Set(en);
+    return [["English", en], ["Japanese", (pair.jp || []).filter((n) => !seen.has(n))]].filter(([, list]) => list.length);
+  }, [pair]);
+}
+/* The same sets as one flat array, for the text matching that attributes a
+   rip or a sale to a set. That code searches free text for a set name, and a
+   Japanese box's name has to be findable there too. */
+function useAllSetNames() {
+  const groups = useSetGroups();
+  return useMemo(() => (groups ? groups.flatMap(([, list]) => list) : null), [groups]);
 }
 
 // printed expansion code -> set name, for resolving a scanned card's set
@@ -1761,7 +1807,9 @@ function Dashboard({ state, patch, go, reset, sync, connectSync, disconnectSync,
   const settings = { ...SETTINGS_DEFAULTS, ...(state.settings || {}) };
   const setSetting = (k, v) => patch((s) => ({ settings: { ...SETTINGS_DEFAULTS, ...(s.settings || {}), [k]: v } }));
   const [confirmReset, setConfirmReset] = useState(false);
-  const sets = useSets();
+  // both languages: ripSetSplit and saleSetSplit look for a set name inside
+  // free text, and a Japanese box has to be findable there as well
+  const sets = useAllSetNames();
   const buyCost = state.buys.reduce((s, b) => s + (Number(b.cost) || 0), 0);
   const ripExtra = state.rips.filter((r) => !r.buyId).reduce((s, r) => s + (Number(r.cost) || 0), 0);
   const spent = buyCost + ripExtra;
@@ -1853,7 +1901,7 @@ const monthLabel = (k) => { const [y, m] = (k || "").split("-"); return MONTH_NA
 // month; money in = sale nets dated in the month. Same model as the Overview,
 // just sliced by calendar month so you can see how a single month is doing.
 function Monthly({ state }) {
-  const sets = useSets();
+  const sets = useAllSetNames(); // both languages — see Dashboard
   const thisMonth = monthKey(today());
 
   // every month that has any activity, plus the current month so "this month
@@ -2013,7 +2061,7 @@ function Rips({ state, patch }) {
   );
 }
 function RipForm({ buys, rippedBuyIds, onSave, onCancel }) {
-  const sets = useSets();
+  const groups = useSetGroups();
   const [f, setF] = useState({ product: "", cost: "", source: "Gamecraft", date: today(), buyId: "" });
   const [lines, setLines] = useState([{ set: "", packs: "" }]);
   // hide buys already ripped — linked to a rip, or flagged ripped by hand on the
@@ -2053,7 +2101,7 @@ function RipForm({ buys, rippedBuyIds, onSave, onCancel }) {
         <div className="cl-stack sm">
           {lines.map((l, i) => (
             <div key={i} className="cl-setline">
-              <SetPicker sets={sets} value={l.set} onChange={(v) => setLine(i, "set", v)} allowEmpty />
+              <SetPicker groups={groups} value={l.set} onChange={(v) => setLine(i, "set", v)} allowEmpty />
               <input className="cl-in cl-setline-packs" inputMode="numeric" placeholder="Packs" value={l.packs} onChange={(e) => setLine(i, "packs", e.target.value)} />
               {lines.length > 1 && <button className="cl-x" onClick={() => delLine(i)}><X size={13} /></button>}
             </div>
@@ -2205,6 +2253,8 @@ function CardSearch({
      indexed under a name search yet — a fresh promo drop is most of the
      first week after release. Its results are handed to `rows` below as
      another source, so they render as the same cards in the same list. */
+  // English only: browsing one of these names fetches that set's English
+  // catalogue dump
   const allSetNames = useSets();
   const [browseSetName, setBrowseSetName] = useState("");
   const [browseQ, setBrowseQ] = useState("");
@@ -2454,25 +2504,35 @@ function Buys({ state, patch }) {
     </div>
   );
 }
-function SetPicker({ sets, value, onChange, allowEmpty }) {
+/* `groups` is [label, names][] — English first, then Japanese. The labels
+   render as optgroups, so a Japanese set reads as one at the moment of the
+   pick. PPT indexes the Japanese catalogue months behind the English one, so
+   "Other / type it…" stays: a set that released this summer is not in either
+   list, and the ledger still has to be able to name it. */
+function SetPicker({ groups, value, onChange, allowEmpty }) {
+  const known = (gs, v) => (gs || []).some(([, names]) => names.includes(v));
   // "other" switches the set dropdown to free text — for sets the API
   // doesn't have yet, or when the API is unavailable
-  const [other, setOther] = useState(() => !!value && (sets ? !sets.includes(value) : true));
+  const [other, setOther] = useState(() => !!value && (groups ? !known(groups, value) : true));
   if (other) return <input className="cl-in" placeholder="Set name" value={value} onChange={(e) => onChange(e.target.value)} />;
   return (
     <select className="cl-in" value={value} onChange={(e) => { const v = e.target.value; if (v === "__other") { setOther(true); onChange(""); } else onChange(v); }}>
-      <option value="" disabled={!allowEmpty}>{sets === null ? "Loading sets…" : allowEmpty ? "— optional —" : "Set…"}</option>
-      {(sets || []).map((s) => <option key={s} value={s}>{s}</option>)}
+      <option value="" disabled={!allowEmpty}>{groups === null ? "Loading sets…" : allowEmpty ? "— optional —" : "Set…"}</option>
+      {(groups || []).map(([label, names]) => (
+        <optgroup key={label} label={label}>
+          {names.map((s) => <option key={s} value={s}>{s}</option>)}
+        </optgroup>
+      ))}
       <option value="__other">Other / type it…</option>
     </select>
   );
 }
-function LineRow({ line, sets, onChange, onRemove, removable }) {
+function LineRow({ line, groups, onChange, onRemove, removable }) {
   return (
     <div className="cl-lineitem">
       <div className="cl-line-r1">
         <input className="cl-in" inputMode="numeric" placeholder="Qty" value={line.qty} onChange={(e) => onChange({ ...line, qty: e.target.value.replace(/[^0-9]/g, "") })} />
-        <SetPicker sets={sets} value={line.set} onChange={(v) => onChange({ ...line, set: v })} />
+        <SetPicker groups={groups} value={line.set} onChange={(v) => onChange({ ...line, set: v })} />
       </div>
       <div className={"cl-line-r2" + (removable ? "" : " nox")}>
         <select className="cl-in" value={line.product} onChange={(e) => onChange({ ...line, product: e.target.value })}>{PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}</select>
@@ -2483,7 +2543,7 @@ function LineRow({ line, sets, onChange, onRemove, removable }) {
   );
 }
 export function BuyForm({ initial, onSave, onCancel }) {
-  const sets = useSets();
+  const groups = useSetGroups();
   const blank = () => ({ id: uid(), qty: "1", set: "", product: "Booster Pack", cost: "" });
   const [f, setF] = useState(initial
     ? { category: initial.category, source: initial.source, date: initial.date, item: initial.item || "", name: initial.name || "", cost: numStr(initial.cost), total: numStr(initial.cost),
@@ -2524,7 +2584,7 @@ export function BuyForm({ initial, onSave, onCancel }) {
           <div className="cl-field">
             <span>{f.name ? "What's inside" : "Products"}</span>
             <div className="cl-stack sm">
-              {f.lines.map((l) => <LineRow key={l.id} line={l} sets={sets} onChange={setLine} removable={f.lines.length > 1} onRemove={() => setF((p) => ({ ...p, lines: p.lines.filter((x) => x.id !== l.id) }))} />)}
+              {f.lines.map((l) => <LineRow key={l.id} line={l} groups={groups} onChange={setLine} removable={f.lines.length > 1} onRemove={() => setF((p) => ({ ...p, lines: p.lines.filter((x) => x.id !== l.id) }))} />)}
               <button className="cl-addline" onClick={() => setF((p) => ({ ...p, lines: [...p.lines, blank()] }))}>+ Add another product</button>
             </div>
           </div>
@@ -4600,6 +4660,8 @@ const SETCAT_MAXAGE = 24 * 3600 * 1000;        // prices, not art — a day, not
    needs a single value and wrong for a column headed "Reverse Holofoil". */
 const exactSub = (subs, v) => (typeof subs?.[v] === "number" ? subs[v] : null);
 function SetBrowser({ onOpen }) {
+  // English only: the pick becomes a /prices request for that set, and this
+  // browser has no language of its own to send with it
   const sets = useSets();
   const dlId = useId();
   const [name, setName] = useState(() => { try { return localStorage.getItem(SETVIEW_KEY) || ""; } catch { return ""; } });
@@ -4749,6 +4811,8 @@ function Lookup({ state, patch }) {
    Named `snap` throughout — `scan` already belongs to the grading-
    candidate scanner on the Inventory tab. */
 function CardSnap({ state, patch }) {
+  // English only, and deliberately: resolveScan matches against the English
+  // catalogue, and a JP photo skips it entirely (see onPhoto below)
   const sets = useSets();
   const codes = useSetCodes();
   const camRef = useRef(null);
