@@ -4938,7 +4938,12 @@ function Fonts() {
   return (<style>{`
     @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&display=swap');
     .cl-root{--bg:#0c0e13;--surf:#161a22;--surf2:#1d222c;--line:#2a3140;--ink:#e8ebf2;--mut:#8b93a4;--pos:#3fd68c;--neg:#ff6f6f;--out:#ffb454;--holo2:#c4b5fd;
-      background:radial-gradient(1200px 600px at 50% -10%,#19202c 0%,var(--bg) 60%);color:var(--ink);font-family:'Inter',system-ui,sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased;
+      background:radial-gradient(1200px 600px at 50% -10%,#19202c 0%,var(--bg) 60%);color:var(--ink);font-family:'Inter',system-ui,sans-serif;min-height:100vh;min-height:100dvh;-webkit-font-smoothing:antialiased;
+      /* iOS paints a grey block over whatever you tap. The app already answers a
+         tap with a press-scale and a haptic, so the block is a second, slower
+         answer to the same tap. 100dvh above it: 100vh measures the window with
+         Safari's URL bar hidden, so the page runs under the bar until you scroll. */
+      -webkit-tap-highlight-color:transparent;
       /* Safe area. Every inset is 0 without a notch, so all three of these are inert on desktop, on
          Android and in a normal browser tab — they only do work where the app draws edge to edge
          (the iOS shell, and Safari's add-to-home-screen mode). */
@@ -4981,6 +4986,23 @@ function Fonts() {
         transform: none;
       }
     }
+    /* Touch targets. Apple asks for 44x44pt. The icon-only controls below paint
+       a smaller box because the rows are dense, so each one grows an invisible
+       ::after instead of a bigger icon. Every inset stops short of half the gap
+       to the next control, so no target steals its neighbour's taps. The three
+       that sit beside each other in a row (.cl-x) get a real 44px box instead,
+       because overlapping overlays would hand every tap to the last one. The
+       pills are not here either: their strip scrolls, and a scroller clips an
+       overlay, so they carry the height in their own padding. */
+    .cl-addbtn, .cl-monthnav-btn, .cl-search-btn { position:relative; }
+    .cl-addbtn::after, .cl-monthnav-btn::after, .cl-search-btn::after {
+      content:""; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+      width:max(100%,44px); height:max(100%,44px);
+    }
+    /* .cl-x is transparent at rest and its hover fill is gated to a fine pointer,
+       so a 44px box changes nothing you can see on a phone. */
+    .cl-x, .cl-salesearch-x { min-width:44px; min-height:44px; display:grid; place-items:center; }
+
     /* card art fades in as it decodes; the shimmer marks a tile that is
        still resolving, so "loading" and "no image" never look alike */
     .cl-imgfade{opacity:0;transition:opacity .35s ease;}
@@ -5069,7 +5091,9 @@ function Fonts() {
     .cl-month-row .cl-row-title{font-size:13.5px;}
     .cl-panel{background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:14px 14px 16px;}
     .cl-panel-head{display:flex;justify-content:space-between;align-items:center;font-family:'Space Grotesk';font-weight:600;font-size:14px;margin-bottom:12px;}
-    .cl-link{background:none;border:none;color:var(--mut);font-size:12px;cursor:pointer;font-family:'Inter';}
+    /* padding grows the target, the negative margin gives the space back, so no
+       panel gets taller. The inline use inside a sentence resets both. */
+    .cl-link{background:none;border:none;color:var(--mut);font-size:12px;cursor:pointer;font-family:'Inter';padding:9px 6px;margin:-9px -6px;}
     .cl-bars{display:flex;flex-direction:column;gap:10px;}
     .cl-bar-top{display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px;}
     .cl-bar-track{height:6px;background:#11151c;border-radius:4px;overflow:hidden;}
@@ -5111,7 +5135,7 @@ function Fonts() {
     .cl-hitform{background:var(--surf2);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:9px;}
     .cl-hitform-preview{display:flex;align-items:center;gap:8px;}
     .cl-hitform-preview-img{width:34px;height:47px;object-fit:contain;flex:none;border-radius:5px;background:#0c0f15;border:1px solid var(--line);}
-    .cl-add-hit{display:flex;align-items:center;justify-content:center;gap:6px;background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px;font-size:12.5px;cursor:pointer;font-family:'Inter';}
+    .cl-add-hit{display:flex;align-items:center;justify-content:center;gap:6px;background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:13px 8px;font-size:12.5px;cursor:pointer;font-family:'Inter';}
     .cl-hit-add{background:linear-gradient(110deg,#7c6df0,#a78bfa);border:none;color:#fff;border-radius:8px;padding:9px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:'Space Grotesk';display:flex;align-items:center;justify-content:center;gap:6px;}
     .cl-vhead{display:flex;justify-content:space-between;align-items:flex-end;}
     .cl-h2{font-family:'Space Grotesk';font-weight:700;font-size:21px;margin:0;letter-spacing:-.02em;}
@@ -5128,45 +5152,55 @@ function Fonts() {
        smaller, quieter label, not from a smaller thing to hit. Shrinking the
        target was making a primary control the least tappable on the screen. */
     .cl-views{margin-bottom:-6px;}
-    .cl-views .cl-pill{font-size:11.5px;padding:6px 11px;letter-spacing:.01em;}
+    .cl-views .cl-pill{font-size:11.5px;padding:13px 12px;letter-spacing:.01em;}
     .cl-pills::-webkit-scrollbar{display:none;}
     .cl-pills::after{content:"";position:sticky;right:0;flex:none;width:20px;margin-left:-20px;align-self:stretch;pointer-events:none;background:linear-gradient(90deg,rgba(12,14,19,0),var(--bg));}
-    .cl-pill{background:var(--surf2);border:1px solid var(--line);color:var(--mut);border-radius:999px;padding:6px 13px;font-size:12px;cursor:pointer;white-space:nowrap;font-family:'Inter';}
+    /* min-width keeps a short label a pill and not a circle: the padding that took
+       these to a 44px target made the box nearly square for "All". */
+    .cl-pill{background:var(--surf2);border:1px solid var(--line);color:var(--mut);border-radius:999px;padding:13px 14px;min-width:62px;font-size:12px;cursor:pointer;white-space:nowrap;font-family:'Inter';text-align:center;}
     .cl-pill.on{color:var(--ink);border-color:#a78bfa;background:#221f33;}
     .cl-form{background:var(--surf2);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:11px;}
     .cl-form.cl-editing{border-color:#a78bfa;}
     .cl-field{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--mut);}
     .cl-in{width:100%;background:#10141b;border:1px solid var(--line);border-radius:9px;padding:10px 11px;color:var(--ink);font-size:13.5px;font-family:'Inter';outline:none;}
     .cl-in:focus{border-color:#a78bfa;}
+    ${__BB_NATIVE__ ? "" : `
+    /* Mobile Safari zooms the page in when a field under 16px takes focus, and
+       it has ignored maximum-scale since iOS 10. The phone app locks zoom in the
+       shell and keeps the 13.5px above; the hosted build cannot, so it asks for
+       16px and stops the zoom at the source. */
+    .cl-in{font-size:16px;}
+    `}
     .cl-in.bare{border:none;padding:10px 4px;background:none;}
     .cl-money-in{display:flex;align-items:center;background:#10141b;border:1px solid var(--line);border-radius:9px;padding:0 11px;color:var(--mut);font-size:13.5px;}
     .cl-money-in span{font-family:'Space Grotesk';}
     .cl-form-actions{display:flex;gap:8px;}
     .cl-form-actions .cl-save{flex:1;}
-    .cl-cancel{background:none;border:1px solid var(--line);color:var(--mut);border-radius:10px;padding:11px 16px;font-size:13px;cursor:pointer;font-family:'Inter';}
-    .cl-save{background:linear-gradient(110deg,#7c6df0,#a78bfa);border:none;color:#fff;border-radius:10px;padding:11px;font-size:14px;font-weight:600;cursor:pointer;font-family:'Space Grotesk';}
+    .cl-cancel{background:none;border:1px solid var(--line);color:var(--mut);border-radius:10px;padding:13px 16px;font-size:13px;cursor:pointer;font-family:'Inter';}
+    .cl-save{background:linear-gradient(110deg,#7c6df0,#a78bfa);border:none;color:#fff;border-radius:10px;padding:13px;font-size:14px;font-weight:600;cursor:pointer;font-family:'Space Grotesk';}
     .cl-save:disabled{opacity:.4;cursor:not-allowed;}
     .cl-net-preview{font-size:13px;color:var(--mut);display:flex;justify-content:space-between;align-items:center;gap:10px;}
     .cl-import{background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px;}
     /* text-align was inherited as centre, so on a narrow phone the label wrapped
        into two centred lines beside a left-hand icon and read as broken */
-    .cl-import-btn{display:flex;align-items:center;gap:8px;text-align:left;background:none;border:none;color:#c4b5fd;font-size:13px;cursor:pointer;font-family:'Inter';}
+    .cl-import-btn{display:flex;align-items:center;gap:8px;text-align:left;background:none;border:none;color:#c4b5fd;font-size:13px;cursor:pointer;font-family:'Inter';padding:13px 0;margin:-13px 0;}
     .cl-import-btn>svg{flex:none;}
     .cl-import-btn:disabled{opacity:.45;cursor:default;}
     .cl-tcgp-pick{margin-top:9px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;}
     .cl-tcgp-pick-head{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:var(--mut);margin-bottom:5px;}
-    .cl-tcgp-pick-head .cl-link{color:#c4b5fd;margin-left:10px;}
+    .cl-panel-head .cl-link{margin-right:0;padding-top:14px;padding-bottom:14px;margin-top:-14px;margin-bottom:-14px;}
+    .cl-tcgp-pick-head .cl-link{color:#c4b5fd;margin-left:10px;margin-right:0;}
     .cl-tcgp-pick-row{display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;}
     .cl-tcgp-pick-row input{accent-color:#a78bfa;flex:none;}
     .cl-tcgp-pick-row .cl-row-meta{margin-top:0;flex:none;}
     .cl-tcgp-pick-row .cl-money{margin-left:auto;font-size:12.5px;}
     .cl-tcgp-pick-name{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .cl-tcgp-cache{margin-top:10px;border-top:1px solid var(--line);padding-top:8px;}
-    .cl-tcgp-cache > .cl-link{display:flex;align-items:center;gap:4px;color:#c4b5fd;padding:0;}
+    .cl-tcgp-cache > .cl-link{display:flex;align-items:center;gap:4px;color:#c4b5fd;padding:9px 0;margin:-9px 0;}
     .cl-tcgp-cache-row{display:flex;align-items:center;gap:8px;padding:4px 0;}
     .cl-tcgp-cache-row .cl-row-meta{margin-top:2px;}
     .cl-tcgp-cache-row .cl-link{color:#c4b5fd;flex:none;}
-    .cl-import-msg .cl-link{color:#c4b5fd;display:inline-flex;align-items:center;gap:4px;vertical-align:-2px;}
+    .cl-import-msg .cl-link{color:#c4b5fd;display:inline-flex;align-items:center;gap:4px;vertical-align:-2px;padding:0;margin:0;}
     .cl-scan-ctl{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px;}
     .cl-scan-go{padding:11px 14px;font-size:13px;}
     .cl-cat{background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px;display:flex;flex-direction:column;gap:8px;}
@@ -5185,8 +5219,8 @@ function Fonts() {
     /* scanner: the add row wraps rather than shrinking the buttons, so the
        tap targets stay full size on a narrow phone */
     .cl-snap-go{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;}
-    .cl-snap-go .cl-mini{flex:1 1 auto;justify-content:center;padding:9px 12px;}
-    .cl-mini{flex:1;background:var(--surf2);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px 4px;font-size:11.5px;cursor:pointer;font-family:'Inter';}
+    .cl-snap-go .cl-mini{flex:1 1 auto;justify-content:center;padding:14px 12px;}
+    .cl-mini{flex:1;background:var(--surf2);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:14px 6px;font-size:11.5px;cursor:pointer;font-family:'Inter';}
     .cl-rip-sel{margin-top:6px;background:#10141b;border:1px solid var(--line);color:var(--mut);border-radius:8px;padding:5px;font-size:11px;font-family:'Inter';}
     .cl-flash{font-size:11px;color:#7cf5a0;margin-top:5px;text-align:center;animation:flashIn .18s ease-out;}
     @keyframes flashIn{from{opacity:0;transform:translateY(-3px);}to{opacity:1;transform:none;}}
@@ -5197,13 +5231,16 @@ function Fonts() {
     .cl-cardchips{display:flex;flex-wrap:wrap;gap:6px;}
     .cl-cardchips-empty{font-size:12px;color:var(--mut);}
     .cl-cardchip{display:inline-flex;align-items:center;gap:5px;background:#10141b;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:12px;}
-    .cl-chip-x{background:none;border:none;color:var(--mut);cursor:pointer;display:flex;padding:0;}
+    /* 11x11 was the smallest target in the app, and it deletes work. 44 is out of
+       reach without a taller chip, so this takes every pixel the chip has: the
+       button covers the chip's right padding and its full height. */
+    .cl-chip-x{background:none;border:none;color:var(--mut);cursor:pointer;display:flex;align-items:center;padding:9px 8px;margin:-9px -8px -9px -3px;}
     .cl-typedadd{display:flex;gap:6px;align-items:stretch;}
     .cl-typedadd>.cl-in,.cl-typedadd>.cl-ac{flex:1;}
     .cl-basisbox{max-width:110px;}
     .cl-add-card{background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:9px;flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:0 14px;cursor:pointer;font-family:'Inter';font-size:12.5px;}
     .cl-reset{margin-top:6px;display:flex;justify-content:center;}
-    .cl-reset-btn{background:none;border:1px solid var(--line);color:var(--mut);border-radius:10px;padding:9px 14px;font-size:12px;cursor:pointer;font-family:'Inter';}
+    .cl-reset-btn{background:none;border:1px solid var(--line);color:var(--mut);border-radius:10px;padding:13px 14px;font-size:12px;cursor:pointer;font-family:'Inter';}
     .cl-reset-confirm{display:flex;flex-direction:column;gap:8px;background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:12px;width:100%;font-size:12.5px;color:var(--mut);text-align:center;}
     .cl-reset-actions{display:flex;gap:8px;}
     .cl-reset-actions .cl-cancel{flex:1;}
@@ -5223,9 +5260,9 @@ function Fonts() {
     .cl-sync-choose .cl-sync-connect{padding:10px 14px;text-align:left;}
     .cl-lineitem{border:1px solid var(--line);border-radius:11px;padding:9px;display:flex;flex-direction:column;gap:8px;background:var(--surf);}
     .cl-line-r1{display:grid;grid-template-columns:64px 1fr;gap:8px;}
-    .cl-line-r2{display:grid;grid-template-columns:1fr 112px 30px;gap:8px;align-items:center;}
+    .cl-line-r2{display:grid;grid-template-columns:1fr 112px 44px;gap:8px;align-items:center;}
     .cl-line-r2.nox{grid-template-columns:1fr 112px;}
-    .cl-addline{background:none;border:1px dashed var(--line);color:var(--mut);border-radius:10px;padding:9px;font-size:12.5px;cursor:pointer;font-family:'Inter';}
+    .cl-addline{background:none;border:1px dashed var(--line);color:var(--mut);border-radius:10px;padding:13px 9px;font-size:12.5px;cursor:pointer;font-family:'Inter';}
     .cl-total-ro{display:flex;align-items:center;color:var(--out);font-variant-numeric:tabular-nums;}
     /* every card search — Lookup, and every form's "find the card" box —
        is the same card-art grid, the same shape as the Binder screen, since
@@ -5245,7 +5282,10 @@ function Fonts() {
     .cl-ac-loading{padding:12px;text-align:center;color:var(--mut);font-size:12px;}
     .cl-ac-retry{width:100%;background:none;border:none;color:#ffce9e;cursor:pointer;font-family:'Inter';}
     .cl-modal-ov{position:fixed;inset:0;z-index:60;background:rgba(6,8,13,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px;animation:ovIn .15s ease-out;}
-    .cl-modal{background:var(--surf);border:1px solid var(--line);border-radius:18px;width:100%;max-width:540px;max-height:min(92vh,860px);overflow-y:auto;padding:16px;position:relative;animation:cmIn .18s ease-out;}
+    /* dvh, not vh: when the keyboard opens, vh still measures the whole window,
+       so the modal keeps a height that no longer fits and its save row sits under
+       the keyboard. dvh tracks what is actually visible. */
+    .cl-modal{background:var(--surf);border:1px solid var(--line);border-radius:18px;width:100%;max-width:540px;max-height:min(92vh,860px);max-height:min(92dvh,860px);overflow-y:auto;padding:16px;position:relative;animation:cmIn .18s ease-out;}
     @keyframes cmIn{from{transform:translateY(16px);opacity:.5;}to{transform:none;opacity:1;}}
     @keyframes ovIn{from{opacity:0;}to{opacity:1;}}
     /* leaving plays the entrance in reverse; CardModal waits it out before unmounting */
@@ -5258,7 +5298,9 @@ function Fonts() {
     .cl-cm-top{display:flex;gap:14px;}
     .cl-cm-img{width:158px;flex:none;align-self:flex-start;border-radius:12px;background:#0c0f15;}
     .cl-cm-img.ph{aspect-ratio:3/4;display:grid;place-items:center;color:var(--mut);font-size:11px;border:1px dashed var(--line);}
-    .cl-cm-head{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;padding-right:26px;}
+    /* the close button is a .cl-x, so it carries the 44px touch box; the title
+       clears it rather than running underneath */
+    .cl-cm-head{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;padding-right:46px;}
     .cl-cm-name{font-family:'Space Grotesk';font-weight:700;font-size:17px;letter-spacing:-.01em;line-height:1.2;}
     .cl-cm-mkt-num{font-family:'Space Grotesk';font-weight:700;font-size:27px;color:var(--pos);font-variant-numeric:tabular-nums;letter-spacing:-.02em;}
     .cl-cm-mkt-lab{font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em;margin-top:1px;}
@@ -5365,7 +5407,7 @@ function Fonts() {
     .cl-switch:checked{background:var(--holo2);border-color:var(--holo2);}
     .cl-switch:checked::after{transform:translateX(18px);background:#fff;}
     .cl-cm-variants{display:flex;gap:4px;margin-top:6px;}
-    .cl-cm-variants .cl-pill{padding:4px 9px;font-size:11px;}
+    .cl-cm-variants .cl-pill{padding:11px 10px;font-size:11px;}
     .cl-cm-confirm{display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px 12px;border:1px solid var(--neg);border-radius:10px;font-size:12.5px;color:var(--ink);}
     .cl-cm-confirm span{flex:1;}
     .cl-mini.danger{border-color:var(--neg);color:var(--neg);}

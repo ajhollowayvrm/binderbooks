@@ -26,6 +26,11 @@ export default defineConfig(({ mode }) => ({
   base: mode === "ios" ? "./" : "/binderbooks/",
   define: {
     __BB_SCAN__: JSON.stringify(mode === "ios" || mode === "development"),
+    // `__BB_NATIVE__` is the WKWebView build. The shell locks zoom there
+    // (ios/Sources/Shell.swift), so a field smaller than 16px is safe and the
+    // design keeps its 13.5px. Every other build runs in a browser that zooms
+    // in on a small field when it takes focus, and iOS ignores maximum-scale.
+    __BB_NATIVE__: JSON.stringify(mode === "ios"),
   },
   plugins: [react()],
 }));
