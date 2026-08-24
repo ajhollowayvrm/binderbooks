@@ -5,13 +5,14 @@ import {
   LayoutDashboard, PackageOpen, ShoppingCart, Tags, Search,
   Plus, Trash2, Pencil, ChevronDown, ChevronRight, Sparkles, Upload, X,
   CalendarRange, ChevronLeft, RefreshCw, ExternalLink, Camera, Library,
-  LayoutGrid, Wrench,
+  LayoutGrid, Wrench, ImageIcon,
 } from "lucide-react";
 import {
   CSV_COLUMNS, importCatalogFile, catalogSets, catalogStats, searchCatalog,
   getCatalogRecords, catalogRowsForSets, recordToRow, clearCatalog,
 } from "./catalog.js";
 import { SET_CODES } from "./setCodes.js";
+import { artFor, artKey, cachedImageURL, pinArt, primeArt, readyURL, unpinArt } from "./art.js";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import BuyRow from "./components/BuyRow.jsx";
 import SaleRow from "./components/SaleRow.jsx";
@@ -81,12 +82,80 @@ const NO_TOKEN_MSG = "Connect cloud sync (Overview → Cloud sync) to search the
 // point of this: the wall someone hits after a few seconds of scanning is
 // almost never the credits running out.
 const isThrottled = (e) => e?.status === 429 && e.kind === "throttle";
-const THROTTLE_MSG = "eBay sold data is rate-limited for a moment — try again in a few seconds. This is not the daily budget.";
-async function cardFetch(path, params = {}) {
-  const token = syncToken();
-  if (!token) { const e = new Error(NO_TOKEN_MSG); e.status = 401; throw e; }
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v != null && v !== "") qs.set(k, v);
+const THROTTLE_MSG = "The card database is rate-limited for a moment — try again in a few seconds. This is not the daily budget.";
+/* PPT meters per minute as well as per day, and until now only the grading
+   scan survived the per-minute cap. Every other lookup threw on the first 429
+   and told the user the card database was unavailable. It usually was not —
+   it was busy for two seconds.
+
+   Three things live at this one door, because every PPT route already passes
+   through it:
+
+     - a pacer, so a burst (a whole-set browse, a binder of price trends)
+       queues instead of arriving at once and causing the throttle it then has
+       to sit out;
+     - a short retry, on a per-minute throttle only, so the common blip never
+       reaches a screen at all;
+     - a status signal, so what is left to wait for can be drawn as waiting
+       rather than as a failure.
+
+   A retried 429 costs nothing. The request never ran, so no credits moved. */
+
+/* Requests start at least PPT_MIN_GAP_MS apart. Only the starts are
+   serialised — the requests themselves still overlap, so this paces a burst
+   without turning parallel work into a queue. */
+const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
+const PPT_MIN_GAP_MS = 120;
+let pptChain = Promise.resolve();
+let pptLastStart = 0;
+function pptSlot() {
+  const next = pptChain.then(async () => {
+    const wait = pptLastStart + PPT_MIN_GAP_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    pptLastStart = Date.now();
+  });
+  pptChain = next.catch(() => {});
+  return next;
+}
+
+/* What the card database is doing, for the UI to read. A module-level signal
+   rather than a callback per call site: several panels can be waiting out the
+   same throttle at once, and threading an onWait through every caller is
+   exactly what kept this behaviour confined to the grading scan. */
+const pptStatus = { waitingUntil: 0 };
+const pptWatchers = new Set();
+const pptEmit = () => { for (const fn of pptWatchers) fn(); };
+export const subscribePpt = (fn) => { pptWatchers.add(fn); return () => pptWatchers.delete(fn); };
+export const pptWaitingUntil = () => pptStatus.waitingUntil;
+async function pptPause(ms) {
+  // the longest pause in flight wins the banner, so two overlapping waits do
+  // not make the countdown jump backwards
+  pptStatus.waitingUntil = Math.max(pptStatus.waitingUntil, Date.now() + ms);
+  pptEmit();
+  await sleep(ms);
+  if (Date.now() >= pptStatus.waitingUntil) { pptStatus.waitingUntil = 0; pptEmit(); }
+}
+
+/* The retry ceiling, refilling over time. It is load-bearing rather than
+   tidy, for the same reason makeThrottleWaiter's is (see below): the Lambda
+   calls an unrecognisable 429 a throttle on purpose, so without a ceiling a
+   genuinely spent daily budget would put every call in this app into a retry
+   loop instead of saying so. */
+const RETRY_MAX = 2;                 // extra attempts after the first
+const RETRY_WAIT_MAX_S = 5;          // longest single pause absorbed silently
+const RETRY_BUDGET_MS = 30_000;      // spendable per refill window
+const RETRY_REFILL_MS = 60_000;
+let retrySpent = 0;
+let retryWindow = 0;
+function takeRetryBudget(ms) {
+  const now = Date.now();
+  if (now - retryWindow > RETRY_REFILL_MS) { retryWindow = now; retrySpent = 0; }
+  if (retrySpent + ms > RETRY_BUDGET_MS) return false;
+  retrySpent += ms;
+  return true;
+}
+
+async function cardFetchOnce(path, qs, token) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), SYNC_TIMEOUT);
   try {
@@ -110,6 +179,28 @@ async function cardFetch(path, params = {}) {
   } finally { clearTimeout(t); }
 }
 
+async function cardFetch(path, params = {}) {
+  const token = syncToken();
+  if (!token) { const e = new Error(NO_TOKEN_MSG); e.status = 401; throw e; }
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v != null && v !== "") qs.set(k, v);
+  for (let attempt = 0; ; attempt++) {
+    await pptSlot();
+    try { return await cardFetchOnce(path, qs, token); }
+    catch (e) {
+      /* Only a per-minute throttle retries. A spent budget, a 401, a 404 and a
+         network failure all throw exactly as they did, with kind and
+         retryAfter intact, so every existing catch keeps its meaning — and so
+         the grading scan's own visible countdown still sees the throttles this
+         one chose not to absorb. */
+      if (!isThrottled(e) || attempt >= RETRY_MAX) throw e;
+      const ms = Math.min(Math.max(Number(e.retryAfter) || 2, 1), RETRY_WAIT_MAX_S) * 1000;
+      if (!takeRetryBudget(ms)) throw e;
+      await pptPause(ms);
+    }
+  }
+}
+
 /* ------------------------------------------------------------------ */
 const KEY = "cardledger:v1";
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -128,6 +219,7 @@ for (const dead of [
   "cardledger:matchcache:v1", "cardledger:matchcache:v2", // v2 keyed matches without productId
   "cardledger:invview", // the grid/list toggle; the grid is the only view now
   "cardledger:setprices:v1",
+  "cardledger:setcatalog:v1", // dumps the Lambda may have resolved to the wrong set, cached for 30 days
   "cardledger:graded:v1",
 ]) { try { localStorage.removeItem(dead); } catch {} }
 
@@ -198,10 +290,15 @@ const parseQuery = (q) => {
   };
 };
 /* one thin door to the Lambda's /search — raw text in, legacy-shaped slim
-   cards out. The retry without the set filter lives server-side. */
-async function searchCards({ q, set = "", number = "", lang = "en" }) {
+   cards out. The retry without the set filter lives server-side, and it now
+   reports itself in `setDropped`. A caller that asked for one set has to know
+   it did not get one, or it reads every set's cards as that set's. */
+async function searchCardsRaw({ q, set = "", number = "", lang = "en" }) {
   const j = await cardFetch("search", { q, set, number, lang: lang === "jp" ? "jp" : "" });
-  return j.cards || [];
+  return { cards: j.cards || [], setDropped: !!j.setDropped };
+}
+async function searchCards(args) {
+  return (await searchCardsRaw(args)).cards;
 }
 const qcacheRead = () => { try { return JSON.parse(localStorage.getItem(QCACHE_KEY)) || {}; } catch { return {}; } };
 const qcacheGet = (terms) => { const c = qcacheRead()[terms]; return c && Date.now() - c.t < QCACHE_TTL ? c.r : null; };
@@ -290,13 +387,15 @@ async function fetchSetPrices(setName, force = false, lang = "en") {
    set's images cost one request total instead of one per card. Images never
    change once a card is printed, so the cache lives a month; prices inside
    go stale but this cache is only ever read for images and identity. */
-const SETCATALOG_KEY = "cardledger:setcatalog:v1";
+const SETCATALOG_KEY = "cardledger:setcatalog:v2"; // v2: v1 could hold a dump the Lambda resolved to the wrong set
 const SETCATALOG_TTL = 30 * 24 * 3600 * 1000;
-const setCatalogGet = (key) => { try { const c = (JSON.parse(localStorage.getItem(SETCATALOG_KEY)) || {})[key]; return c && Date.now() - c.t < SETCATALOG_TTL ? c.l : null; } catch { return null; } };
-const setCatalogPut = (key, list) => {
+/* An entry is { t, l, g }: when it was read, the cards, and TCGplayer's own
+   name for the group. Entries written before `g` existed simply have none. */
+const setCatalogGet = (key, maxAge = SETCATALOG_TTL) => { try { const c = (JSON.parse(localStorage.getItem(SETCATALOG_KEY)) || {})[key]; return c && Date.now() - c.t < maxAge ? c : null; } catch { return null; } };
+const setCatalogPut = (key, list, group) => {
   try {
     const all = JSON.parse(localStorage.getItem(SETCATALOG_KEY)) || {};
-    all[key] = { t: Date.now(), l: list };
+    all[key] = { t: Date.now(), l: list, g: group || "" };
     const keys = Object.keys(all);
     if (keys.length > 10) keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - 10).forEach((k) => delete all[k]);
     localStorage.setItem(SETCATALOG_KEY, JSON.stringify(all));
@@ -307,24 +406,46 @@ const setCatalogInFlight = new Map(); // dedupes concurrent fetches for the same
 // within seconds only re-spends the same rate-limited minute
 const setCatalogFailed = new Map();
 const SETCATALOG_RETRY = 5 * 60 * 1000;
-function fetchSetCatalog(setName, lang = "en") {
+/* The primitive: resolves { cards, group }, or throws.
+
+   `maxAge` is the caller's freshness bar, not the cache's. The binder reads
+   this for art and identity, and neither changes once a card is printed, so a
+   month-old dump is perfect. The set browser renders prices out of the same
+   dump, and a month-old price is not a price — it asks for a day. One store,
+   two bars. Asking for the fresher copy is usually free: the Lambda caches set
+   dumps 24h server-side, so the refetch is a DynamoDB read, not PPT credits.
+
+   It throws where fetchSetCatalog below swallows, because a failed dump and a
+   genuinely empty set are indistinguishable once the error is gone, and only
+   one of them deserves a Retry button. It also ignores the failure rest, so a
+   user pressing Retry is not told to wait five minutes. */
+function loadSetCatalog(setName, lang = "en", maxAge = SETCATALOG_TTL) {
   const key = lang === "jp" ? `${setName}|jp` : setName;
-  const cached = setCatalogGet(key);
-  if (cached) return Promise.resolve(cached);
-  if (setCatalogInFlight.has(key)) return setCatalogInFlight.get(key);
-  const failedAt = setCatalogFailed.get(key);
-  if (failedAt && Date.now() - failedAt < SETCATALOG_RETRY) return Promise.resolve([]);
+  const hit = setCatalogGet(key, maxAge);
+  if (hit) return Promise.resolve({ cards: hit.l, group: hit.g || setName });
+  const flight = setCatalogInFlight.get(key);
+  if (flight) return flight;
   const p = cardFetch("catalog", { set: setName, lang: lang === "jp" ? "jp" : "" })
     .then((j) => {
-      const list = j.cards || [];
-      setCatalogPut(key, list);
+      const out = { cards: j.cards || [], group: j.group || setName };
+      setCatalogPut(key, out.cards, out.group);
       setCatalogFailed.delete(key);
-      return list;
+      return out;
     })
-    .catch(() => { setCatalogFailed.set(key, Date.now()); return []; })
     .finally(() => setCatalogInFlight.delete(key));
   setCatalogInFlight.set(key, p);
   return p;
+}
+/* The forgiving wrapper every art path uses: resolves the card list and never
+   throws, so a screen that cannot place a card falls back to a name tile
+   rather than breaking. */
+function fetchSetCatalog(setName, lang = "en", maxAge = SETCATALOG_TTL) {
+  const key = lang === "jp" ? `${setName}|jp` : setName;
+  const failedAt = setCatalogFailed.get(key);
+  if (failedAt && Date.now() - failedAt < SETCATALOG_RETRY) return Promise.resolve([]);
+  return loadSetCatalog(setName, lang, maxAge)
+    .then((r) => r.cards)
+    .catch(() => { setCatalogFailed.set(key, Date.now()); return []; });
 }
 // catalog rows carry TCGplayer product names ("Pikachu - 058/102 (Pokemon
 // Center Exclusive)") — compare with the number tail and qualifiers stripped
@@ -340,10 +461,40 @@ const qualOf = (s) => (String(s || "").normalize("NFD").replace(/[\u0300-\u036f]
 // same print when the qualifiers agree, or when one spells out what the other
 // abbreviates. Absent on both sides matches; absent on one side does not.
 const qualNear = (a, b) => { const x = qualOf(a), y = qualOf(b); return (!x && !y) || (!!x && !!y && (x === y || x.includes(y) || y.includes(x))); };
-const imageInSet = (list, card) => (list && (
-  (card.number && list.find((c) => normNum(c.num) === normNum(card.number))) ||
-  list.find((c) => bareName(c.name) === bareName(card.name))
-)) || null;
+/* Which product in a set dump is this card.
+
+   This used to be the first row sharing the collector number, with the name
+   never read at all. That is how a Mudkip in First Partner Pack Series 3 wore
+   another card's picture: those sets number their cards 1/2/3 per series and
+   the jumbo prints repeat those numbers, so `find` returned whichever product
+   PPT happened to list first. The name and the number on the tile come from
+   the ledger, so they stayed right while the art was wrong.
+
+   Every other identity path here already refuses to guess — byProductId
+   below, qualNear above, resolveProductId in the Lambda. This one does too
+   now. A card it cannot place returns null and falls through to the per-card
+   /search, then to the name tile, then to the art picker in the card modal.
+   No art beats wrong art, because wrong art never announces itself. */
+const imageInSet = (list, card) => {
+  if (!list?.length || !card?.name) return null;
+  /* A stored productId is the card's exact identity. Pinned and absent from
+     the dump is "no match", never "the nearest one" — the same rule
+     byProductId applies to a /search result. */
+  if (card.productId) return list.find((c) => c.productId && String(c.productId) === String(card.productId)) || null;
+  /* The name has to agree. An exact name wins; the prefix test only covers a
+     catalogue that spells the card slightly differently. */
+  const exact = list.filter((c) => bareName(c.name) === bareName(card.name));
+  const named = exact.length ? exact : list.filter((c) => nameNear(bareName(c.name), bareName(card.name)));
+  if (!named.length) return null;
+  if (card.number) {
+    const at = named.filter((c) => normNum(c.num) === normNum(card.number));
+    // this name is in the set, but not at this number — two different cards
+    if (!at.length) return null;
+    // "Mudkip" must beat "Mudkip (Jumbo)" unless the ledger card says otherwise
+    return at.find((c) => qualNear(c.name, card.name)) || at[0];
+  }
+  return named.find((c) => qualNear(c.name, card.name)) || named[0];
+};
 // a /prices per-printing map as price blocks in the app's card shape. This used to
 // force every price under `holofoil` regardless of its real subtype, which
 // left a card's displayed price unrelated to the printing it came from.
@@ -550,7 +701,6 @@ async function fetchGradedComps(name, set, number, lang = "en", productId = "") 
    ceiling a genuinely spent budget would park a scan in a retry loop forever.
    Once the cap is spent the error rethrows with its kind intact and the caller
    says "still rate-limited" — never "out of credits", which it doesn't know. */
-const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 const RUN_WAIT_CAP_MS = 120_000; // total pause one run will spend
 const RUN_WAIT_MAX_S = 60;       // longest single pause honoured
 function makeThrottleWaiter() {
@@ -1109,17 +1259,45 @@ const byProductId = (list, card) => {
   // pinned and absent from the results is "no match", never "the nearest one"
   return list.filter((c) => c.productId && String(c.productId) === String(card.productId));
 };
+/* Two set names for one set. Both sides arrive plain — the Lambda strips
+   TCGplayer's "SWSH: " prefix before it answers — so the prefix strip here
+   only covers a name that slipped through with one. The test is equality on
+   purpose: a suffix test would read "Base Set" as "Scarlet & Violet Base
+   Set", which is the exact trap pptSetData fell into. */
+const plainSet = (s) => foldText(s).replace(/^\w{1,7}:\s+/, "").trim();
+const sameSet = (a, b) => { const x = plainSet(a), y = plainSet(b); return !!x && x === y; };
+/* A result from another set is another card. The Lambda drops the set filter
+   and retries unscoped when PPT does not know the set name, so "Mudkip 3" in
+   First Partner Pack Series 3 could come back as a Mudkip from a set the
+   ledger never named — the name agrees and the number agrees, and nothing
+   else here caught it.
+
+   Two cases are exempt. A card with no set has nothing to check against. And
+   TCGplayer files a stamped print outside the set printed on the card —
+   "Reshiram (Stellar Crown Stamped)" lives in Miscellaneous Cards & Products
+   — so a stamped card's set is meant to disagree. */
+const inSameSet = (hit, card) => {
+  if (!card.set) return true;
+  const hs = hit.set?.name || "";
+  if (!hs) return true; // the result named no set, so it contradicts nothing
+  return sameSet(hs, card.set) || sameSet(hs, MISC_SET) || STAMPED_RE.test(card.name || "");
+};
 async function lookupCardCandidates(card) {
   if (!card.name) return [];
   const lang = card.lang === "jp" ? "jp" : "en";
   try {
     if (card.number) {
-      const list = await searchCards({ q: card.name, set: card.set || "", number: normNum(card.number), lang });
-      return byProductId(list, card) || list.filter((c) => nameNear(c.name, card.name) && normNum(c.number) === normNum(card.number));
+      const { cards: list } = await searchCardsRaw({ q: card.name, set: card.set || "", number: normNum(card.number), lang });
+      return byProductId(list, card)
+        || list.filter((c) => inSameSet(c, card) && nameNear(c.name, card.name) && normNum(c.number) === normNum(card.number));
     }
     if (card.set) {
-      const list = await searchCards({ q: card.name, set: card.set, lang });
-      return byProductId(list, card) || list.filter((c) => nameNear(c.name, card.name));
+      const { cards: list, setDropped } = await searchCardsRaw({ q: card.name, set: card.set, lang });
+      /* No number to pin it, and PPT never scoped the search: every row is a
+         card of this name from some other set, and the name alone cannot tell
+         them apart. A pinned productId is still exact, so it still answers. */
+      if (setDropped) return byProductId(list, card) || [];
+      return byProductId(list, card) || list.filter((c) => inSameSet(c, card) && nameNear(c.name, card.name));
     }
   } catch { return []; }
   return []; // no number and no set — too ambiguous to match safely
@@ -1164,7 +1342,7 @@ const matchInFlight = new Map();
 const matchMiss = new Map(); // key -> time of the miss
 const MATCH_MISS_TTL = 5 * 60 * 1000;
 function lookupCardMatch(card) {
-  const key = `${card.name}|${card.set || ""}|${card.number || ""}|${card.productId || ""}`.toLowerCase();
+  const key = artKey(card); // one identity for the match cache and the art index
   if (matchCache.has(key)) return Promise.resolve(matchCache.get(key));
   const persisted = matchLsGet(key);
   if (persisted !== undefined) { matchCache.set(key, persisted); return Promise.resolve(persisted); }
@@ -1287,13 +1465,46 @@ function useDebounced(value, ms) {
   return v;
 }
 function useCardImages(cards, withRarity = false) {
-  const [images, setImages] = useState({}); // id -> url|null; a missing key means still resolving
-  const [rarities, setRarities] = useState({});
-  const setKeys = [...new Set(cards.filter((c) => c.set).map((c) => `${c.set}\t${isJP(c) ? "jp" : "en"}`))].sort().join("|");
-  const cardIds = cards.map((c) => c.id).join("|");
+  /* The art index answers with no await, so the very first render already
+     holds every URL this device has resolved before. primeArt filled it from
+     IndexedDB before the ledger rendered, and FadeImg has the bytes for those
+     URLs too — which is why a warm binder paints instantly and asks the
+     network for nothing. A card the index cannot answer stays absent, and the
+     tiles read an absent key as "still resolving". */
+  const seedFromIndex = () => {
+    const out = {};
+    for (const c of cards) {
+      const a = artFor(c);
+      if (!a?.url) continue;
+      out[c.id] = a.url;
+      if (a.rarity) cardRarities[c.id] = a.rarity;
+    }
+    return out;
+  };
+  const [images, setImages] = useState(seedFromIndex);
+  const [rarities, setRarities] = useState(() => (withRarity ? { ...cardRarities } : {}));
+  /* Only a card the index cannot answer needs its set dump. A binder whose
+     cards are all indexed fetches no set at all. */
+  const setKeys = [...new Set(cards.filter((c) => c.set && c.name && !artFor(c)?.url).map((c) => `${c.set}\t${isJP(c) ? "jp" : "en"}`))].sort().join("|");
+  // productId rides the key so choosing an art in the picker re-resolves that
+  // card — the pick changes its identity, not its ledger id
+  const cardIds = cards.map((c) => `${c.id}:${c.productId || ""}`).join("|");
   useEffect(() => {
     let live = true;
     (async () => {
+      // a card added, edited or re-pinned since the last render may already be
+      // in the index; apply those before spending a request on anything
+      const known = {};
+      for (const c of cards) {
+        const a = c.name ? artFor(c) : null;
+        if (!a?.url) continue;
+        known[c.id] = a.url;
+        if (a.rarity) cardRarities[c.id] = a.rarity;
+      }
+      if (Object.keys(known).length) {
+        setImages((s) => ({ ...s, ...known }));
+        if (withRarity) setRarities({ ...cardRarities });
+      }
       const maps = {};
       await Promise.all((setKeys ? setKeys.split("|") : []).map(async (k) => {
         const [name, lang] = k.split("\t");
@@ -1304,9 +1515,10 @@ function useCardImages(cards, withRarity = false) {
       const leftover = [];
       for (const c of cards) {
         if (!c.name) { found[c.id] = null; continue; }
+        if (known[c.id]) continue; // the index already answered for this one
         const hit = c.set ? imageInSet(maps[`${c.set}\t${isJP(c) ? "jp" : "en"}`], c) : null;
         if (hit?.rarity) cardRarities[c.id] = hit.rarity;
-        if (hit?.img) found[c.id] = hit.img;
+        if (hit?.img) { found[c.id] = hit.img; pinArt(c, hit.img, hit.rarity); }
         else leftover.push(c);
       }
       setImages((s) => ({ ...s, ...found }));
@@ -1316,7 +1528,9 @@ function useCardImages(cards, withRarity = false) {
           (m) => {
             if (!live) return;
             if (m?.rarity) { cardRarities[c.id] = m.rarity; if (withRarity) setRarities({ ...cardRarities }); }
-            setImages((s) => ({ ...s, [c.id]: m?.images?.small || null }));
+            const url = m?.images?.small || null;
+            if (url) pinArt(c, url, m?.rarity); // never asked for again, on this device
+            setImages((s) => ({ ...s, [c.id]: url }));
           },
           () => { if (live) setImages((s) => ({ ...s, [c.id]: null })); },
         );
@@ -1331,6 +1545,18 @@ function useCardImages(cards, withRarity = false) {
 export default function App() {
   const [state, setState] = useState(null);
   const [tab, setTab] = useState("inv");
+  /* Eight tabs do not fit a phone. The bar has always scrolled, but nothing
+     scrolled with it: on a 390px screen four tabs sit off the right edge, and
+     at 320px the tab you just switched to could be one of them — so the app
+     looked like it had ignored the tap. Bring the active tab into view on
+     every change, including the first paint. */
+  const tabsRef = useRef(null);
+  useEffect(() => {
+    const on = tabsRef.current?.querySelector(".cl-tab.on");
+    if (!on?.scrollIntoView) return;
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    on.scrollIntoView({ inline: "center", block: "nearest", behavior: reduce ? "auto" : "smooth" });
+  }, [tab]);
   /* Tab switches ride the View Transitions API where the browser has it
      (iOS 18+ / modern Chrome): the outgoing pane cross-fades away instead of
      vanishing, and the key={tab} entrance below still slides the new one in.
@@ -1386,6 +1612,12 @@ export default function App() {
     let local = null;
     try { const r = await storage.get(KEY); if (r && r.value) local = migrate(JSON.parse(r.value)); } catch {}
     const cur = local || seed();
+    /* Warm the art before anything paints. One IndexedDB pass reads which
+       picture each held card uses and the bytes for those pictures, so the
+       binder's first frame is already complete and asks the network for
+       nothing. The "Loading your ledger…" screen below already covers this,
+       and a device with no stored art skips it in a millisecond. */
+    try { await primeArt(cur.inventory || []); } catch {}
     if (!syncToken()) { setState(cur); return; }
     // Show the ledger from this device before the app calls the cloud. The cloud
     // check reconciles the two copies. It is not a precondition to read the
@@ -1506,9 +1738,10 @@ export default function App() {
         <div className="cl-brand"><Sparkles size={18} className="cl-spark" /><span>Binder<span className="holo-text">Books</span></span></div>
         <div className="cl-tag">card P&amp;L ledger</div>
       </header>
-      <nav className="cl-tabs">
+      <nav className="cl-tabs" ref={tabsRef}>
         {TABS.map(([k, label, Icon]) => (<button key={k} className={"cl-tab" + (tab === k ? " on" : "")} onClick={() => switchTab(k)}><Icon size={15} /> <span>{label}</span></button>))}
       </nav>
+      <RateLimitBanner />
       <main className="cl-main cl-tabpane" key={tab}>
         {tab === "dash" && <Dashboard state={state} patch={patch} go={switchTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} resolveChoice={resolveChoice} />}
         {tab === "month" && <Monthly state={state} />}
@@ -2727,83 +2960,9 @@ const haptic = (kind = "light") => {
   if (window.__BINDERBOOKS_NATIVE__) window.webkit?.messageHandlers?.haptics?.postMessage(kind);
 };
 
-/* Card art persists on the device. The OS evicts the browser's HTTP cache
-   (WKWebView most of all). So every image FadeImg renders is also stored as
-   a blob in IndexedDB and served from there on every later look. No network.
-
-   Storing a blob needs a readable cross-origin response. Every art URL the
-   Lambda serves today is PPT's imageCdnUrl200 on tcgplayer-cdn.tcgplayer.com,
-   which allows one. A host that fails IMG_HOST_STRIKES times in a row is not
-   fetched again this session. Its art then renders straight from the URL.
-   One success clears the count, so a dropped connection does not disable
-   the cache for the rest of the session. */
-const IMG_DB = "binderbooks-images";
-const IMG_CAP = 500; // ~200px thumbs run 20-60KB; the cap keeps this near 15-25MB
-const IMG_HOST_STRIKES = 3;
-let imgDbP = null;
-const imgDb = () => {
-  if (!imgDbP) imgDbP = new Promise((res, rej) => {
-    const r = indexedDB.open(IMG_DB, 1);
-    r.onupgradeneeded = () => { const st = r.result.createObjectStore("img", { keyPath: "url" }); st.createIndex("t", "t"); };
-    r.onsuccess = () => res(r.result);
-    r.onerror = () => rej(r.error);
-  });
-  return imgDbP;
-};
-// url -> Promise<objectURL|null>. One promise per url: every tile that asks
-// while a fetch runs awaits the same result, so nothing is fetched twice and
-// no tile is left on the network copy. The object URLs live for the session
-// on purpose — they are the cache — so they are never revoked.
-const imgMem = new Map();
-const imgReady = new Map(); // url -> objectURL, for a synchronous first render
-const hostStrikes = new Map(); // host -> consecutive failures
-const hostOf = (u) => { try { return new URL(u).host; } catch { return ""; } };
-const idbReq = (req) => new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
-async function idbGet(url) {
-  try { const db = await imgDb(); return await idbReq(db.transaction("img").objectStore("img").get(url)); } catch { return null; }
-}
-async function idbPut(url, blob) {
-  try {
-    const db = await imgDb();
-    await idbReq(db.transaction("img", "readwrite").objectStore("img").put({ url, blob, t: Date.now() }));
-    // eviction in its own transaction: an awaited request inside the put
-    // transaction auto-commits it on older WebKit
-    const st = db.transaction("img", "readwrite").objectStore("img");
-    const cnt = await idbReq(st.count());
-    if (cnt > IMG_CAP) {
-      let drop = cnt - IMG_CAP;
-      st.index("t").openCursor().onsuccess = (e) => { const cur = e.target.result; if (cur && drop-- > 0) { cur.delete(); cur.continue(); } };
-    }
-  } catch {} // a full or locked store loses one blob, never the image
-}
-function cachedImageURL(url) {
-  if (!url || !/^https?:/.test(url)) return Promise.resolve(null);
-  if (imgMem.has(url)) return imgMem.get(url);
-  const p = (async () => {
-    const rec = await idbGet(url);
-    if (rec?.blob) { const o = URL.createObjectURL(rec.blob); imgReady.set(url, o); return o; }
-    const host = hostOf(url);
-    if ((hostStrikes.get(host) || 0) >= IMG_HOST_STRIKES) return null;
-    try {
-      const r = await fetch(url, { mode: "cors" });
-      if (!r.ok) throw new Error(String(r.status));
-      const blob = await r.blob();
-      const o = URL.createObjectURL(blob);
-      imgReady.set(url, o);
-      hostStrikes.delete(host);
-      idbPut(url, blob); // not awaited: the tile shows now, the store fills behind it
-      return o;
-    } catch {
-      // a CORS refusal and a dead network look the same from here; the strike
-      // count tells them apart over a few tries
-      hostStrikes.set(host, (hostStrikes.get(host) || 0) + 1);
-      return null;
-    }
-  })();
-  imgMem.set(url, p);
-  p.then((o) => { if (!o) imgMem.delete(url); }); // a miss may retry on the next mount
-  return p;
-}
+/* Card art persists on the device, in src/art.js — the blob store keyed by
+   URL, plus the art index that tells the app which URL a card uses without
+   asking PPT. Both are warmed by primeArt before the ledger renders. */
 /* Card art fades in as it decodes instead of popping. The ref check covers
    cache hits — a complete image never fires onLoad, and without it a cached
    picture would stay invisible.
@@ -2815,7 +2974,7 @@ function cachedImageURL(url) {
 export function FadeImg({ className = "", src, ...props }) {
   const [on, setOn] = useState(false);
   // a data:/blob: src (scan previews) is already local — render it at once
-  const first = (u) => imgReady.get(u) || (/^https?:/.test(u || "") ? null : u);
+  const first = (u) => readyURL(u) || (/^https?:/.test(u || "") ? null : u);
   const [use, setUse] = useState(() => first(src));
   useEffect(() => {
     let live = true;
@@ -2829,6 +2988,7 @@ export function FadeImg({ className = "", src, ...props }) {
   return <img {...props} src={use} ref={ref} className={`${className} cl-imgfade${on ? " on" : ""}`} onLoad={() => setOn(true)} />;
 }
 
+const BINDERVIEW_KEY = "cardledger:binderview:v1";
 function Inventory({ state, patch }) {
   const inv = state.inventory || [];
   const [adding, setAdding] = useState(false);
@@ -3329,6 +3489,14 @@ function Inventory({ state, patch }) {
   const range = invRange(live);
   const hasRange = range.lo !== range.hi;
   const FILTERS = ["All", "Kept", "At grading", "Listed", "Sold"];
+  /* How the grid is laid out, which is a separate question from which cards
+     the pills let through — you can be looking at Listed cards grouped by set,
+     or every card in the order you added them. Kept out of React state's reach
+     across tab switches for the same reason the Lookup mode is: <main key={tab}>
+     re-mounts this pane every time you leave and come back. */
+  const VIEWS = [["recent", "Recent"], ["status", "By status"], ["set", "By set"]];
+  const [view, setView] = useState(() => { try { const v = localStorage.getItem(BINDERVIEW_KEY); return VIEWS.some(([k]) => k === v) ? v : "recent"; } catch { return "recent"; } });
+  const pickView = (v) => { haptic("select"); setView(v); try { localStorage.setItem(BINDERVIEW_KEY, v); } catch {} };
   const matchesQ = (c) => fuzzyMatch(q, c.name, c.set, c.number, c.grade, c.status);
   // the global setting: with sold cards hidden, "All" means every card still
   // in hand, and the Sold pill is the one place they show
@@ -3337,21 +3505,38 @@ function Inventory({ state, patch }) {
   // the grid filters on every keystroke; the image and trend lookups wait for
   // the typing to settle, so a burst of letters is one re-key, not five
   const qSettled = useDebounced(q, 250);
-  /* the grid: every card that passes the pill and the search, grouped into a
-     page per set; a sold card wears its Sold badge in the grid. */
-  const gridCards = useMemo(() => inv
-    .filter((c) => matchesQ(c) && passesStatus(c)) // a nameless legacy card still gets a tile, or it could never be edited or deleted
-    .sort((a, b) => (a.set || "").localeCompare(b.set || "") || normNum(a.number).localeCompare(normNum(b.number), undefined, { numeric: true }) || (a.name || "").localeCompare(b.name || "")),
-  [inv, filter, q, showSold]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* the grid: every card that passes the pill and the search.
+
+     Three ways to see it, because a binder gets read three ways. `recent` is
+     the default and does the least: the ledger's own order, which is the order
+     cards were added — a new card is pushed onto the front, so newest is first
+     and editing a card's date never moves it. That is a different thing from
+     the `date` field, which is when the card was got and can be typed.
+
+     `status` and `set` both group into pages. Grouping used to be unavoidable
+     and always by set, so a binder of one-card sets was mostly headers. */
+  const rank = (c) => { const i = FILTERS.indexOf(c.status); return i < 0 ? FILTERS.length : i; };
+  const gridCards = useMemo(() => {
+    const kept = inv.filter((c) => matchesQ(c) && passesStatus(c)); // a nameless legacy card still gets a tile, or it could never be edited or deleted
+    const bySetThenNumber = (a, b) => (a.set || "").localeCompare(b.set || "")
+      || normNum(a.number).localeCompare(normNum(b.number), undefined, { numeric: true })
+      || (a.name || "").localeCompare(b.name || "");
+    if (view === "set") return kept.slice().sort(bySetThenNumber);
+    // inside a status page the ledger order still reads newest-first, so a
+    // stable sort on the rank alone is the whole job
+    if (view === "status") return kept.slice().sort((a, b) => rank(a) - rank(b));
+    return kept; // `recent`: the ledger's own order, untouched
+  }, [inv, filter, q, showSold, view]); // eslint-disable-line react-hooks/exhaustive-deps
   const pages = useMemo(() => {
+    if (view === "recent") return [{ key: "", cards: gridCards }];
     const out = [];
     for (const c of gridCards) {
-      const key = c.set || "Unsorted";
+      const key = view === "status" ? (c.status || "Unsorted") : (c.set || "Unsorted");
       const page = out[out.length - 1]?.key === key ? out[out.length - 1] : (out.push({ key, cards: [] }), out[out.length - 1]);
       page.cards.push(c);
     }
     return out;
-  }, [gridCards]);
+  }, [gridCards, view]);
   const lookupCards = useMemo(() => inv.filter((c) => c.name && fuzzyMatch(qSettled, c.name, c.set, c.number, c.grade, c.status) && passesStatus(c)), [inv, filter, qSettled, showSold]); // eslint-disable-line react-hooks/exhaustive-deps
   const [images, rarities] = useCardImages(lookupCards, true);
   const trends = useCardTrends(useMemo(() => lookupCards.filter((c) => c.status !== "Sold"), [lookupCards]));
@@ -3482,12 +3667,17 @@ function Inventory({ state, patch }) {
         <input className="cl-in bare" placeholder="Search your cards — name, set, number" value={q} onChange={(e) => setQ(e.target.value)} />
         {q && <button className="cl-salesearch-x" onClick={() => setQ("")}><X size={14} /></button>}
       </div>}
+      {/* two rows, because they answer two questions: which cards, and how
+          they are laid out. Both scroll on a narrow phone. */}
+      {inv.length > 0 && <div className="cl-pills cl-views">{VIEWS.map(([k, label]) => <button key={k} className={"cl-pill" + (view === k ? " on" : "")} onClick={() => pickView(k)}>{label}</button>)}</div>}
       {inv.length > 0 && <div className="cl-pills">{FILTERS.map((x) => <button key={x} className={"cl-pill" + (filter === x ? " on" : "")} onClick={() => setFilter(x)}>{x}</button>)}</div>}
       {inv.length === 0 && !adding && <Empty>No cards yet. Add a keeper or a card you've sent for grading, or hit “+ Keep” from Lookup to pull one in with its market value.</Empty>}
       {inv.length > 0 && gridCards.length === 0 && <Empty>{q ? `Nothing matches “${q}”.` : "Nothing here — check another status pill."}</Empty>}
       {pages.map((p) => (
         <div key={p.key} className="cl-binder-page">
-          <div className="cl-binder-page-head"><span>{p.key}</span><span className="cl-row-meta">{p.cards.length} card{p.cards.length === 1 ? "" : "s"}</span></div>
+          {/* the default view has one page and no name, so it draws no header
+              at all — "no separations" means none, not an empty bar */}
+          {p.key && <div className="cl-binder-page-head"><span>{p.key}</span><span className="cl-row-meta">{p.cards.length} card{p.cards.length === 1 ? "" : "s"}</span></div>}
           <BinderGrid>
             {p.cards.map((c) => <BinderCard key={c.id} card={c} img={images[c.id]} rarity={rarities[c.id]} trend={trends[c.id]} onOpen={onOpenRow} />)}
           </BinderGrid>
@@ -3731,12 +3921,73 @@ const CM_GRADES = ["10", "9.5", "9", "8"];
 const cmTrend = (t) => (t === "up" ? <span className="cl-cm-tr up">▲</span> : t === "down" ? <span className="cl-cm-tr down">▼</span> : null);
 // takes the error rather than a bare status: a 429 alone no longer says which
 // limit was hit, and the two want different sentences
+/* These read as "the card database" rather than "eBay solds" because DataState
+   now renders them for the set dump and the card search too, and the daily
+   budget really is one budget across every PPT route. Only the 404 stays
+   caller-specific, through DataState's `notFound`: a set that does not exist
+   and a card with no recent sales are both 404s and want different words. */
 const cmErrMsg = (e) => (e.status === 401 ? NO_TOKEN_MSG
-  : e.status === 501 ? "eBay comps aren't set up on the sync Lambda."
+  : e.status === 501 ? "Card data isn't set up on the sync Lambda."
   : isThrottled(e) ? THROTTLE_MSG
-  : e.status === 429 ? "Daily eBay-comps budget is used up — sold data comes back tomorrow."
+  : e.status === 429 ? "The daily card-data budget is used up — it comes back tomorrow."
   : e.status === 404 ? "No recent eBay solds found for this card."
-  : "eBay sold data is unavailable right now.");
+  /* The fallback is source-neutral on purpose: DataState renders this for the
+     /search and /catalog panels too, and naming eBay there was simply wrong. */
+  : "The card database didn't answer just now.");
+/* Offering Retry where retrying cannot help is worse than not offering it. No
+   token, a Lambda with no key, a spent daily budget and a 404 are all answers,
+   not failures to shake off — the first three tell you what to do instead, and
+   a 404 means the database looked and found nothing. Everything else is worth
+   another try. */
+function canRetry(e) {
+  if (!e) return false;
+  if (e.status === 401 || e.status === 501 || e.status === 404) return false;
+  return !(e.status === 429 && !isThrottled(e));
+}
+/* Seconds left on the current rate-limit pause, or 0. Ticks while a pause runs
+   so a countdown can render; the interval only exists while something waits. */
+function usePptWait() {
+  const [left, setLeft] = useState(0);
+  useEffect(() => {
+    const read = () => setLeft(Math.max(0, Math.ceil((pptWaitingUntil() - Date.now()) / 1000)));
+    read();
+    const off = subscribePpt(read);
+    const t = setInterval(read, 500);
+    return () => { off(); clearInterval(t); };
+  }, []);
+  return left;
+}
+/* One line, app-wide, while the card database is being waited out. Several
+   panels can be blocked on the same throttle at once, and a countdown inside
+   each of them says the same thing four times. */
+function RateLimitBanner() {
+  const left = usePptWait();
+  if (!left) return null;
+  return <div className="cl-ratelimit" role="status">Card database is busy — retrying in {left}s</div>;
+}
+/* What a card-data panel says while it has no data, written once instead of
+   twelve times.
+
+   The important case is the one in the middle: a per-minute throttle we are
+   still retrying is a wait, not a failure, so it renders as loading. Saying
+   "the card database is unavailable" for something that fixes itself in two
+   seconds is what this replaces. Only an error retrying cannot fix is
+   terminal, and even then the button is there.
+
+   `s` is the { state, status, kind } shape useCardMarketData already keeps. */
+function DataState({ s, loading = "Loading…", notFound, onRetry }) {
+  const left = usePptWait();
+  if (!s || s.state === "loading") {
+    return <div className="cl-cm-note">{left ? `Card database is busy — retrying in ${left}s…` : loading}</div>;
+  }
+  if (s.state !== "err") return null;
+  return (
+    <div className="cl-cm-note">
+      <span>{s.status === 404 && notFound ? notFound : cmErrMsg(s)}</span>
+      {onRetry && canRetry(s) && <button className="cl-mini cl-retry" onClick={onRetry}><RefreshCw size={12} /> Retry</button>}
+    </div>
+  );
+}
 /* Every PPT-backed fact about one card, shared by CardModal (a ledger card)
    and CardPriceModal (a bare search result) — neither reads anything past
    `identity`, so this owns nothing ledger-specific. Pulls four slots in
@@ -3750,6 +4001,11 @@ function useCardMarketData(identity, variant) {
   const [liveMatch, setLiveMatch] = useState(null); // market off the /search hit — a fuzzy guess, so it ranks below the set dump
   const [comps, setComps] = useState({ state: "loading" }); // /graded body
   const [hist, setHist] = useState(null);     // /history body: null = looking, false = none
+  /* Bumped by the panel's Retry button. It is a dependency of the fetch effect
+     below, so a retry re-runs every slot the same way opening the card does —
+     nothing here needs to know which one the user was looking at. */
+  const [again, setAgain] = useState(0);
+  const retry = useCallback(() => setAgain((n) => n + 1), []);
   useEffect(() => {
     let ok = true;
     setMatch(null); setLiveMatch(null); setComps({ state: "loading" }); setHist(null);
@@ -3793,7 +4049,7 @@ function useCardMarketData(identity, variant) {
   // identity, not id alone — a rename or a set/number edit changes what this
   // is. The printing is not identity: a pill tap must not re-spend the
   // history and graded credits, so `variant` is left out here on purpose.
-  }, [id, name, set, number, productId, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, name, set, number, productId, lang, again]); // eslint-disable-line react-hooks/exhaustive-deps
   // the set dump is cached a day, so re-reading it per printing is free
   useEffect(() => {
     let ok = true;
@@ -3823,8 +4079,165 @@ function useCardMarketData(identity, variant) {
      the card's own typed set and number — still outranks a fuzzy name match. */
   const market = (productId && matchPrice != null ? matchPrice : null) ?? liveSet ?? matchPrice ?? liveMatch ?? data?.market ?? null;
   const rarity = match?.rarity || data?.rarity || "";
-  return { match, comps, hist, data, img, market, rarity };
+  return { match, comps, hist, data, img, market, rarity, retry };
 }
+/* ================================================================== */
+/* The art picker.
+
+   imageInSet refuses to guess now, so a card whose product it cannot pin
+   shows a name tile instead of another card's picture. This is how that card
+   gets its picture back, and how a card that took the wrong one gets
+   corrected: the set's products as pictures, and one tap to say which is
+   this card.
+
+   The tap stores a productId, not a URL. productId is the card's exact
+   identity everywhere in this app — byProductId, the modal's own guard, and
+   the /graded and /history routes all key on it — so naming the right
+   picture also corrects the market price, the sold comps and the price
+   history. Storing a URL would have fixed the picture alone.
+
+   It also pins the art locally, marked as chosen, so no later lookup
+   overwrites it and the tile paints from the device on the next load. */
+function ArtPicker({ card, onClose, onSave }) {
+  const lang = cardLang(card);
+  const [rows, setRows] = useState(null); // the card's own set dump; null = still loading
+  const [q, setQ] = useState("");
+  const qd = useDebounced(q, 300);
+  const [wide, setWide] = useState(null); // every-set results; null = not fetched
+  const [wideState, setWideState] = useState("idle");
+  const [wideErr, setWideErr] = useState(null);
+  const [again, setAgain] = useState(0); // bumped by Retry; a dependency of the search effect
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      const list = card.set ? await fetchSetCatalog(card.set, lang) : [];
+      if (live) setRows(list.filter((p) => p.img));
+    })();
+    return () => { live = false; };
+  }, [card.set, lang]);
+
+  /* Does the card's own set actually hold this card? A set that resolves is
+     not the same as a set that answers. "First Partner Collection 2026"
+     resolves to three code cards with no number on them, so every card filed
+     under it drops through — and offering only those three rows would be a
+     dead end. Whenever the dump cannot name this card, search every set
+     instead, without waiting to be asked. */
+  const dumpHasCard = useMemo(
+    () => !!rows?.some((p) => bareName(p.name) === bareName(card.name) || nameNear(bareName(p.name), bareName(card.name))),
+    [rows, card.name],
+  );
+  useEffect(() => {
+    if (rows === null || dumpHasCard) return;
+    let live = true;
+    (async () => {
+      setWideState("loading");
+      /* parseQuery reads a set name out of the typed text, so "mudkip mega
+         evolution promo" narrows to that set — which is the way out when the
+         ledger's own set name is not the one TCGplayer files the card under.
+         An empty box searches the card's name, so the list is useful on open. */
+      const p = parseQuery(qd.trim() || card.name);
+      try {
+        const { cards } = await searchCardsRaw({ q: p.q, set: p.set, number: p.number, lang });
+        if (live) { setWide(cards); setWideErr(null); setWideState("done"); }
+      } catch (e) { if (live) { setWide([]); setWideErr({ state: "err", status: e.status || 0, kind: e.kind }); setWideState("err"); } }
+    })();
+    return () => { live = false; };
+  }, [rows, dumpHasCard, qd, card.name, lang, again]);
+
+  /* Both sources render as the same cell, so one grid and one filter box
+     cover them. `patch` is what a tap writes to the ledger. */
+  const inSet = useMemo(() => (rows || []).map((p) => ({
+    key: `s${p.productId || p.num}-${p.name}`,
+    img: p.img, name: p.name, num: p.num, rarity: p.rarity, set: card.set,
+    patch: { productId: String(p.productId || "") },
+  })), [rows, card.set]);
+  /* A product from another set means the ledger's set is wrong, not just the
+     picture. Write the set and the number with it — a productId that
+     disagrees with its own card's set would be read as exact identity by
+     every price path, which is worse than the wrong art. */
+  const anySet = useMemo(() => (wide || []).filter((c) => c.images?.small).map((c) => ({
+    key: `w${c.productId || c.id}`,
+    img: c.images.small, name: c.name, num: c.number, rarity: c.rarity, set: c.set?.name || "",
+    patch: { productId: String(c.productId || ""), set: c.set?.name || card.set || "", number: c.number || card.number || "" },
+  })), [wide, card.set, card.number]);
+
+  /* The filter reads the set too, so typing a set name narrows a list that
+     now spans more than one set. */
+  const show = (list) => {
+    const n = normNum(card.number || "");
+    const rank = (p) => (n && normNum(p.num) === n ? 0 : 1);
+    return list
+      .filter((p) => fuzzyMatch(q, p.name, p.num, p.rarity || "", p.set || ""))
+      .sort((a, b) => rank(a) - rank(b) || String(a.num).localeCompare(String(b.num), undefined, { numeric: true }));
+  };
+  const shownInSet = useMemo(() => show(inSet), [inSet, q, card.number]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shownAnySet = useMemo(() => show(anySet), [anySet, q, card.number]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Choosing repins on the new identity, so the old row is dropped rather
+     than orphaned — artKey reads productId, so the pick changes the key. */
+  const apply = (it) => {
+    haptic();
+    unpinArt(card);
+    if (it.img) pinArt({ ...card, ...it.patch }, it.img, it.rarity || "", true);
+    onSave({ id: card.id, ...it.patch });
+    onClose();
+  };
+  const clear = () => {
+    haptic();
+    unpinArt(card);
+    onSave({ id: card.id, productId: "" });
+    onClose();
+  };
+
+  const Cell = ({ it, withSet }) => (
+    <button className={"cl-art-cell pick" + (it.patch.productId && it.patch.productId === String(card.productId || "") ? " on" : "")}
+      onClick={() => apply(it)} title={`${it.name}${it.set ? ` — ${it.set}` : ""}`}>
+      <FadeImg className="cl-art-img" src={it.img} alt={it.name} loading="lazy" />
+      <span className="cl-art-cap">{it.num || "—"}{it.rarity ? ` · ${it.rarity}` : ""}</span>
+      {withSet && <span className="cl-art-set">{it.set || "set unknown"}</span>}
+    </button>
+  );
+
+  return (
+    /* stopPropagation on the backdrop too: this sits inside the card modal's
+       own overlay, and without it one tap outside would close both sheets */
+    <div className="cl-modal-ov cl-art-ov" onClick={(e) => { e.stopPropagation(); onClose(); }}>
+      <div className="cl-modal cl-art" role="dialog" aria-modal="true" aria-label="Choose the artwork" onClick={(e) => e.stopPropagation()}>
+        <button className="cl-x cl-cm-close" onClick={onClose}><X size={16} /></button>
+        <div className="cl-cm-sec">Which card is this?</div>
+        <div className="cl-import-msg">
+          Tap the right picture. It also pins this card to that product, so the market price, the sold comps and the price history follow it. Type a set name to narrow the list.
+        </div>
+        <input className="cl-in" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder={dumpHasCard ? `Filter ${card.set} — name, number, or set` : "Search every set — name, number, or set"} />
+
+        {rows === null && <div className="cl-art-grid">{Array.from({ length: 8 }, (_, i) => <span key={i} className="cl-art-cell cl-shimmer" />)}</div>}
+
+        {rows !== null && dumpHasCard && <div className="cl-art-grid">
+          {shownInSet.map((it) => <Cell key={it.key} it={it} />)}
+          {!shownInSet.length && <div className="cl-import-msg">Nothing in {card.set} matches “{q}”.</div>}
+        </div>}
+
+        {rows !== null && !dumpHasCard && <>
+          <div className="cl-cm-note">
+            {card.set
+              ? <>Nothing in <b>{card.set}</b> is a {card.name}. TCGplayer may file this card under another set — these are cards named {card.name} from every set. Picking one also corrects this card's set and number.</>
+              : <>This card has no set, so these are cards named {card.name} from every set. Picking one also fills in its set and number.</>}
+          </div>
+          {wideState === "loading" && <div className="cl-art-grid">{Array.from({ length: 6 }, (_, i) => <span key={i} className="cl-art-cell cl-shimmer" />)}</div>}
+          {wideState === "err" && <DataState s={wideErr} onRetry={() => setAgain((n) => n + 1)} />}
+          {wideState === "done" && <div className="cl-art-grid">
+            {shownAnySet.map((it) => <Cell key={it.key} it={it} withSet />)}
+            {!shownAnySet.length && <div className="cl-import-msg">Nothing matches “{q.trim() || card.name}”.</div>}
+          </div>}
+        </>}
+
+        {card.productId && <button className="cl-mini cl-art-clear" onClick={clear}>Clear the pinned product — match this card automatically again</button>}
+      </div>
+    </div>
+  );
+}
+
 function CardModal({ card, onClose, onSave, onDelete, onValue }) {
   // leaving is animated too: `closing` plays the reverse of the entrance,
   // then the real onClose unmounts. Reduced motion skips straight out.
@@ -3833,24 +4246,25 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
   // sections, and delete asks once before it acts
   const [editing, setEditing] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  const [artOpen, setArtOpen] = useState(false);
   const close = useCallback(() => {
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) return onClose();
     setClosing(true);
     setTimeout(onClose, 150);
   }, [onClose]);
-  const { match, comps, hist, data, img, market, rarity } = useCardMarketData(
+  const { match, comps, hist, data, img, market, rarity, retry } = useCardMarketData(
     { id: card.id, name: card.name, set: card.set || "", number: card.number || "", productId: card.productId || "", lang: cardLang(card) },
     card.variant
   );
   useEffect(() => {
     // Escape backs out one layer: an open edit form first, the modal second,
     // so a half-typed edit is never thrown away by the key that closes the sheet
-    const onKey = (e) => { if (e.key === "Escape") { if (editing) { setEditing(false); return; } if (confirmDel) { setConfirmDel(false); return; } close(); } };
+    const onKey = (e) => { if (e.key === "Escape") { if (artOpen) { setArtOpen(false); return; } if (editing) { setEditing(false); return; } if (confirmDel) { setConfirmDel(false); return; } close(); } };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
-  }, [close, editing, confirmDel]);
+  }, [close, editing, confirmDel, artOpen]);
 
   const value = Number(card.value) || 0;
   const basis = invBasis(card);
@@ -3919,9 +4333,15 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
       <div className="cl-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <button className="cl-x cl-cm-close" onClick={close}><X size={16} /></button>
         <div className="cl-cm-top">
-          {img
-            ? <FadeImg className="cl-cm-img" src={img} alt={card.name} />
-            : <div className={"cl-cm-img ph" + (match === null || comps.state === "loading" ? " cl-shimmer" : "")}>{match === null || comps.state === "loading" ? "loading…" : "no image found"}</div>}
+          {/* the picture and the way to correct it, in one column — a card
+              wearing the wrong art and a card wearing none need the same
+              button, so it is always there rather than only on a miss */}
+          <div className="cl-cm-artcol">
+            {img
+              ? <FadeImg className="cl-cm-img" src={img} alt={card.name} />
+              : <div className={"cl-cm-img ph" + (match === null || comps.state === "loading" ? " cl-shimmer" : "")}>{match === null || comps.state === "loading" ? "loading…" : "no image found"}</div>}
+            <button className="cl-mini cl-cm-artbtn" onClick={() => setArtOpen(true)}><ImageIcon size={12} /> {img ? "Wrong picture?" : "Choose the art"}</button>
+          </div>
           <div className="cl-cm-head">
             <div className="cl-cm-name">{card.name}</div>
             <div className="cl-row-meta">{card.set || match?.set?.name || data?.set || "set unknown"}{(card.number || match?.number || data?.number) ? ` · ${card.number || match?.number || data?.number}` : ""}{rarity ? ` · ${rarity}` : ""}</div>
@@ -3962,8 +4382,7 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
         </>}
 
         <div className="cl-cm-sec">Recent eBay solds — raw</div>
-        {comps.state === "loading" && <div className="cl-cm-note">Pulling eBay sold data…</div>}
-        {comps.state === "err" && <div className="cl-cm-note">{cmErrMsg(comps)}</div>}
+        <DataState s={comps} loading="Pulling eBay sold data…" onRetry={retry} />
         {comps.state === "ok" && (data.raw
           ? <div className="cl-cm-raw"><span className="cl-cm-raw-price">{fmt(data.raw.price)}{cmTrend(data.raw.trend)}</span><span className="cl-row-meta">{rawMeta}</span></div>
           : <div className="cl-cm-note">No recent raw solds recorded.</div>)}
@@ -4009,6 +4428,7 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
         </div>}
         </>}
       </div>
+      {artOpen && <ArtPicker card={card} onClose={() => setArtOpen(false)} onSave={onSave} />}
     </div>
   );
 }
@@ -4029,7 +4449,7 @@ function CardPriceModal({ card, onClose, onBuy, onKeep, onHit, onSelect, flash }
   const lang = cardLang(card);
   const pricedVariants = VARIANTS.filter((v) => card.tcgplayer?.prices?.[PTCG_VARIANT_KEY[v]]);
   const [variant, setVariant] = useState(card.variant || pricedVariants[0] || "");
-  const { comps, hist, data, img, market, rarity } = useCardMarketData(
+  const { comps, hist, data, img, market, rarity, retry } = useCardMarketData(
     { id: card.id, name: card.name, set: card.set?.name || "", number: card.number || "", productId: card.productId || card.tcgplayerId || "", lang },
     variant
   );
@@ -4096,8 +4516,7 @@ function CardPriceModal({ card, onClose, onBuy, onKeep, onHit, onSelect, flash }
         </>}
 
         <div className="cl-cm-sec">Recent eBay solds — raw</div>
-        {comps.state === "loading" && <div className="cl-cm-note">Pulling eBay sold data…</div>}
-        {comps.state === "err" && <div className="cl-cm-note">{cmErrMsg(comps)}</div>}
+        <DataState s={comps} loading="Pulling eBay sold data…" onRetry={retry} />
         {comps.state === "ok" && (data.raw
           ? <div className="cl-cm-raw"><span className="cl-cm-raw-price">{fmt(data.raw.price)}{cmTrend(data.raw.trend)}</span><span className="cl-row-meta">{rawMeta}</span></div>
           : <div className="cl-cm-note">No recent raw solds recorded.</div>)}
@@ -4160,6 +4579,123 @@ function BinderGrid({ children }) {
    is most of the first week after a release. Its results are handed
    back to CardSearch as `extra`, so they render as the same rows in the
    same list rather than in a second list of their own. */
+/* ================================================================== */
+/* Browse a whole set.
+
+   The old way to do this was a box at the bottom of the card search that
+   asked /catalog, sorted the answer by price and kept the top 40. For a set
+   like 151 — 215 products — that showed under a fifth of it, in an order
+   nobody prices from. This screen keeps all of it, in collector-number order,
+   which is the order the cards sit in a binder.
+
+   One /catalog call carries everything on screen: name, number, rarity, the
+   thumbnail, and a market price per printing. Sold data is not fetched for the
+   set — it is one request and ~2 credits a card, so 215 of them is not a page
+   load. Tapping a row opens the same price modal the card search uses, and
+   that pulls the solds for the one card you asked about. */
+const SETVIEW_KEY = "cardledger:setview:v1";   // the last set browsed
+const SETCAT_MAXAGE = 24 * 3600 * 1000;        // prices, not art — a day, not a month
+/* This column is one printing, so it wants that printing's price or nothing.
+   subPrice falls back through the others by design, which is right when a card
+   needs a single value and wrong for a column headed "Reverse Holofoil". */
+const exactSub = (subs, v) => (typeof subs?.[v] === "number" ? subs[v] : null);
+function SetBrowser({ onOpen }) {
+  const sets = useSets();
+  const dlId = useId();
+  const [name, setName] = useState(() => { try { return localStorage.getItem(SETVIEW_KEY) || ""; } catch { return ""; } });
+  const [typed, setTyped] = useState(name);
+  const [q, setQ] = useState("");
+  const [res, setRes] = useState(null);        // { cards, group }
+  const [look, setLook] = useState({ state: name ? "loading" : "idle" });
+  const [again, setAgain] = useState(0);       // bumped by Retry
+
+  useEffect(() => {
+    if (!name) { setRes(null); setLook({ state: "idle" }); return; }
+    let live = true;
+    setLook({ state: "loading" });
+    loadSetCatalog(name, "en", SETCAT_MAXAGE).then(
+      (r) => { if (live) { setRes(r); setLook({ state: "ok" }); } },
+      (e) => { if (live) { setRes(null); setLook({ state: "err", status: e.status || 0, kind: e.kind }); } },
+    );
+    return () => { live = false; };
+  }, [name, again]);
+
+  const go = (v) => {
+    const next = (v ?? typed).trim();
+    setName(next);
+    try { localStorage.setItem(SETVIEW_KEY, next); } catch {}
+  };
+
+  /* Only the printings this set actually uses get a column. In 151, 62 cards
+     carry one and 153 carry two, so a fixed three-column table would be a
+     third empty. */
+  const cols = useMemo(() => {
+    const seen = new Set();
+    for (const p of res?.cards || []) for (const k of Object.keys(p.subs || {})) seen.add(k);
+    return VARIANTS.filter((v) => seen.has(v));
+  }, [res]);
+
+  /* Code cards are not singles, and their number is not a number: the Lambda
+     reads a collector number off the product name, so every "Code Card - 151
+     Booster Pack" in the set lands on 151 and collides with the real card. */
+  const rows = useMemo(() => (res?.cards || [])
+    .filter((p) => p.rarity !== "Code Card" && fuzzyMatch(q, p.name, p.num, p.rarity || ""))
+    .sort((a, b) =>
+      normNum(a.num).localeCompare(normNum(b.num), undefined, { numeric: true })
+      || (a.name || "").localeCompare(b.name || "")),
+  [res, q]);
+
+  const shown = res ? `${rows.length} of ${res.cards.filter((p) => p.rarity !== "Code Card").length}` : "";
+  return (
+    <div className="cl-stack sm">
+      <div className="cl-search">
+        <input className="cl-in" list={dlId} inputMode="search" placeholder="Set — e.g. 151, Surging Sparks"
+          value={typed} onChange={(e) => setTyped(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && go()}
+          onBlur={() => typed.trim() && typed.trim() !== name && go()} />
+        <button className="cl-search-btn" onClick={() => go()}><PackageOpen size={15} /></button>
+      </div>
+      <datalist id={dlId}>{(sets || []).map((s) => <option key={s} value={s} />)}</datalist>
+
+      {look.state === "idle" && <div className="cl-import-msg">Name a set to list every card in it, in number order, with its market price.</div>}
+      {(look.state === "loading" || look.state === "err") &&
+        <DataState s={look} loading="Reading the set…" notFound={`The card database has no set called “${name}”. Pick one from the suggestions.`} onRetry={() => setAgain((n) => n + 1)} />}
+
+      {look.state === "ok" && res && <>
+        <div className="cl-row-meta">{res.group} · {shown} cards</div>
+        <input className="cl-in" inputMode="search" placeholder="Filter this set — name, number, or rarity" value={q} onChange={(e) => setQ(e.target.value)} />
+        {rows.length === 0
+          ? <div className="cl-import-msg">Nothing in {res.group} matches “{q}”.</div>
+          : <div className="cl-setgrid" style={{ "--pcols": cols.length }}>
+              <div className="cl-sethead">
+                <span /><span>Card</span>
+                {cols.map((v) => <span key={v} className="cl-setrow-p">{VARIANT_SHORT[v] || v}</span>)}
+              </div>
+              {rows.map((p) => (
+                <button key={p.productId || `${p.num}-${p.name}`} className="cl-setrow" onClick={() => onOpen(catalogCard(res.group, p, name))} title={p.name}>
+                  <span className="cl-setrow-art">
+                    {p.img ? <FadeImg className="cl-setrow-img" src={p.img} alt="" loading="lazy" /> : <span className="cl-setrow-ph" />}
+                  </span>
+                  <span className="cl-setrow-id">
+                    {/* strip TCGplayer's " - 205/165" tail but keep the
+                        parenthetical after it — "(151 Metal Card)" is the only
+                        thing telling two products at one number apart */}
+                    <span className="cl-setrow-name">{p.name.replace(/ - [\w/.]+(?= \(|$)/, "")}</span>
+                    {/* the rarity is its own span so the narrowest phones can
+                        drop it whole rather than clip it to "Comm…" — the
+                        number is what a number-ordered list is read by */}
+                    <span className="cl-row-meta">{p.num}{p.rarity && <span className="cl-setrow-rar"> · {p.rarity}</span>}</span>
+                  </span>
+                  {cols.map((v) => { const val = exactSub(p.subs, v); return <span key={v} className="cl-setrow-p">{val == null ? "—" : fmt(val)}</span>; })}
+                </button>
+              ))}
+            </div>}
+      </>}
+    </div>
+  );
+}
+
+const LOOKMODE_KEY = "cardledger:lookmode:v1";
 function Lookup({ state, patch }) {
   const [ripId, setRipId] = useState("");
   const [priceCard, setPriceCard] = useState(null); // tapped row, shown read-only — no ledger record needed
@@ -4167,6 +4703,11 @@ function Lookup({ state, patch }) {
   // only the card that modal shows can ever be the one just acted on
   const [flashMsg, setFlashMsg] = useState("");
   const flash = (msg) => { setFlashMsg(msg); setTimeout(() => setFlashMsg(""), 1600); };
+  /* <main key={tab}> re-mounts this pane on every tab switch, so the choice
+     has to outlive the component — same reason the search's set scope is kept
+     in localStorage rather than in state. */
+  const [mode, setMode] = useState(() => { try { return localStorage.getItem(LOOKMODE_KEY) === "set" ? "set" : "card"; } catch { return "card"; } });
+  const pickMode = (m) => { haptic("select"); setMode(m); try { localStorage.setItem(LOOKMODE_KEY, m); } catch {} };
 
   const rip = ripId || state.rips[0]?.id;
   const asBuy = (c) => { patch(addAsBuy(c)); flash("Added to Buys"); };
@@ -4179,15 +4720,24 @@ function Lookup({ state, patch }) {
 
   return (
     <div className="cl-stack">
-      <Header title="Card lookup" sub="The catalog on this device, then the card database" />
+      <Header title="Card lookup" sub={mode === "set" ? "Every card in one set, in number order" : "The catalog on this device, then the card database"} />
+      {/* one card or a whole set — the rip selector and Buy/Keep/Hit below work
+          the same in both, because a card picked off a set list is added
+          exactly like a searched one */}
+      <div className="cl-pills">
+        <button className={"cl-pill" + (mode === "card" ? " on" : "")} onClick={() => pickMode("card")}>One card</button>
+        <button className={"cl-pill" + (mode === "set" ? " on" : "")} onClick={() => pickMode("set")}>Whole set</button>
+      </div>
       {state.rips.length > 0 && <select className="cl-rip-sel" style={{ width: "100%" }} value={ripId} onChange={(e) => setRipId(e.target.value)}>
         <option value="">+ Hit goes to the latest rip</option>
         {state.rips.map((r) => <option key={r.id} value={r.id}>+ Hit → {r.product || "Rip"}</option>)}
       </select>}
-      <CardSearch
-        placeholder="Search a card — e.g. 091, banette dusk, or reshiram stamped"
-        onOpen={setPriceCard}
-      />
+      {mode === "card"
+        ? <CardSearch
+            placeholder="Search a card — e.g. 091, banette dusk, or reshiram stamped"
+            onOpen={setPriceCard}
+          />
+        : <SetBrowser onOpen={setPriceCard} />}
       {priceCard && <CardPriceModal card={priceCard} onClose={() => setPriceCard(null)} onBuy={asBuy} onKeep={asKeep} onHit={asHit} flash={flashMsg} />}
     </div>
   );
@@ -4462,7 +5012,14 @@ function Fonts() {
     .cl-tag{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.14em;}
     /* sticky offsets are measured against the VIEWPORT, so padding on .cl-root cannot move these —
        without their own top offset the tabs slide under the status bar as the header scrolls away */
-    .cl-tabs{display:flex;gap:4px;padding:4px 12px 0;overflow-x:auto;position:sticky;top:env(safe-area-inset-top);z-index:5;background:linear-gradient(180deg,var(--bg),rgba(12,14,19,.6));backdrop-filter:blur(8px);}
+    /* The scrollbar is hidden and the momentum is native, so on a phone this
+       reads as a strip you swipe rather than a desktop scroller. The ::after
+       is a sticky flex child, not an overlay: it rides the right edge of the
+       scroll box and fades the tabs running off it, which is the only hint
+       that there are more. It disappears once you reach the end. */
+    .cl-tabs{display:flex;gap:4px;padding:4px 12px 0;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:none;position:sticky;top:env(safe-area-inset-top);z-index:5;background:linear-gradient(180deg,var(--bg),rgba(12,14,19,.6));backdrop-filter:blur(8px);}
+    .cl-tabs::-webkit-scrollbar{display:none;}
+    .cl-tabs::after{content:"";position:sticky;right:0;flex:none;width:26px;margin-left:-26px;align-self:stretch;pointer-events:none;background:linear-gradient(90deg,rgba(12,14,19,0),var(--bg));}
     .cl-tab{display:flex;align-items:center;gap:6px;padding:9px 13px;border:none;background:none;color:var(--mut);font-size:13px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;font-family:'Inter';}
     .cl-tab.on{color:var(--ink);border-bottom-color:#a78bfa;}
     .cl-main{padding:16px 14px calc(60px + env(safe-area-inset-bottom));max-width:680px;margin:0 auto;}
@@ -4506,16 +5063,13 @@ function Fonts() {
     .cl-monthnav{display:flex;align-items:center;gap:8px;}
     .cl-monthnav .cl-in{flex:1;text-align:center;font-family:'Space Grotesk';font-weight:600;}
     .cl-monthnav-btn{flex:none;display:flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:12px;background:var(--surf);border:1px solid var(--line);color:var(--ink);cursor:pointer;}
-    .cl-monthnav-btn:hover:not(:disabled){border-color:var(--holo2);}
     .cl-monthnav-btn:disabled{opacity:.35;cursor:default;}
     .cl-month-row{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;background:var(--surf2);border:1px solid var(--line);border-radius:12px;padding:11px 13px;cursor:pointer;font-family:'Inter';color:var(--ink);}
-    .cl-month-row:hover{border-color:var(--line);background:#222834;}
     .cl-month-row.on{border-color:var(--holo2);}
     .cl-month-row .cl-row-title{font-size:13.5px;}
     .cl-panel{background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:14px 14px 16px;}
     .cl-panel-head{display:flex;justify-content:space-between;align-items:center;font-family:'Space Grotesk';font-weight:600;font-size:14px;margin-bottom:12px;}
     .cl-link{background:none;border:none;color:var(--mut);font-size:12px;cursor:pointer;font-family:'Inter';}
-    .cl-link:hover{color:var(--ink);}
     .cl-bars{display:flex;flex-direction:column;gap:10px;}
     .cl-bar-top{display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px;}
     .cl-bar-track{height:6px;background:#11151c;border-radius:4px;overflow:hidden;}
@@ -4525,7 +5079,6 @@ function Fonts() {
     .cl-row{display:flex;align-items:center;gap:9px;background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px 12px;}
     .cl-row.sold{opacity:.55;}
     .cl-row.click{cursor:pointer;}
-    .cl-row.click:hover{border-color:#3d465c;}
     .cl-row-main{flex:1;min-width:0;}
     .cl-row-title{font-size:13.5px;font-weight:500;display:flex;align-items:center;gap:7px;}
     .cl-row-meta{font-size:11.5px;color:var(--mut);margin-top:3px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
@@ -4539,7 +5092,6 @@ function Fonts() {
     .cl-st.sold{background:#222834;color:var(--mut);}
     .cl-seed{background:rgba(167,139,250,.15);color:#c4b5fd;border-radius:5px;padding:1px 6px;font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;margin-left:6px;}
     .cl-x{background:none;border:none;color:var(--mut);cursor:pointer;padding:4px;flex:none;border-radius:6px;}
-    .cl-x:hover{color:var(--ink);background:#222834;}
     .cl-x.on{color:var(--holo2);}
     .cl-card{background:var(--surf);border:1px solid var(--line);border-radius:14px;}
     .cl-card-head{width:100%;display:flex;align-items:center;gap:10px;padding:13px 13px;background:none;border:none;color:inherit;cursor:pointer;text-align:left;font-family:'Inter';}
@@ -4548,7 +5100,6 @@ function Fonts() {
     .cl-hits{display:flex;flex-direction:column;gap:6px;margin:12px 0;}
     .cl-hit{display:flex;align-items:center;gap:9px;background:var(--surf2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;}
     .cl-hit.click{cursor:pointer;}
-    .cl-hit.click:hover{border-color:#3d465c;}
     .cl-hit-imgwrap{position:relative;width:34px;height:47px;flex:none;border-radius:5px;overflow:hidden;background:var(--surf2);border:1px solid var(--line);}
     .cl-hit-img{width:100%;height:100%;object-fit:contain;background:#0c0f15;}
     .cl-hit-ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:2px;text-align:center;font-size:7.5px;line-height:1.15;color:var(--mut);}
@@ -4567,7 +5118,19 @@ function Fonts() {
     .cl-vsub{font-size:12.5px;color:var(--mut);margin-top:2px;}
     .cl-addbtn{width:36px;height:36px;border-radius:10px;border:1px solid var(--line);background:var(--surf2);color:var(--ink);cursor:pointer;display:grid;place-items:center;}
     .cl-addbtn.on{background:#2a1f2a;color:var(--neg);}
-    .cl-pills{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;}
+    /* Same story as the tab bar: five status pills overflow a 320px phone and
+       the last one was clipped with nothing to say so. Hide the scrollbar,
+       fade the right edge. */
+    .cl-pills{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none;-webkit-overflow-scrolling:touch;}
+    /* the layout row sits above the filter row and reads quieter, so the two
+       are not mistaken for one long list of filters */
+    /* Same height as the filter pills below — the hierarchy comes from the
+       smaller, quieter label, not from a smaller thing to hit. Shrinking the
+       target was making a primary control the least tappable on the screen. */
+    .cl-views{margin-bottom:-6px;}
+    .cl-views .cl-pill{font-size:11.5px;padding:6px 11px;letter-spacing:.01em;}
+    .cl-pills::-webkit-scrollbar{display:none;}
+    .cl-pills::after{content:"";position:sticky;right:0;flex:none;width:20px;margin-left:-20px;align-self:stretch;pointer-events:none;background:linear-gradient(90deg,rgba(12,14,19,0),var(--bg));}
     .cl-pill{background:var(--surf2);border:1px solid var(--line);color:var(--mut);border-radius:999px;padding:6px 13px;font-size:12px;cursor:pointer;white-space:nowrap;font-family:'Inter';}
     .cl-pill.on{color:var(--ink);border-color:#a78bfa;background:#221f33;}
     .cl-form{background:var(--surf2);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:11px;}
@@ -4585,7 +5148,10 @@ function Fonts() {
     .cl-save:disabled{opacity:.4;cursor:not-allowed;}
     .cl-net-preview{font-size:13px;color:var(--mut);display:flex;justify-content:space-between;align-items:center;gap:10px;}
     .cl-import{background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px;}
-    .cl-import-btn{display:flex;align-items:center;gap:8px;background:none;border:none;color:#c4b5fd;font-size:13px;cursor:pointer;font-family:'Inter';}
+    /* text-align was inherited as centre, so on a narrow phone the label wrapped
+       into two centred lines beside a left-hand icon and read as broken */
+    .cl-import-btn{display:flex;align-items:center;gap:8px;text-align:left;background:none;border:none;color:#c4b5fd;font-size:13px;cursor:pointer;font-family:'Inter';}
+    .cl-import-btn>svg{flex:none;}
     .cl-import-btn:disabled{opacity:.45;cursor:default;}
     .cl-tcgp-pick{margin-top:9px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;}
     .cl-tcgp-pick-head{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:var(--mut);margin-bottom:5px;}
@@ -4632,14 +5198,12 @@ function Fonts() {
     .cl-cardchips-empty{font-size:12px;color:var(--mut);}
     .cl-cardchip{display:inline-flex;align-items:center;gap:5px;background:#10141b;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:12px;}
     .cl-chip-x{background:none;border:none;color:var(--mut);cursor:pointer;display:flex;padding:0;}
-    .cl-chip-x:hover{color:var(--neg);}
     .cl-typedadd{display:flex;gap:6px;align-items:stretch;}
     .cl-typedadd>.cl-in,.cl-typedadd>.cl-ac{flex:1;}
     .cl-basisbox{max-width:110px;}
     .cl-add-card{background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:9px;flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:0 14px;cursor:pointer;font-family:'Inter';font-size:12.5px;}
     .cl-reset{margin-top:6px;display:flex;justify-content:center;}
     .cl-reset-btn{background:none;border:1px solid var(--line);color:var(--mut);border-radius:10px;padding:9px 14px;font-size:12px;cursor:pointer;font-family:'Inter';}
-    .cl-reset-btn:hover{color:var(--neg);border-color:var(--neg);}
     .cl-reset-confirm{display:flex;flex-direction:column;gap:8px;background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:12px;width:100%;font-size:12.5px;color:var(--mut);text-align:center;}
     .cl-reset-actions{display:flex;gap:8px;}
     .cl-reset-actions .cl-cancel{flex:1;}
@@ -4662,7 +5226,6 @@ function Fonts() {
     .cl-line-r2{display:grid;grid-template-columns:1fr 112px 30px;gap:8px;align-items:center;}
     .cl-line-r2.nox{grid-template-columns:1fr 112px;}
     .cl-addline{background:none;border:1px dashed var(--line);color:var(--mut);border-radius:10px;padding:9px;font-size:12.5px;cursor:pointer;font-family:'Inter';}
-    .cl-addline:hover{color:var(--ink);border-color:var(--mut);}
     .cl-total-ro{display:flex;align-items:center;color:var(--out);font-variant-numeric:tabular-nums;}
     /* every card search — Lookup, and every form's "find the card" box —
        is the same card-art grid, the same shape as the Binder screen, since
@@ -4728,6 +5291,68 @@ function Fonts() {
     .cl-spark-svg{display:block;width:100%;height:56px;touch-action:none;cursor:crosshair;}
     .cl-spark-meta{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--mut);margin-top:2px;font-variant-numeric:tabular-nums;}
     .cl-spark-meta b{color:var(--ink);font-weight:600;}
+    /* the picture and its "wrong picture?" button share one column, so the
+       button never widens the hero row */
+    .cl-cm-artcol{flex:none;align-self:flex-start;display:flex;flex-direction:column;gap:6px;width:158px;}
+    .cl-cm-artcol .cl-cm-img{width:100%;}
+    .cl-cm-artbtn{display:flex;align-items:center;justify-content:center;gap:5px;width:100%;}
+    /* the art picker opens on top of the card modal, not beside it */
+    .cl-art-ov{z-index:70;}
+    .cl-art{max-width:560px;}
+    .cl-art-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px;margin-top:8px;max-height:52vh;overflow-y:auto;}
+    .cl-art-cell{display:flex;flex-direction:column;gap:4px;padding:4px;min-height:132px;border:1px solid var(--line);border-radius:10px;background:var(--surf2);}
+    .cl-art-cell.pick{cursor:pointer;}
+    .cl-art-cell.on{border-color:var(--holo2);}
+    .cl-art-img{display:block;width:100%;border-radius:6px;}
+    .cl-art-cap{font-size:10.5px;color:var(--mut);text-align:center;}
+    /* a grid spanning several sets has to name the set on every cell, or two
+       Mudkips at the same number are indistinguishable */
+    .cl-art-set{font-size:9.5px;line-height:1.25;color:var(--mut);text-align:center;opacity:.85;overflow-wrap:anywhere;}
+    .cl-art-clear{width:100%;margin-top:10px;}
+    @media (max-width:420px){.cl-cm-artcol{width:116px;}}
+    /* The set table. --pcols is set inline from how many printings the set
+       actually uses, so the header and every row share one column track and
+       the price columns line up down the page. */
+    .cl-setgrid{display:flex;flex-direction:column;gap:5px;}
+    .cl-sethead{display:grid;grid-template-columns:30px 1fr repeat(var(--pcols),56px);gap:8px;align-items:end;padding:2px 12px 0;font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--mut);}
+    .cl-setrow{display:grid;grid-template-columns:30px 1fr repeat(var(--pcols),56px);gap:8px;align-items:center;width:100%;text-align:left;background:var(--surf);border:1px solid var(--line);border-radius:11px;padding:7px 12px;cursor:pointer;font-family:'Inter',system-ui,sans-serif;color:var(--ink);}
+    .cl-setrow:active{background:var(--surf2);}
+    .cl-setrow-art{display:block;aspect-ratio:5/7;border-radius:4px;overflow:hidden;background:#0c0f15;}
+    .cl-setrow-img{display:block;width:100%;height:100%;object-fit:cover;}
+    .cl-setrow-ph{display:block;width:100%;height:100%;}
+    .cl-setrow-id{min-width:0;display:flex;flex-direction:column;gap:1px;}
+    .cl-setrow-name{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .cl-setrow-p{font-family:'Space Grotesk';font-weight:600;font-variant-numeric:tabular-nums;font-size:12px;text-align:right;}
+    /* One line, always. At 320px the name column falls to ~84px and every
+       "198/165 · Special Illustration Rare" wrapped, so rows came out 63px or
+       91px depending on the rarity and the price columns stopped reading as
+       columns. An ellipsis costs the tail of a rarity; ragged rows cost the
+       table. */
+    .cl-setrow .cl-row-meta{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    @media (max-width:420px){.cl-sethead,.cl-setrow{grid-template-columns:26px 1fr repeat(var(--pcols),46px);gap:6px;padding-left:9px;padding-right:9px;}.cl-setrow-name{font-size:12px;}.cl-setrow-p{font-size:11px;}}
+    @media (max-width:360px){.cl-sethead,.cl-setrow{grid-template-columns:24px 1fr repeat(var(--pcols),42px);gap:5px;}.cl-setrow-p{font-size:10.5px;}.cl-setrow-rar{display:none;}}
+    /* Hover styling only where a pointer can actually hover.
+
+       Every one of these used to apply on a phone as well, and a touch device
+       has no way to leave a hover: tap a row and it stays highlighted until
+       you tap something else, so the last thing you touched looks selected
+       when it is not. Chrome device emulation reports hover:none and
+       pointer:coarse, which is what this asks; resizing a desktop window does
+       not, which is why it went unnoticed. */
+    @media (hover: hover) and (pointer: fine) {
+      .cl-monthnav-btn:hover:not(:disabled){border-color:var(--holo2);}
+      .cl-month-row:hover{border-color:var(--line);background:#222834;}
+      .cl-link:hover{color:var(--ink);}
+      .cl-row.click:hover{border-color:#3d465c;}
+      .cl-hit.click:hover{border-color:#3d465c;}
+      .cl-x:hover{color:var(--ink);background:#222834;}
+      .cl-chip-x:hover{color:var(--neg);}
+      .cl-reset-btn:hover{color:var(--neg);border-color:var(--neg);}
+      .cl-addline:hover{color:var(--ink);border-color:var(--mut);}
+    }
+    /* the app-wide "we are waiting, not broken" line */
+    .cl-ratelimit{max-width:680px;margin:0 auto;padding:7px 12px;font-size:12px;color:var(--out);background:rgba(255,180,84,.09);border:1px solid rgba(255,180,84,.28);border-radius:10px;}
+    .cl-retry{margin-left:8px;display:inline-flex;align-items:center;gap:5px;vertical-align:middle;}
     .cl-cm-meta{font-size:12px;color:var(--mut);line-height:1.5;}
     .cl-cm-links{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
     .cl-cm-links .cl-mini{flex:1 1 calc(50% - 6px);}

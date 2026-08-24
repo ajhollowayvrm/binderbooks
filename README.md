@@ -234,6 +234,49 @@ Two standalone helpers that don't need the app running:
   Before this each screen searched differently: Rips and Sales asked the card
   database alone, Inventory had no search at all, and only Lookup could read
   the catalog.
+- **Three ways to read the binder.** A row above the status pills decides the
+  layout; the pills still decide which cards.
+  - **Recent** is the default: every card in one run, no headers, newest first.
+    "Newest" is the order you added cards to the app, not the date on the card
+    — so editing a card's date never moves it, and a card you back-date to last
+    year still sits where you put it.
+  - **By status** groups the whole binder under Kept, At grading, Listed and
+    Sold, in that order, and each group keeps the newest-first order inside it.
+  - **By set** is how the binder always used to look, and now it is a choice
+    rather than the only option. Grouping by set was compulsory before, which
+    made a binder full of one-card promo sets mostly headers.
+
+  The choice sticks between visits. The status pills work inside any of the
+  three, so *Listed* + *By set* is "what I have listed, set by set".
+- **Price a whole set at once.** The Lookup tab has two modes: *One card* is
+  the search above; *Whole set* names a set and lists **every** card in it, in
+  collector-number order, with a thumbnail and a market price per printing.
+  Only the printings a set actually uses get a column — in 151, 62 cards carry
+  one price and 153 carry two, so a fixed three-column table would be a third
+  empty. Code cards are left out: they are not singles, and the collector
+  number read off their product name collides with a real card.
+
+  It is one request for the set, cached a day, and it lists products rather
+  than numbers — so both `Mew ex 205/165` and `Mew ex 205/165 (151 Metal Card)`
+  appear, at their own prices, instead of one silently standing for the other.
+  Recent eBay sales are **not** pulled for a whole set: that is one request and
+  ~2 credits a card, so 215 of them is not a page load. Tap any row and the
+  card's own price view opens, which pulls its raw and graded solds — you spend
+  on the cards you actually look at.
+
+  The old browse box at the bottom of the card search sorted by price and kept
+  the top 40, which for 151 was under a fifth of the set in an order nobody
+  prices from. This replaces it.
+- **A rate limit is a wait, not a failure.** PPT meters per minute as well as
+  per day, and the two used to look identical: a two-second throttle surfaced
+  as "the card database is unavailable", with no way forward. Now every card
+  lookup goes through one door that paces requests so a burst does not cause
+  the throttle it then has to sit out, retries a per-minute throttle a couple
+  of times on its own, and says what it is doing while it waits — a countdown
+  in the panel and one line at the top of the app. A spent daily budget, a
+  missing token and a card the database has never heard of still say so at
+  once, because retrying cannot help any of them; everything else offers a
+  **Retry** button rather than a dead end.
 - **Stamped prints live in another set.** TCGplayer sells a prerelease stamp as
   its own product and files it under **Miscellaneous Cards & Products**, not
   under the set printed on the card: `Reshiram (Stellar Crown Stamped)` is
@@ -242,6 +285,39 @@ Two standalone helpers that don't need the app running:
   print at all, so a query naming one never reaches it — answering with the
   unstamped card would hand back a different SKU that prices several times
   lower.
+- **Card art comes off the device.** A card record stores no picture, so the
+  app used to work out every card's art URL again on each load — from a
+  localStorage cache that held ten sets and forty cards, and from a `/catalog`
+  or `/search` call past those caps. Now every URL a card resolves to is kept
+  in an uncapped IndexedDB index beside the picture bytes (`src/art.js`), and
+  one read at startup fills both before the binder paints. A card seen once
+  paints instantly on every later load and costs no request at all. A card the
+  app has never seen still resolves the old way, once.
+- **A card only takes art it can be pinned to.** The matcher used to take the
+  first product in the set sharing the collector number and never read the
+  name, so a Mudkip in First Partner Pack Series 3 could wear another card's
+  picture — those sets number their cards per series, and the jumbo prints
+  repeat those numbers. Now the name must agree, a stored `productId` wins
+  outright, and a card that cannot be placed shows its name tile rather than
+  someone else's art. The Lambda also refuses a set name that matches more
+  than one TCGplayer group, instead of taking the newest.
+- **Choosing the art.** Every card's detail view has *Wrong picture?* under the
+  image. It shows the set's products as pictures, with the card's own number
+  first, and one tap says which is this card. The tap stores that product's
+  `productId`, which is the card's exact identity everywhere in the app — so
+  it corrects the market price, the eBay comps and the price history too, not
+  just the picture. A chosen picture is never overwritten by a later lookup;
+  *Clear the pinned product* puts the card back on automatic matching.
+
+  A set that resolves is not the same as a set that answers. "First Partner
+  Collection 2026" resolves to three code cards with no number on them, so
+  none of the six cards filed under it can be found there. Whenever the set
+  holds nothing by the card's name, the picker searches **every** set instead
+  of offering a dead end, and a pick from another set corrects the card's set
+  and number along with its `productId`. The filter box reads set names too,
+  so typing `mega evolution` narrows a list that spans several sets — which is
+  the way out when the name on the box is not the name TCGplayer files the
+  singles under.
 - **TCGplayer bulk listing:** the Inventory tab builds the staged-upload CSV.
   A card entered from the catalog knows its SKU, so it needs no matching at
   all. A card that predates the catalog still goes through the old name
