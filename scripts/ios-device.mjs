@@ -58,9 +58,13 @@ function teamId() {
 
 /// The first connected, paired iPhone. devicectl reaches a wirelessly paired phone too, so this
 /// works over wifi — the transport has no bearing on signing or on the 7-day clock.
+///
+/// The State column has read "available" and "connected" for a ready, wired phone on different
+/// Xcode/iOS versions, so this excludes "unavailable" instead of requiring "available" — the
+/// substring check for "available" alone also matched "unavailable", which was never the intent.
 function device() {
   const out = sh('xcrun', ['devicectl', 'list', 'devices'])
-  const line = out.split('\n').find(l => /iPhone/.test(l) && /available/.test(l))
+  const line = out.split('\n').find(l => /iPhone/.test(l) && !/unavailable/.test(l))
   if (!line) throw new Error('no available iPhone — plug one in, unlock it, and trust this Mac')
   const udid = line.match(/([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})/i)?.[1]
   if (!udid) throw new Error(`could not parse a device id from: ${line.trim()}`)
