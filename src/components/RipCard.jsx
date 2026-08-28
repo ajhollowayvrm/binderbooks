@@ -8,14 +8,20 @@ import { fmt, isJP, ripValue, HitForm, FadeImg } from "../App.jsx";
    parent as numbers (cheaper prop comparison than passing the whole `buys`
    array) — P&L genuinely depends on buys, so this is an inherent coupling,
    not a memoization bug. `onToggle`/`onDelete`/`onAddHit`/`onEditHit`/
-   `onDeleteHit` must be stable — this component calls them with its own
-   `rip.id`. `images` is an `{id: url|null|undefined}` map for this rip's
-   hits — the caller must pass the same stable empty-object reference for
-   every rip that isn't open, or this memoization is defeated for every
-   collapsed card. Which hit is being edited stays local: a collapsed rip
-   renders no hits, so lifting it would only add a prop to keep stable. */
-function RipCard({ rip: r, pl, cost, isOpen, images, onToggle, onDelete, onAddHit, onEditHit, onDeleteHit }) {
+   `onDeleteHit`/`onAttachHits` must be stable — this component calls them
+   with its own `rip.id`. `images` is an `{id: url|null|undefined}` map for
+   this rip's hits, and `unattached` is the list of Binder cards with no rip
+   of their own yet — the caller must pass the same stable empty reference
+   for every rip that isn't open, or this memoization is defeated for every
+   collapsed card. Which hit is being edited, and the attach picker's own
+   state, stay local: a collapsed rip renders neither, so lifting them would
+   only add props to keep stable. */
+function RipCard({ rip: r, pl, cost, isOpen, images, unattached, onToggle, onDelete, onAddHit, onEditHit, onDeleteHit, onAttachHits }) {
   const [editHitId, setEditHitId] = useState(null);
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [sel, setSel] = useState(() => new Set());
+  const toggleSel = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const attach = () => { onAttachHits(r.id, [...sel]); setSel(new Set()); setAttachOpen(false); };
   const [hitsRef] = useAutoAnimate(); // adds/deletes/edit-swaps in the hit list slide instead of snapping
   const packLabel = r.setPacks && r.setPacks.length
     ? r.setPacks.map((p) => `${p.packs || "?"} ${p.set || "?"}`).join(" + ")
@@ -34,6 +40,25 @@ function RipCard({ rip: r, pl, cost, isOpen, images, onToggle, onDelete, onAddHi
             : (() => { const img = images[h.id]; return (<div key={h.id} className="cl-hit click cl-row-enter" onClick={() => setEditHitId(h.id)}><span className="cl-hit-imgwrap">{img ? <FadeImg className="cl-hit-img" src={img} alt={h.name} loading="lazy" /> : <span className={"cl-hit-ph" + (img === null ? " named" : " cl-shimmer")}>{img === null ? h.name : <span className="holo-dot" />}</span>}</span><div className="cl-hit-main"><div className="cl-hit-name">{h.name}</div><div className="cl-row-meta">{h.grade && h.grade !== "Raw" && <span className="cl-chip">{h.grade}</span>}{isJP(h) && <span className="cl-chip">JP</span>}{h.set ? `${h.set}${h.number ? ` · ${h.number}` : ""}` : ""}</div></div><div className="cl-money">{fmt(Number(h.value) || 0)}</div><button className="cl-x" onClick={(e) => { e.stopPropagation(); onDeleteHit(r.id, h.id); }}><X size={13} /></button></div>); })()))}
         </div>
         <HitForm onAdd={(h) => onAddHit(r.id, h)} />
+        {unattached.length > 0 && <div className="cl-attach">
+          <button className="cl-link" onClick={() => setAttachOpen((o) => !o)}>
+            {attachOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Attach cards already in your Binder ({unattached.length})
+          </button>
+          {attachOpen && <>
+            <div className="cl-row-meta">Already added these without a rip? Pick them here — each becomes a hit at its current value, and the cost above splits across them like any other pull.</div>
+            <div className="cl-stack sm">
+              {unattached.map((c) => (
+                <label key={c.id} className="cl-tcgp-pick-row">
+                  <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggleSel(c.id)} />
+                  <span className="cl-tcgp-pick-name">{c.name}</span>
+                  <span className="cl-row-meta">{c.set}{c.number ? ` · ${c.number}` : ""}</span>
+                  <span className="cl-money">{fmt(Number(c.value) || 0)}</span>
+                </label>
+              ))}
+            </div>
+            <button className="cl-mini" disabled={!sel.size} onClick={attach}>Attach {sel.size || ""} card{sel.size === 1 ? "" : "s"}</button>
+          </>}
+        </div>}
         <div className="cl-card-foot"><span>Pulled value {fmt(ripValue(r))}</span><button className="cl-del" onClick={() => onDelete(r.id)}><Trash2 size={13} /> Delete rip</button></div>
       </div>}
     </div>

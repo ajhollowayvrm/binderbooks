@@ -1123,6 +1123,28 @@ function updHitInState(s, ripId, hit) {
   // an edited value moves every hit's share of the cost, not just this one's
   return { rips, inventory: syncRipBasis({ ...s, rips, inventory }) };
 }
+/* Attaches inventory cards that already exist — added straight to the Binder
+   before their rip was ever logged — onto a rip after the fact. Each becomes
+   a hit sized at the value the card already carries, and the card's own row
+   switches to costAuto, so the rip's cost splits across it exactly like a
+   hit logged the normal way. A card already tied to a hit, or Sold, is left
+   alone rather than restated. This is what makes catching up on unlogged
+   rips a bulk pick instead of re-searching every card by hand. */
+function attachHitsToState(s, ripId, invIds) {
+  const ids = new Set(invIds);
+  const rip = s.rips.find((r) => r.id === ripId);
+  if (!rip) return s;
+  const newHits = [];
+  const inventory = (s.inventory || []).map((c) => {
+    if (!ids.has(c.id) || c.hitId || c.status === "Sold") return c;
+    const h = { id: uid(), name: c.name, set: c.set || "", number: c.number || "", variant: c.variant || "", tcgplayerId: c.tcgplayerId || "", productId: c.productId || "", lang: cardLang(c), grade: c.grade || "Raw", value: Number(c.value) || 0 };
+    newHits.push(h);
+    return { ...c, hitId: h.id, costAuto: true, source: "Rip pull" };
+  });
+  if (!newHits.length) return s;
+  const rips = s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), ...newHits] } : r));
+  return { rips, inventory: syncRipBasis({ ...s, rips, inventory }) };
+}
 
 /* the three ways an identified card enters the ledger. Each takes a card in
    the app's search-result shape and returns a patch slice, so Lookup and the scanner
@@ -1510,6 +1532,46 @@ function useDebounced(value, ms) {
   useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t); }, [value, ms]);
   return v;
 }
+/* Resolves and pins art for exactly the cards handed in, independent of any
+   screen's own card list — used by useCardImages for its normal pass, and by
+   retryMissingArt (Inventory's "Re-pull missing card images" button) for a
+   manual pass over the whole binder, not just whatever the hook is currently
+   watching. Set dumps are fetched with `maxAge`, so a manual retry can pass 0
+   to bypass the normal 30-day SETCATALOG_TTL: a card can still be missing
+   because its set's cached dump predates it, not because it never resolves.
+   Resolves with the ids it could not place. */
+async function resolveCardArt(cards, { maxAge = SETCATALOG_TTL } = {}) {
+  const bySetLang = new Map();
+  for (const c of cards) {
+    if (!c.set || !c.name) continue;
+    const k = `${c.set}\t${isJP(c) ? "jp" : "en"}`;
+    if (!bySetLang.has(k)) bySetLang.set(k, []);
+    bySetLang.get(k).push(c);
+  }
+  const maps = {};
+  await Promise.all([...bySetLang.keys()].map(async (k) => {
+    const [name, lang] = k.split("\t");
+    maps[k] = await loadSetCatalog(name, lang, maxAge).then((r) => r.cards, () => []);
+  }));
+  const leftover = [];
+  for (const c of cards) {
+    if (!c.name) continue;
+    const hit = c.set ? imageInSet(maps[`${c.set}\t${isJP(c) ? "jp" : "en"}`], c) : null;
+    if (hit?.rarity) cardRarities[c.id] = hit.rarity;
+    if (hit?.img) pinArt(c, hit.img, hit.rarity);
+    else leftover.push(c);
+  }
+  await Promise.all(leftover.map((c) => throttledCardMatch(c).then(
+    (m) => {
+      if (m?.rarity) cardRarities[c.id] = m.rarity;
+      const url = m?.images?.small || null;
+      if (url) pinArt(c, url, m?.rarity);
+      return url ? null : c.id;
+    },
+    () => c.id,
+  )));
+  return leftover.filter((c) => !artFor(c)?.url).map((c) => c.id);
+}
 function useCardImages(cards, withRarity = false) {
   /* The art index answers with no await, so the very first render already
      holds every URL this device has resolved before. primeArt filled it from
@@ -1584,7 +1646,28 @@ function useCardImages(cards, withRarity = false) {
     })();
     return () => { live = false; };
   }, [setKeys, cardIds]); // eslint-disable-line react-hooks/exhaustive-deps
-  return withRarity ? [images, rarities] : images;
+  /* Re-seeds `images`/`rarities` from the shared art index — call after
+     retryMissingArt has pinned new art elsewhere, so cards this hook is
+     watching pick up the fresh pins without waiting on setKeys/cardIds to
+     change on their own. */
+  const reseed = useCallback(() => {
+    setImages((s) => ({ ...s, ...seedFromIndex() }));
+    if (withRarity) setRarities({ ...cardRarities });
+  }, [cards, withRarity]); // eslint-disable-line react-hooks/exhaustive-deps
+  return withRarity ? [images, rarities, reseed] : images;
+}
+/* Manual "try again" for whichever binder cards have no art at all — clears
+   their 5-minute miss cache (lookupCardMatch would otherwise just return the
+   cached miss) and re-runs resolveCardArt with a fresh, TTL-bypassing set
+   dump. Independent of any one screen's useCardImages call, so it can cover
+   the whole binder even when the visible list is filtered or searched down
+   to a subset of it. Resolves with { found, missing }. */
+async function retryMissingArt(cards) {
+  const missing = cards.filter((c) => c.name && !artFor(c)?.url);
+  if (!missing.length) return { found: 0, missing: 0 };
+  for (const c of missing) matchMiss.delete(artKey(c));
+  const stillMissing = await resolveCardArt(missing, { maxAge: 0 });
+  return { found: missing.length - stillMissing.length, missing: stillMissing.length };
 }
 
 /* ================================================================== */
@@ -2038,6 +2121,7 @@ function Rips({ state, patch }) {
     // the departed hit's slice of the cost redistributes across what's left
     return { rips, inventory: syncRipBasis({ ...s, rips, inventory }) };
   }), [patch]);
+  const attachHits = useCallback((ripId, invIds) => patch((s) => attachHitsToState(s, ripId, invIds)), [patch]);
   const onToggle = useCallback((id) => setOpen((o) => (o === id ? null : id)), []);
   const sorted = useMemo(() => [...state.rips].sort(byDateDesc), [state.rips]);
   // Only the expanded rip renders its hit list, so only its hits need art —
@@ -2045,6 +2129,11 @@ function Rips({ state, patch }) {
   // changing `images` reference and defeat its memoization.
   const openRip = sorted.find((r) => r.id === open);
   const hitImages = useCardImages(openRip?.hits || EMPTY_ARR);
+  // Cards already in the Binder that never got a rip — a card added straight
+  // through Inventory or Lookup's "+ Keep" before this rip was logged. Any
+  // one of them can be picked up as a hit of whichever rip is open, which is
+  // what makes catching up on old rips a bulk attach instead of a re-search.
+  const unattached = useMemo(() => (state.inventory || []).filter((c) => c.name && !c.hitId && c.status !== "Sold"), [state.inventory]);
   const [listRef] = useAutoAnimate();
 
   return (
@@ -2054,7 +2143,7 @@ function Rips({ state, patch }) {
       {state.rips.length === 0 && !adding && <Empty>Nothing ripped yet. Log a rip — say 5 packs of Chaos Rising — then drop in each hit and watch the P&amp;L land.</Empty>}
       <div className="cl-stack" ref={listRef}>
         {sorted.map((r) => (
-          <RipCard key={r.id} rip={r} pl={ripPL(r, state.buys)} cost={ripCostOf(r, state.buys)} isOpen={open === r.id} images={open === r.id ? hitImages : EMPTY_OBJ} onToggle={onToggle} onDelete={delRip} onAddHit={addHit} onEditHit={updHit} onDeleteHit={delHit} />
+          <RipCard key={r.id} rip={r} pl={ripPL(r, state.buys)} cost={ripCostOf(r, state.buys)} isOpen={open === r.id} images={open === r.id ? hitImages : EMPTY_OBJ} unattached={open === r.id ? unattached : EMPTY_ARR} onToggle={onToggle} onDelete={delRip} onAddHit={addHit} onEditHit={updHit} onDeleteHit={delHit} onAttachHits={attachHits} />
         ))}
       </div>
     </div>
@@ -2182,6 +2271,12 @@ function CardSearch({
 
   const [sets, setSets] = useState([]);
   const [set, setSet] = useState(() => { try { return localStorage.getItem(CATSET_KEY) || ""; } catch { return ""; } });
+  // PPT keeps a separate Japanese catalogue (see cardLang) — a search has to
+  // ask it by name, or a Japanese card can only ever be found as its English
+  // print with the Language field switched by hand afterward, priced as the
+  // print it isn't. Defaults to English; not persisted, since which language
+  // is being searched is a fact about this search, not a lasting preference.
+  const [lang, setLang] = useState("en");
   const [local, setLocal] = useState([]);
   const [remote, setRemote] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -2214,8 +2309,10 @@ function CardSearch({
     const want = [...new Set(descriptors.flatMap((d) => DESC_RARITY[d] || []))];
     // a set named in the text itself wins over the picker, same as parseQuery's
     // own rule that in-query signals override everything else
-    const found = await searchCards({ q: term, set: setFilter || set, number });
-    const list = found.sort((a, b) => {
+    const found = await searchCards({ q: term, set: setFilter || set, number, lang });
+    // the result carries no language of its own — it is whichever catalogue
+    // was just asked, so tagging it here is exact, not a guess
+    const list = found.map((c) => ({ ...c, lang })).sort((a, b) => {
       const av = a.name.toLowerCase().startsWith(first) ? 0 : 1;
       const bv = b.name.toLowerCase().startsWith(first) ? 0 : 1;
       if (av !== bv) return av - bv;
@@ -2226,14 +2323,14 @@ function CardSearch({
       }
       return (cardPrice(b) || 0) - (cardPrice(a) || 0);
     }).slice(0, 14);
-    qcacheSet(`${set}|${text.toLowerCase()}`, list);
+    qcacheSet(`${set}|${lang}|${text.toLowerCase()}`, list);
     return list;
   };
 
   useEffect(() => {
     setFailed(false);
     if (typed.length < CARD_SEARCH_MIN) { setRemote([]); setBusy(false); return; }
-    const cached = qcacheGet(`${set}|${typed.toLowerCase()}`);
+    const cached = qcacheGet(`${set}|${lang}|${typed.toLowerCase()}`);
     if (cached) { setRemote(cached); setBusy(false); return; }
     let live = true;
     setBusy(true);
@@ -2245,7 +2342,7 @@ function CardSearch({
         (e) => { if (live) { setRemote([]); setBusy(false); setFailed(e.status === 401 ? "token" : true); } });
     }, 900);
     return () => { live = false; clearTimeout(t); };
-  }, [typed, set]);
+  }, [typed, set, lang]);
 
   /* Missing from both the on-device catalog and a name search? Browse a
      whole TCGplayer set straight from the Lambda instead. That reaches a
@@ -2389,6 +2486,10 @@ function CardSearch({
 
   return (
     <div className="cl-cs">
+      <div className="cl-pills cl-cs-lang">
+        <button type="button" className={"cl-pill" + (lang === "en" ? " on" : "")} onClick={() => setLang("en")}>English</button>
+        <button type="button" className={"cl-pill" + (lang === "jp" ? " on" : "")} onClick={() => setLang("jp")}>Japanese</button>
+      </div>
       {setPicker}
       <div className="cl-search">{box}{q && <button className="cl-search-btn" onClick={() => setQ("")}><X size={15} /></button>}</div>
       {rows.length > 0 && <div className="cl-cs-grid">
@@ -2443,15 +2544,28 @@ export function HitForm({ initial, onAdd, onSave, onCancel }) {
   // number are still worth taking for a slab or a JP card; the price is not,
   // and silently filling it is the mistake the grade field prevents.
   const priceable = f.grade === "Raw" && f.lang === "en";
+  /* A pick still leaves Grade and Language as a deliberate check — a graded
+     or Japanese card must not save as a Raw English one just because that's
+     the default — but there is no reason the next tap should mean hunting
+     for that row. Land the user on it. */
+  const gradeRef = useRef(null);
   /* A catalog row carries its SKU and printing. Keep both — they are what
      let the TCGplayer upload list this hit without matching it by name. */
   const pick = (c) => {
+    // A card names its own language — CardSearch tags a Japanese result, so
+    // the pick decides the Language field, same as it always has for
+    // name/set/number, rather than leaving whatever the field held before.
+    const lang = cardLang(c);
+    const priced = f.grade === "Raw" && lang === "en";
     setF({
       ...f, name: c.name, set: c.set?.name || "", number: c.number || "",
       variant: c.variant || "", tcgplayerId: c.tcgplayerId || "", productId: c.productId || "",
-      value: priceable && cardPrice(c, c.variant) != null ? String(cardPrice(c, c.variant)) : "",
+      lang,
+      value: priced && cardPrice(c, c.variant) != null ? String(cardPrice(c, c.variant)) : "",
     });
     setPreview(c.images?.small || null);
+    gradeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    gradeRef.current?.focus({ preventScroll: true });
   };
   return (
     <div className="cl-hitform">
@@ -2464,7 +2578,7 @@ export function HitForm({ initial, onAdd, onSave, onCancel }) {
       </div>
       <div className="cl-grid2">
         <Field label="Language"><select className="cl-in" value={f.lang} onChange={(e) => setF({ ...f, lang: e.target.value })}>{LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
-        <Field label="Grade"><select className="cl-in" value={f.grade} onChange={(e) => setF({ ...f, grade: e.target.value })}>{GRADES.map((g) => <option key={g} value={g}>{g === "Raw" ? "Raw (ungraded)" : g}</option>)}</select></Field>
+        <Field label="Grade"><select ref={gradeRef} className="cl-in" value={f.grade} onChange={(e) => setF({ ...f, grade: e.target.value })}>{GRADES.map((g) => <option key={g} value={g}>{g === "Raw" ? "Raw (ungraded)" : g}</option>)}</select></Field>
       </div>
       <Field label="Printing"><select className="cl-in" value={f.variant} onChange={(e) => setF({ ...f, variant: e.target.value })}><option value="">— not set —</option>{VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}</select></Field>
       {!priceable && <div className="cl-gradeest-note">Value these by hand — the card search prices English raw singles. Each one lands in your Binder {f.grade === "Raw" ? "as a Japanese card" : `as a ${f.grade} slab`}, where “Pull slab price” and “Refresh market prices” comp it properly.</div>}
@@ -2868,7 +2982,15 @@ export function SaleForm({ initial, inventory, onSave, onCancel }) {
   const [tbasis, setTbasis] = useState("");
   const [tmeta, setTmeta] = useState(null); // set/number from a picked search result
   const addInv = (id) => { const c = kept.find((x) => x.id === id); if (!c) return; setF((s) => ({ ...s, cards: [...s.cards, { id: uid(), invId: c.id, name: c.name, set: c.set, number: c.number, basis: invBasis(c) }] })); };
-  const pickTyped = (c) => { setTname(c.name); setTmeta({ set: c.set?.name || "", number: c.number || "", variant: c.variant || "", tcgplayerId: c.tcgplayerId || "" }); };
+  // A sale has no single "this card" to save — it bundles several into one
+  // transaction — so a pick here has nothing to jump to but the button that
+  // adds this row to that bundle.
+  const addCardRef = useRef(null);
+  const pickTyped = (c) => {
+    setTname(c.name);
+    setTmeta({ set: c.set?.name || "", number: c.number || "", variant: c.variant || "", tcgplayerId: c.tcgplayerId || "" });
+    addCardRef.current?.focus();
+  };
   const addTyped = () => { if (!tname) return; setF((s) => ({ ...s, cards: [...s.cards, { id: uid(), name: tname, ...(tmeta || {}), basis: Number(tbasis) || 0 }] })); setTname(""); setTbasis(""); setTmeta(null); };
   const rmCard = (cid) => setF((s) => ({ ...s, cards: s.cards.filter((c) => c.id !== cid) }));
   const net = (Number(f.price) || 0) - (Number(f.fees) || 0) - (Number(f.shipping) || 0) - (Number(f.consign) || 0);
@@ -2892,7 +3014,7 @@ export function SaleForm({ initial, inventory, onSave, onCancel }) {
       <CardSearch value={tname} onChange={(v) => { setTname(v); setTmeta(null); }} onPick={pickTyped} placeholder="…or search — name, set, number" />
       <div className="cl-typedadd">
         <div className="cl-money-in cl-basisbox"><span>$</span><input className="cl-in bare" inputMode="decimal" placeholder="basis" value={tbasis} onChange={(e) => setTbasis(e.target.value.replace(/[^0-9.]/g, ""))} /></div>
-        <button className="cl-add-card" onClick={addTyped}><Plus size={15} /> Add card</button>
+        <button ref={addCardRef} className="cl-add-card" onClick={addTyped}><Plus size={15} /> Add card</button>
       </div>
       <div className="cl-grid2"><Field label="Channel"><Select opts={CHANNELS} value={f.channel} onChange={(v) => setF({ ...f, channel: v })} /></Field><Field label="Sale price"><MoneyInput value={f.price} onChange={(v) => setF({ ...f, price: v })} /></Field></div>
       <div className="cl-grid3"><Field label="Platform fees"><MoneyInput value={f.fees} onChange={(v) => setF({ ...f, fees: v })} /></Field><Field label="Shipping you paid"><MoneyInput value={f.shipping} onChange={(v) => setF({ ...f, shipping: v })} /></Field><Field label="Consignment cut"><MoneyInput value={f.consign} onChange={(v) => setF({ ...f, consign: v })} /></Field></div>
@@ -3127,6 +3249,10 @@ function Inventory({ state, patch }) {
     ? { ...x, ...c, ...(x.costAuto && c.cost != null && (Number(c.cost) || 0) !== (Number(x.cost) || 0) ? { costAuto: false } : {}) }
     : x)) })), [patch]);
   const del = useCallback((id) => patch((s) => ({ inventory: s.inventory.filter((c) => c.id !== id) })), [patch]);
+  // Same attach a rip already offers in bulk (see attachHitsToState), reached
+  // from the card's own edit view instead — for the one-off case of catching
+  // a single card up rather than a whole batch.
+  const attachToRip = useCallback((invId, ripId) => patch((s) => attachHitsToState(s, ripId, [invId])), [patch]);
   const onOpenRow = useCallback((id) => setViewId(id), []);
   // Send a submission: flip the cards, stamp each one's share of the cost, and
   // write the single Grading buy that carries the cash. One patch, so the whole
@@ -3655,9 +3781,24 @@ function Inventory({ state, patch }) {
     return out;
   }, [gridCards, view]);
   const lookupCards = useMemo(() => inv.filter((c) => c.name && fuzzyMatch(qSettled, c.name, c.set, c.number, c.grade, c.status) && passesStatus(c)), [inv, filter, qSettled, showSold]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [images, rarities] = useCardImages(lookupCards, true);
+  const [images, rarities, reseedImages] = useCardImages(lookupCards, true);
   const trends = useCardTrends(useMemo(() => lookupCards.filter((c) => c.status !== "Sold"), [lookupCards]));
   const viewCard = viewId ? inv.find((c) => c.id === viewId) : null;
+  // whole binder, not just the current filter/search — a card hidden behind
+  // another pill is still missing its art
+  const missingArt = inv.filter((c) => c.name && !artFor(c)?.url);
+  const [artBusy, setArtBusy] = useState(false);
+  const retryArt = async () => {
+    if (artBusy || !missingArt.length) return;
+    setArtBusy(true);
+    setSyncMsg(`Re-pulling ${missingArt.length} missing image${missingArt.length === 1 ? "" : "s"}…`);
+    const { found, missing } = await retryMissingArt(missingArt);
+    reseedImages();
+    setArtBusy(false);
+    setSyncMsg(found
+      ? `Found ${found} of ${missingArt.length} missing image${missingArt.length === 1 ? "" : "s"}${missing ? `; ${missing} still not in the database` : ""}.`
+      : `Still missing — none of those ${missingArt.length} card${missingArt.length === 1 ? "" : "s"} are in the database yet.`);
+  };
 
   return (
     <div className="cl-stack">
@@ -3666,6 +3807,7 @@ function Inventory({ state, patch }) {
       {inv.length > 0 && <button className="cl-import-btn" onClick={() => setToolsOpen(!toolsOpen)}><Wrench size={14} /> {toolsOpen ? "Hide tools" : "Tools — prices, grading, imports, TCGplayer export"}</button>}
       {toolsOpen && inv.length > 0 && <div className="cl-import">
         <button className="cl-import-btn" onClick={refreshPrices} disabled={refreshing}><RefreshCw size={14} className={refreshing ? "cl-spin" : ""} /> {refreshing ? "Refreshing prices…" : "Refresh market prices (TCGplayer daily data)"}</button>
+        {missingArt.length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={retryArt} disabled={artBusy}><ImageIcon size={14} className={artBusy ? "cl-spin" : ""} /> {artBusy ? "Re-pulling images…" : `Re-pull missing card images (${missingArt.length})`}</button>}
         {(state.sales || []).length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={reconcileSold}><RefreshCw size={14} /> Check against sales — mark anything already sold</button>}
         <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => { setScanOpen(!scanOpen); setSyncMsg(""); }}><Sparkles size={14} /> Grading candidates — rank raw cards by grading upside</button>
         {scanOpen && <div className="cl-tcgp-pick cl-tabpane">
@@ -3801,7 +3943,7 @@ function Inventory({ state, patch }) {
         </div>
       ))}
       {viewCard && <CardModal card={viewCard} onClose={() => setViewId(null)} onSave={upd} onDelete={del}
-        onValue={(v) => upd({ id: viewCard.id, value: v })} />}
+        onValue={(v) => upd({ id: viewCard.id, value: v })} rips={state.rips} onAttachRip={attachToRip} />}
     </div>
   );
 }
@@ -3859,14 +4001,25 @@ function GradingForm({ cards, onSend, onCancel }) {
     </Form>
   );
 }
-export function InvForm({ initial, onSave, onCancel }) {
+export function InvForm({ initial, onSave, onCancel, rips, onAttachRip }) {
   const estStr = (e, grader) => Object.fromEntries(GRADER_LADDER[grader].map((g) => [g, numStr(e?.[g])]));
   const [f, setF] = useState(initial
     ? { name: initial.name, set: initial.set || "", number: initial.number || "", variant: initial.variant || "", tcgplayerId: initial.tcgplayerId || "", productId: initial.productId || "", lang: cardLang(initial), grade: initial.grade || "Raw", status: initial.status || "Kept", grader: cardGrader(initial), source: initial.source || "Rip pull", cost: numStr(initial.cost), gradingCost: numStr(initial.gradingCost), gradingShip: numStr(initial.gradingShip), value: numStr(initial.value), gradeEst: estStr(initial.gradeEst, cardGrader(initial)), date: initial.date || today() }
     : { name: "", set: "", number: "", variant: "", tcgplayerId: "", productId: "", lang: "en", grade: "Raw", status: "Kept", grader: DEFAULT_GRADER, source: "Rip pull", cost: "", gradingCost: "", gradingShip: "", value: "", gradeEst: estStr(null, DEFAULT_GRADER), date: today() });
   const [comps, setComps] = useState("");
   const [slabMsg, setSlabMsg] = useState("");
+  const [ripPick, setRipPick] = useState("");
+  // A card already tied to a hit is already someone's pull — attaching it to
+  // a second rip would double-count its cost, so this only ever names the
+  // rip it belongs to. Existing only on `initial`: a card being added here
+  // has no id yet for a rip to point at.
+  const ownRip = initial?.hitId ? (rips || []).find((r) => (r.hits || []).some((h) => h.id === initial.hitId)) : null;
   const slab = slabOf(f.grade);
+  // A raw Japanese card has no TCGplayer number to trust (tcgPriceable is
+  // English-only) but its own eBay solds still price it, the same route a
+  // slab already uses — this is the other half of that same "not this
+  // route" case, not a new one.
+  const jpRaw = isJP(f) && (f.grade || "Raw") === "Raw";
   const ladder = GRADER_LADDER[f.grader] || GRADER_LADDER[DEFAULT_GRADER];
   // Switching grader empties the estimates on purpose. They were the other
   // company's sold prices, and carrying them over is the exact mistake this
@@ -3882,14 +4035,32 @@ export function InvForm({ initial, onSave, onCancel }) {
      records that, and a pick leaves it alone. */
   const [typed, setTyped] = useState(false);
   const setValue = (v) => { setTyped(true); setF((s) => ({ ...s, value: v })); };
-  const pickCard = (c) => setF((s) => {
-    const price = tcgPriceable(s) ? cardPrice(c, c.variant) : null;
-    return { ...s, name: c.name, set: c.set?.name || "", number: c.number || "",
-      variant: c.variant || s.variant, tcgplayerId: c.tcgplayerId || "", productId: c.productId || "",
-      // no price on the picked row (a slab, a JP card, a row the export had no
-      // price for) leaves the field as it was rather than blanking it
-      value: typed || price == null ? s.value : String(price) };
-  });
+  // Grade stays a deliberate check after a pick — a slab must not save as
+  // Raw just because that's the default — so this only removes the hunt for
+  // the row that check lives on, not the check itself.
+  const gradeRef = useRef(null);
+  const pickCard = (c) => {
+    // A card names its own language — CardSearch tags a Japanese result, so
+    // the pick decides the Language field, not whatever it happened to hold
+    // before. Getting this from anywhere else is how a Japanese pick used to
+    // keep the box on English and price like one.
+    const lang = cardLang(c);
+    setF((s) => {
+      const priceable = lang === "en" && (s.grade || "Raw") === "Raw";
+      const price = priceable ? cardPrice(c, c.variant) : null;
+      return { ...s, name: c.name, set: c.set?.name || "", number: c.number || "",
+        variant: c.variant || s.variant, tcgplayerId: c.tcgplayerId || "", productId: c.productId || "",
+        lang,
+        // A slab or a row the export had no price for leaves the field as it
+        // was rather than blanking it — but a Japanese pick never carries an
+        // English number, so leaving it "as it was" would leave the last
+        // English price sitting under a Japanese card. Only a language
+        // mismatch clears it; every other no-price case still just skips.
+        value: typed ? s.value : (price != null ? String(price) : (lang === "jp" ? "" : s.value)) };
+    });
+    gradeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    gradeRef.current?.focus({ preventScroll: true });
+  };
   const pullComps = async () => {
     if (comps === "loading") return;
     setComps("loading");
@@ -3916,18 +4087,20 @@ export function InvForm({ initial, onSave, onCancel }) {
   /* A card already in a slab has one honest market value: what that slab sells
      for. This reads the bucket for the exact grade on the label — never a
      neighbouring grade, and never the raw price, which is what the card would
-     be worth cracked out. */
+     be worth cracked out. A raw Japanese card has no slab bucket to read, so
+     it takes the same body's raw bucket instead — its own market, same as an
+     English raw single would, just off eBay solds instead of TCGplayer. */
   const pullSlab = async () => {
-    if (slabMsg === "loading" || !slab) return;
+    if (slabMsg === "loading" || !(slab || jpRaw)) return;
     setSlabMsg("loading");
     try {
       const r = await fetchGradedComps(f.name, f.set, f.number, f.lang, f.productId || "");
       if (!compsMatch(r, f)) { setSlabMsg(wrongCardMsg(r, f)); return; }
-      const b = slabComp(r, f.grade);
-      if (!b) { setSlabMsg(`No recent ${f.grade} sales found for this card — the other grades it did sell in are on the card's detail view. Fill the value in manually.`); return; }
+      const b = slab ? slabComp(r, f.grade) : (r.raw ? { price: r.raw.price, count: r.raw.count, min: r.raw.min, max: r.raw.max } : null);
+      if (!b) { setSlabMsg(`No recent ${slab ? f.grade : "raw"} sales found for this card — ${slab ? "the other grades it did sell in are on the card's detail view. " : ""}Fill the value in manually.`); return; }
       setF((x) => ({ ...x, value: String(b.price) }));
       const spread = b.min != null && b.max != null && b.min !== b.max ? `, ${fmt(b.min)} – ${fmt(b.max)}` : "";
-      setSlabMsg(`${f.grade} · ${fmt(b.price)} from ${b.count} eBay sold${b.count === 1 ? "" : "s"}${spread}.`);
+      setSlabMsg(`${slab ? f.grade : "Raw"} · ${fmt(b.price)} from ${b.count} eBay sold${b.count === 1 ? "" : "s"}${spread}.`);
     } catch (e) {
       setSlabMsg(e.status === 401 ? NO_TOKEN_MSG
         : e.status === 501 ? "Not set up yet — the sync Lambda needs a pokemonpricetracker.com API key (see aws/deploy.sh)."
@@ -3955,8 +4128,19 @@ export function InvForm({ initial, onSave, onCancel }) {
           unset option can carry a label instead of rendering blank. */}
       <div className="cl-grid2"><Field label="Language"><select className="cl-in" value={f.lang} onChange={(e) => setF({ ...f, lang: e.target.value })}>{LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field><Field label="Printing"><select className="cl-in" value={f.variant} onChange={(e) => setF({ ...f, variant: e.target.value })}><option value="">— not set —</option>{VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}</select></Field></div>
       {f.lang === "jp" && <div className="cl-gradeest-note">Japanese cards are priced from their own eBay solds. “Refresh market prices” leaves them out of the English TCGplayer data, so a JP card can never pick up the price of the English card with the same name and number.</div>}
-      <div className="cl-grid2"><Field label="Grade"><Select opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => setF({ ...f, status: v })} /></Field></div>
+      <div className="cl-grid2"><Field label="Grade"><Select ref={gradeRef} opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => setF({ ...f, status: v })} /></Field></div>
       <Field label="Source"><Select opts={INV_SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field>
+      {initial && (ownRip
+        ? <div className="cl-gradeest-note">Part of the “{ownRip.product || "Rip"}” rip — its cost is this card's share of that rip (see Rips to move or remove it).</div>
+        : rips?.length > 0 && <Field label="Add to a rip">
+            <div className="cl-search">
+              <select className="cl-in" value={ripPick} onChange={(e) => setRipPick(e.target.value)}>
+                <option value="">— not from a rip —</option>
+                {rips.map((r) => <option key={r.id} value={r.id}>{r.product || "Rip"} · {r.date}</option>)}
+              </select>
+              <button className="cl-mini" disabled={!ripPick} onClick={() => onAttachRip(ripPick)}>Attach</button>
+            </div>
+          </Field>)}
       {f.status === "At grading" && <>
         {/* Where the card is decides what it is worth — the same card sells for
             very different money in a PSA slab and a CGC one, so the estimates
@@ -3970,9 +4154,9 @@ export function InvForm({ initial, onSave, onCancel }) {
       </>}
       <div className="cl-grid2"><Field label="Cost basis"><MoneyInput value={f.cost} onChange={(v) => setF({ ...f, cost: v })} /></Field><Field label="Market value"><MoneyInput value={f.value} onChange={setValue} /></Field></div>
       {initial?.costAuto && <div className="cl-gradeest-note">This basis is the card's slice of what its rip cost, split across the pulls by value, so selling it shows a real profit. Typing a different number makes the basis yours — the rip stops updating it.</div>}
-      {slab && <div className="cl-field">
-        <div className="cl-gradeest-head"><span>Value it at what a {f.grade} slab sells for</span><button className="cl-link" disabled={!f.name || slabMsg === "loading"} onClick={pullSlab}>{slabMsg === "loading" ? "Pulling…" : "Pull slab price"}</button></div>
-        {slabMsg && <div className="cl-gradeest-note">{slabMsg === "loading" ? `Pulling eBay ${f.grade} sold comps…` : slabMsg}</div>}
+      {(slab || jpRaw) && <div className="cl-field">
+        <div className="cl-gradeest-head"><span>Value it at what a {slab ? `${f.grade} slab` : "raw Japanese card"} sells for</span><button className="cl-link" disabled={!f.name || slabMsg === "loading"} onClick={pullSlab}>{slabMsg === "loading" ? "Pulling…" : "Pull sold price"}</button></div>
+        {slabMsg && <div className="cl-gradeest-note">{slabMsg === "loading" ? `Pulling eBay ${slab ? f.grade : "raw Japanese"} sold comps…` : slabMsg}</div>}
       </div>}
       {/* Both grading costs count toward the basis. "Send cards to grading" fills
           them in for a whole submission; these fields correct one card. */}
@@ -4355,7 +4539,7 @@ function ArtPicker({ card, onClose, onSave }) {
   );
 }
 
-function CardModal({ card, onClose, onSave, onDelete, onValue }) {
+function CardModal({ card, onClose, onSave, onDelete, onValue, rips, onAttachRip }) {
   // leaving is animated too: `closing` plays the reverse of the entrance,
   // then the real onClose unmounts. Reduced motion skips straight out.
   const [closing, setClosing] = useState(false);
@@ -4485,7 +4669,7 @@ function CardModal({ card, onClose, onSave, onDelete, onValue }) {
           </div>
         </div>
 
-        {editing ? <InvForm initial={card} onSave={(c) => { onSave(c); setEditing(false); }} onCancel={() => setEditing(false)} /> : <>
+        {editing ? <InvForm initial={card} onSave={(c) => { onSave(c); setEditing(false); }} onCancel={() => setEditing(false)} rips={rips} onAttachRip={onAttachRip ? (ripId) => { onAttachRip(card.id, ripId); setEditing(false); } : undefined} /> : <>
         <div className="cl-cm-stats">
           <div className="cl-cm-stat"><span>Ledger value</span><b>{fmt(value)}</b></div>
           <div className="cl-cm-stat"><span>Cost basis</span><b>{fmt(basis)}</b></div>
@@ -5029,7 +5213,7 @@ const Empty = ({ children }) => <div className="cl-empty">{children}</div>;
 const Field = ({ label, children }) => <label className="cl-field"><span>{label}</span>{children}</label>;
 const Form = ({ children, editing }) => <div className={"cl-form cl-tabpane" + (editing ? " cl-editing" : "")}>{children}</div>;
 const Actions = ({ onCancel, onSave, label, disabled }) => (<div className="cl-form-actions">{onCancel && <button className="cl-cancel" onClick={onCancel}>Cancel</button>}<button className="cl-save" disabled={disabled} onClick={onSave}>{label}</button></div>);
-const Select = ({ opts, value, onChange }) => (<select className="cl-in" value={value} onChange={(e) => onChange(e.target.value)}>{opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>);
+const Select = React.forwardRef(({ opts, value, onChange }, ref) => (<select ref={ref} className="cl-in" value={value} onChange={(e) => onChange(e.target.value)}>{opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>));
 const MoneyInput = ({ value, onChange, placeholder = "0.00" }) => (<div className="cl-money-in"><span>$</span><input className="cl-in bare" inputMode="decimal" placeholder={placeholder} value={value} onChange={(e) => onChange(e.target.value.replace(/[^0-9.]/g, ""))} /></div>);
 function BarList({ data, tone }) {
   const rows = Object.entries(data).filter(([, v]) => Math.abs(v) > 0.001).sort((a, b) => b[1] - a[1]);
