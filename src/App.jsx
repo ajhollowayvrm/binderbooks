@@ -824,7 +824,7 @@ const estGrades = (c) => GRADER_LADDER[cardGrader(c)];
    thing from a grade it can't guess. */
 const SLAB_GRADES = {
   PSA: ["10", "9", "8", "7", "6", "5", "4", "3", "2", "1"],
-  CGC: ["10", "9.5", "9", "8.5", "8", "7.5", "7", "6.5", "6", "5", "4", "3", "2", "1"],
+  CGC: ["10 Pristine", "10", "9.5", "9", "8.5", "8", "7.5", "7", "6.5", "6", "5", "4", "3", "2", "1"],
   BGS: ["10", "9.5", "9", "8.5", "8", "7.5", "7", "6.5", "6", "5", "4", "3", "2", "1"],
 };
 const GRADES = ["Raw", ...GRADERS.flatMap((co) => SLAB_GRADES[co].map((g) => `${co} ${g}`)), "Other"];
@@ -849,7 +849,7 @@ const compCount = (r, grader, g) => r?.byGrade?.[bucketKey(grader, g)]?.count ??
    bucket, which is the only honest price for a card already in a slab — what a
    CGC 9.5 sells for, not what the raw card underneath would fetch. */
 export const slabOf = (grade) => {
-  const m = /^(\S+)\s+([\d.]+)$/.exec(String(grade || ""));
+  const m = /^(\S+)\s+(.+)$/.exec(String(grade || ""));
   return m && SLAB_GRADES[m[1]]?.includes(m[2]) ? { grader: m[1], grade: m[2] } : null;
 };
 // that one bucket out of a /graded body: { price, count, median, min, max, trend }

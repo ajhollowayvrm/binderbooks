@@ -28,6 +28,8 @@ function TrendLine({ trend }) {
    every tile uses, because no grader publishes slab photos. The frame alone
    marks the card as graded. */
 const SLAB_LABELS = { PSA: "psa", CGC: "cgc", BGS: "bgs" };
+// "10 Pristine" has no word here — the grade itself already says it, so a
+// word beside it would just repeat "Pristine ... Pristine".
 const GRADE_WORDS = { "10": "GEM MINT", "9.5": "MINT+", "9": "MINT", "8.5": "NM-MT+", "8": "NM-MT", "7.5": "NM+", "7": "NM", "6.5": "EX-MT+", "6": "EX-MT" };
 function SlabLabel({ slab }) {
   return (

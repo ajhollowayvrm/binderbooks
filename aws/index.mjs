@@ -711,7 +711,7 @@ Report only what is actually visible. Never infer a collector number or a set fr
   Full-art, illustration-rare and secret-rare cards have no reverse printing; report those as "Holofoil".
 - language: "japanese" when the card's own text is in Japanese, "english" when it is in English, "unknown" when the photograph doesn't show enough text to tell. Judge this from the card, not from the slab label, which is in English either way.
 - grader: the grading company named on the slab label - "PSA", "CGC", "BGS", or the name as printed for any other company. null when the card is not in a slab.
-- grade: the numeric grade printed on that label, as a string ("10", "9.5"). Report the number alone, without the company or the adjective beside it, so a "GEM MT 10" is "10" and a "CGC Pristine 10" is "10". null when the card is not in a slab, or when the label is not legible.
+- grade: the numeric grade printed on that label, as a string ("10", "9.5"). Report the number alone, without the company or the adjective beside it, so a "GEM MT 10" is "10" — except a CGC slab labeled "Pristine 10" or "10 Pristine", which reports grade as "10 Pristine", since CGC prices a Pristine 10 higher than a plain 10. null when the card is not in a slab, or when the label is not legible.
 - confidence: "high" only when the name and the number are both plainly legible.
 - notes: one short sentence, only when something is ambiguous or unreadable. null otherwise.`;
 const IDENTIFY_SCHEMA = {
