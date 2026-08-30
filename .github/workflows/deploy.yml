@@ -30,6 +30,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # The money formulas and the ledger migration, before anything ships.
+      # A push that breaks them would otherwise reach the live site, and the
+      # migration rewrites the whole ledger on every load.
+      - run: npm test
       # plain `vite build`, so `base` is /binderbooks/ and the Scan tab is left
       # out of the bundle — see vite.config.js
       - run: npm run build

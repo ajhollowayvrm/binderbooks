@@ -93,6 +93,19 @@ every API call through native code. Widening won, because the allowlist was not 
   origin, which the same-origin policy keeps out of its reach.
 - **CORS only restrains browser JavaScript.** curl never cared. It was never the control here.
 
+The Lambda **fails closed** when `SYNC_TOKEN` is not set. `String(undefined)` is
+the nine-character string `"undefined"`, so an unset variable used to
+authenticate any request that sent `x-sync-token: undefined` — and
+`update-function-configuration` replaces the whole environment, which is exactly
+how a deploy drops a variable. A function with no token, an empty token, or the
+literal string `"undefined"` or `"null"` now rejects every request.
+
+The test is presence, not a minimum length, and that is deliberate: a length
+rule would reject whatever token is live today and lock every device out of the
+ledger the moment it deployed. Pick a long token when you rotate one — nothing
+here enforces it, because failing open was the bug and failing shut on a valid
+token would be a worse one.
+
 The real access control is the token. Treat it that way: if it leaks, rotate `SYNC_TOKEN` on the
 Lambda and repaste it on each device. Do not reach for the CORS list as a security control, because
 it never was one.

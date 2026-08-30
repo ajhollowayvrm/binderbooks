@@ -6,6 +6,8 @@
   "description": "BinderBooks — a Pokémon card buying/selling/ripping P&L ledger",
   "scripts": {
     "dev": "vite",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "build": "vite build",
     "preview": "vite preview",
     "build:ios": "vite build --mode ios --outDir ios/www --emptyOutDir",
@@ -23,6 +25,8 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
-    "vite": "^5.4.10"
+    "jsdom": "^29.1.1",
+    "vite": "^5.4.10",
+    "vitest": "^4.1.11"
   }
 }

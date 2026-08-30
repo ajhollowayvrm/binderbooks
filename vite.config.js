@@ -33,4 +33,12 @@ export default defineConfig(({ mode }) => ({
     __BB_NATIVE__: JSON.stringify(mode === "ios"),
   },
   plugins: [react()],
+  /* Tests run under jsdom, not node. src/App.jsx reads `location.hash` and
+     `localStorage` while the module evaluates (the sync magic-link handler), so
+     importing it at all needs a DOM. The `define` block above still applies, so
+     `__BB_SCAN__` and `__BB_NATIVE__` resolve here as well. */
+  test: {
+    environment: "jsdom",
+    include: ["src/**/*.test.{js,jsx}", "aws/**/*.test.{js,mjs}"],
+  },
 }));

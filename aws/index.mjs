@@ -20,6 +20,11 @@ const TABLE = process.env.TABLE_NAME;
 const ID = "ledger";
 // DynamoDB items max out at 400 KB; leave headroom for attribute overhead
 const MAX_BYTES = 350_000;
+/* BYTES, not String.length. DynamoDB measures the item in UTF-8, and a ledger
+   of Japanese card names runs about three bytes per character — so a length
+   test passes a payload that the table then refuses. Byte.byteLength is the
+   same measure the client uses before it pushes (LEDGER_MAX_BYTES). */
+const utf8Len = (s) => Buffer.byteLength(s, "utf8");
 
 const res = (code, body) => ({
   statusCode: code,
@@ -37,9 +42,26 @@ const rateRes = (e, budgetMsg, what) => (e.kind === "throttle"
   ? res(429, { error: `${what} is rate-limited right now — try again in a moment`, kind: "throttle", retryAfter: e.retryAfter || THROTTLE_DEFAULT_S })
   : res(429, { error: budgetMsg, kind: "budget" }));
 
+/* Fail closed when the function has no token configured. `String(undefined)`
+   is the nine-character string "undefined", so an unset SYNC_TOKEN used to
+   authenticate any request that sent `x-sync-token: undefined` — the whole API,
+   ledger included, open to anyone who guessed it. A deploy that drops the
+   variable (update-function-configuration replaces the whole environment) is
+   exactly how that happens.
+
+   The test is presence, deliberately, not a minimum length: a length policy
+   would reject whatever token is live today and lock every device out of the
+   ledger on deploy, which is a worse failure than the one being fixed. The
+   literal "undefined" is refused as well, because that is the exact string the
+   old bug authenticated. */
+const tokenReady = () => {
+  const t = process.env.SYNC_TOKEN;
+  return typeof t === "string" && t.length > 0 && t !== "undefined" && t !== "null";
+};
 const authed = (event) => {
+  if (!tokenReady()) return false;
   const got = Buffer.from(String(event.headers?.["x-sync-token"] || ""));
-  const want = Buffer.from(String(process.env.SYNC_TOKEN));
+  const want = Buffer.from(process.env.SYNC_TOKEN);
   return got.length === want.length && timingSafeEqual(got, want);
 };
 
@@ -805,11 +827,30 @@ export const handler = async (event) => {
 
   const qp = event.queryStringParameters || {};
   const lang = qp.lang === "jp" ? "jp" : "en";
-  const isGet = (p) => method === "GET" && event.rawPath?.endsWith(p);
-  if ((isGet("/sets") || isGet("/prices") || isGet("/catalog") || isGet("/search") || isGet("/graded") || isGet("/history")) && !process.env.PPT_KEY)
+  /* The route name, as one segment.
+
+     This replaces `endsWith("/sets")`, under which the ledger GET and PUT
+     carried no path test at all — so any authenticated GET that missed every
+     card route returned the whole ledger.
+
+     A named stage or a custom-domain base path prefixes rawPath, and the
+     ledger lives at the root, so that prefix would otherwise read as the route
+     name and every ledger call would 404 on a config change with no code
+     change. Strip it: payload v2 names the stage, and "$default" is not
+     prefixed. Note this is a last-SEGMENT test, so "/x/sets" still resolves to
+     "sets" — harmless, because reaching it already required the token. */
+  const stage = event.requestContext?.stage;
+  const rawPath = (event.rawPath || "/").replace(/\/+$/, "");
+  // whole segment only: a bare startsWith would let a stage named "se" turn
+  // "/sets" into "ts"
+  const staged = stage && stage !== "$default"
+    && (rawPath === `/${stage}` || rawPath.startsWith(`/${stage}/`));
+  const route = (staged ? rawPath.slice(stage.length + 1) : rawPath).split("/").pop();
+  const isGet = (p) => method === "GET" && route === p;
+  if ((isGet("sets") || isGet("prices") || isGet("catalog") || isGet("search") || isGet("graded") || isGet("history")) && !process.env.PPT_KEY)
     return res(501, { error: "card data not configured" });
 
-  if (isGet("/sets")) {
+  if (isGet("sets")) {
     try {
       const { list } = await pptSets(lang);
       // "SV07: Stellar Crown" -> "Stellar Crown": the dropdowns and the
@@ -828,7 +869,7 @@ export const handler = async (event) => {
     }
   }
 
-  if (isGet("/prices")) {
+  if (isGet("prices")) {
     if (!qp.set) return res(400, { error: "set required" });
     try { const body = await setPrices(qp.set, lang); return body ? res(200, body) : res(404, { error: "set not found" }); }
     catch (e) {
@@ -838,7 +879,7 @@ export const handler = async (event) => {
     }
   }
 
-  if (isGet("/catalog")) {
+  if (isGet("catalog")) {
     if (!qp.set) return res(400, { error: "set required" });
     try { const body = await setCatalog(qp.set, lang); return body ? res(200, body) : res(404, { error: "set not found" }); }
     catch (e) {
@@ -848,7 +889,7 @@ export const handler = async (event) => {
     }
   }
 
-  if (isGet("/search")) {
+  if (isGet("search")) {
     if (!qp.q) return res(400, { error: "q required" });
     try { return res(200, await cardSearch(qp.q, qp.set || "", qp.number || "", lang)); }
     catch (e) {
@@ -858,7 +899,7 @@ export const handler = async (event) => {
     }
   }
 
-  if (isGet("/graded")) {
+  if (isGet("graded")) {
     if (!qp.name) return res(400, { error: "name required" });
     try {
       const body = await gradedPrices(qp.name, qp.number || "", qp.set || "", lang, qp.productId || "");
@@ -873,7 +914,7 @@ export const handler = async (event) => {
     }
   }
 
-  if (isGet("/history")) {
+  if (isGet("history")) {
     const days = Math.min(Math.max(Number(qp.days) || 90, 7), 180);
     try {
       const pid = qp.productId || await resolveProductId(qp.name || "", qp.number || "", qp.set || "", lang);
@@ -887,9 +928,7 @@ export const handler = async (event) => {
     }
   }
 
-  // must be method-scoped: the ledger GET below matches any authed GET
-  // regardless of path
-  if (method === "POST" && event.rawPath?.endsWith("/identify")) {
+  if (method === "POST" && route === "identify") {
     if (!process.env.ANTHROPIC_API_KEY) return res(501, { error: "card scanning not configured" });
     let body;
     try {
@@ -911,6 +950,11 @@ export const handler = async (event) => {
     }
   }
 
+  /* The ledger lives at the root, and only at the root. Anything else that
+     reaches here named a route that does not exist — say so, rather than
+     handing back the whole ledger because no earlier test claimed the path. */
+  if (route !== "") return res(404, { error: "no such route" });
+
   if (method === "GET") {
     const r = await ddb.send(new GetCommand({ TableName: TABLE, Key: { id: ID } }));
     if (!r.Item) return res(404, { error: "empty" });
@@ -923,8 +967,14 @@ export const handler = async (event) => {
     let body;
     try { body = JSON.parse(event.body || ""); } catch { return res(400, { error: "bad json" }); }
     const { updatedAt, data } = body;
-    if (typeof updatedAt !== "number" || typeof data !== "string" || data.length > MAX_BYTES)
+    if (typeof updatedAt !== "number" || typeof data !== "string")
       return res(400, { error: "bad payload" });
+    /* Name the size fault on its own. The client cannot act on "bad payload":
+       it retried the same rejected body on every later edit, and sync stopped
+       for good behind a generic error. */
+    const size = utf8Len(data);
+    if (size > MAX_BYTES)
+      return res(413, { error: "ledger too large", limit: MAX_BYTES, size });
     try {
       await ddb.send(new PutCommand({
         TableName: TABLE,

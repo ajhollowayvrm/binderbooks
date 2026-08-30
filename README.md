@@ -399,8 +399,33 @@ Two standalone helpers that don't need the app running:
   follows the card you pick, because picking one is a statement about which card
   this is — the Prize Pack print's price should not stay at the plain print's.
   A value you typed yourself is left alone.
-- A "Reset all data" button lives at the bottom of the Overview tab.
-- The app seeds with example data on first run; edit or delete those rows freely.
+- **Back the ledger up to a file.** Cloud sync is a mirror, not an archive: it
+  holds exactly one ledger, last write wins, and it stops entirely once the
+  ledger outgrows its DynamoDB item. **Backup** on the Overview tab writes the
+  whole ledger to `BinderBooks-backup-<date>.json`, and **Restore from a
+  backup** reads one back — after naming what it is about to write and what it
+  displaces. A restored file goes through the same `migrate()` every load does,
+  so an old backup still opens; unlike a normal load it never re-seeds the
+  starter buys, because a backup of a ledger with no buys must come back with
+  no buys.
+- **The ledger has a size ceiling, and the app now says so before it hits.**
+  One DynamoDB item stops at 400 KB, so the sync payload caps at 350,000
+  **bytes** — measured in UTF-8, because a Japanese card name is three bytes a
+  character and a `String.length` test passed payloads the table then refused.
+  In practice that is roughly 600 to 1,000 inventory cards. Past 80% the Cloud
+  sync panel names the percentage and the headroom left; past the cap the push
+  is dropped rather than retried forever, and the panel says that this device
+  now holds the only copy and offers the backup button. Before this a full
+  ledger failed with a plain 400, the client re-queued the same rejected body
+  on every later edit, and sync stopped for good behind "Sync hiccup".
+- A "Reset all data" button lives at the bottom of the Overview tab. It offers
+  a backup first, because nothing else undoes it.
+- The app seeds with example data on first run; edit or delete those rows
+  freely. The starter sales carry an order reference and **no buyer name** —
+  they ship inside a public bundle, and those were real customers.
+- **Tests:** `npm test` runs Vitest over the money formulas (`ripHitShares`,
+  `saleNet`, `invBasis`, `gradeRange`, `splitEvenly`), the ledger migration,
+  and the backup round trip. The deploy workflow runs them before it builds.
 - Card search matches substrings of the **card name** and supports multi-word
   (e.g. "pika ex"), but the API doesn't do typo correction. Set names in the
   query become set filters ("ampharos chaos rising"), and variant words like

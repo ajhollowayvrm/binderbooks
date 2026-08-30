@@ -5,7 +5,7 @@ import {
   LayoutDashboard, PackageOpen, ShoppingCart, Tags, Search,
   Plus, Trash2, Pencil, ChevronDown, ChevronRight, Sparkles, Upload, X,
   CalendarRange, ChevronLeft, RefreshCw, ExternalLink, Camera, Library,
-  LayoutGrid, Wrench, ImageIcon,
+  LayoutGrid, Wrench, ImageIcon, Download,
 } from "lucide-react";
 import {
   CSV_COLUMNS, importCatalogFile, catalogSets, catalogStats, searchCatalog,
@@ -55,7 +55,35 @@ const setLocalStamp = (t) => { try { localStorage.setItem(STAMP_KEY, String(t));
    this. Each sync call uses a hard timeout. A stalled request then fails, and
    the app recovers from the failure. */
 const SYNC_TIMEOUT = 12000;
+/* The whole ledger is one DynamoDB item, and an item stops at 400 KB. The
+   Lambda rejects anything over LEDGER_MAX_BYTES with a 413 (aws/index.mjs) —
+   the status the "toobig" recovery below keys on, so keep the two in step.
+   Measure in BYTES, not in String.length: a ledger full of Japanese card names
+   passes a length test and still blows the item limit, because one character
+   there is three UTF-8 bytes.
+
+   Before this, an oversized push failed with a plain 400, the client re-queued
+   the same rejected body, and every later edit retried it. Cloud sync stopped
+   for good and the panel only ever said "Sync hiccup". */
+export const LEDGER_MAX_BYTES = 350000;
+const LEDGER_WARN_BYTES = Math.round(LEDGER_MAX_BYTES * 0.8);
+export const byteLen = (s) => new TextEncoder().encode(s).length;
+/* One mapping from a failed sync call to a panel state, so every push path
+   tells the same story. Four call sites inlined `401 ? badtoken : error`, and
+   three of them swallowed the size refusal as a generic "Sync hiccup". */
+export const syncErrState = (e) => (e?.status === 401 ? "badtoken" : e?.status === 413 ? "toobig" : "error");
 const syncFetch = async (method, body, since) => {
+  /* The size guard lives here, not only in flushPush, because three other
+     paths push the whole ledger: the boot "heal the cloud" branch, connectSync
+     and resolveChoice. Each one skipped the check, sent an oversized body, and
+     mapped the Lambda's refusal to a plain "error" — the same misleading
+     "Sync hiccup" state this change exists to remove, reached by a different
+     door. A first connect on a new device hit it immediately. */
+  if (method === "PUT" && typeof body?.data === "string" && byteLen(body.data) > LEDGER_MAX_BYTES) {
+    const e = new Error("ledger too large");
+    e.status = 413;
+    throw e;
+  }
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), SYNC_TIMEOUT);
   try {
@@ -903,25 +931,31 @@ export const stCls = (s) => ({ "Kept": "kept", "At grading": "grading", "Listed"
 // so the status filter still matches.
 export const statusLabel = (c) => (c.status === "At grading" && c.grader ? `At ${c.grader}` : c.status);
 
+/* Starter data. This ships inside a PUBLIC bundle (GitHub Pages), so it carries
+   no buyer names — these were real customers of a real TCGplayer seller, and a
+   name is theirs, not the seller's to publish. The order suffix is what the
+   ledger actually keys on (see orderKey), so nothing here depends on a name.
+   A real import re-points these rows at their full order numbers and can carry
+   a buyer name locally; that copy never leaves the device. */
 const TCGP_ORDERS = [
-  {o:"3998E",b:"Lee Olson",p:3.47,d:"2026-06-09"},{o:"ABDBA",b:"Shane Davis",p:5.31,d:"2026-05-13"},
-  {o:"EC37D",b:"Leslie Nagai",p:5.31,d:"2026-05-13"},{o:"9CC9F",b:"Jesus Fernandez",p:14.99,d:"2026-05-14"},
-  {o:"41773",b:"Richard Stotler",p:5.81,d:"2026-05-14"},{o:"FD19C",b:"Dominick Telesco",p:2.81,d:"2026-05-14"},
-  {o:"CBC1D",b:"Hunter Brake",p:6.99,d:"2026-05-14"},{o:"12B9A",b:"Jeremy Evans",p:27.99,d:"2026-05-15"},
-  {o:"D2CFF",b:"Rhonda Haskins",p:6.49,d:"2026-05-15"},{o:"6023F",b:"Christian Bautista",p:3.31,d:"2026-05-15"},
-  {o:"6F9F3",b:"Mason Diamond",p:4.06,d:"2026-05-15"},{o:"50E40",b:"John Junghans",p:4.81,d:"2026-05-18"},
-  {o:"EC9EC",b:"Sergio Aquino",p:4.81,d:"2026-05-18"},{o:"8A5E2",b:"Patrick Coombe",p:3.06,d:"2026-05-20"},
-  {o:"54848",b:"Andres Fernandez",p:11.49,d:"2026-05-20"},{o:"B401E",b:"Diego Mendez",p:25.99,d:"2026-05-22"},
-  {o:"DD691",b:"Brendan Costello",p:5.99,d:"2026-05-25"},{o:"7A9B8",b:"Phil Maddaleno",p:2.27,d:"2026-05-27"},
-  {o:"9F03D",b:"Chris Wrightson",p:16.99,d:"2026-05-29"},{o:"857DD",b:"Bryan Jimenez",p:6.5,d:"2026-05-29"},
-  {o:"D9FF4",b:"Garry Breech",p:4.39,d:"2026-05-31"},{o:"4903A",b:"Erik Tweedy",p:18.95,d:"2026-06-02"},
-  {o:"350A6",b:"Nate Dreslinski",p:7.69,d:"2026-06-02"},{o:"F1403",b:"Luis Borjas",p:5.19,d:"2026-06-04"},
-  {o:"6D7EB",b:"Pedro Serrano",p:51.49,d:"2026-06-07"},{o:"4FC22",b:"Caleb Kim",p:7.99,d:"2026-05-10"},
-  {o:"C8521",b:"Mario Castaneda",p:8.49,d:"2026-05-10"},{o:"8C58B",b:"Patrick Commins",p:11.99,d:"2026-05-13"},
-  {o:"B221B",b:"Chinthan Muthuraj",p:24.49,d:"2026-05-14"},{o:"76FC9",b:"Gabriel Angcao",p:26.49,d:"2026-05-25"},
-  {o:"0F1B6",b:"Mark Gano",p:35.99,d:"2026-06-03"},
+  {o:"3998E",p:3.47,d:"2026-06-09"},{o:"ABDBA",p:5.31,d:"2026-05-13"},
+  {o:"EC37D",p:5.31,d:"2026-05-13"},{o:"9CC9F",p:14.99,d:"2026-05-14"},
+  {o:"41773",p:5.81,d:"2026-05-14"},{o:"FD19C",p:2.81,d:"2026-05-14"},
+  {o:"CBC1D",p:6.99,d:"2026-05-14"},{o:"12B9A",p:27.99,d:"2026-05-15"},
+  {o:"D2CFF",p:6.49,d:"2026-05-15"},{o:"6023F",p:3.31,d:"2026-05-15"},
+  {o:"6F9F3",p:4.06,d:"2026-05-15"},{o:"50E40",p:4.81,d:"2026-05-18"},
+  {o:"EC9EC",p:4.81,d:"2026-05-18"},{o:"8A5E2",p:3.06,d:"2026-05-20"},
+  {o:"54848",p:11.49,d:"2026-05-20"},{o:"B401E",p:25.99,d:"2026-05-22"},
+  {o:"DD691",p:5.99,d:"2026-05-25"},{o:"7A9B8",p:2.27,d:"2026-05-27"},
+  {o:"9F03D",p:16.99,d:"2026-05-29"},{o:"857DD",p:6.5,d:"2026-05-29"},
+  {o:"D9FF4",p:4.39,d:"2026-05-31"},{o:"4903A",p:18.95,d:"2026-06-02"},
+  {o:"350A6",p:7.69,d:"2026-06-02"},{o:"F1403",p:5.19,d:"2026-06-04"},
+  {o:"6D7EB",p:51.49,d:"2026-06-07"},{o:"4FC22",p:7.99,d:"2026-05-10"},
+  {o:"C8521",p:8.49,d:"2026-05-10"},{o:"8C58B",p:11.99,d:"2026-05-13"},
+  {o:"B221B",p:24.49,d:"2026-05-14"},{o:"76FC9",p:26.49,d:"2026-05-25"},
+  {o:"0F1B6",p:35.99,d:"2026-06-03"},
 ];
-const tcgpSales = () => TCGP_ORDERS.map((x) => ({ id: uid(), item: `TCGP ${x.o} · ${x.b.split(" ")[0]}`, cards: [], channel: "TCGplayer", price: x.p, fees: 0, shipping: 0, consign: 0, date: x.d, seed: true }));
+const tcgpSales = () => TCGP_ORDERS.map((x) => ({ id: uid(), item: `TCGP ${x.o}`, cards: [], channel: "TCGplayer", price: x.p, fees: 0, shipping: 0, consign: 0, date: x.d, seed: true }));
 
 const SEED_BUYS = [
   { item: "PokeBank", source: "PokeBank", category: "Lot", cost: 169.72, date: "2026-04-20" },
@@ -953,7 +987,7 @@ const SEED_BUYS = [
   { item: "Gamecraft", source: "Gamecraft", category: "Sealed", cost: 17.2, date: "2026-06-07" },
 ];
 
-function seed() {
+export function seed() {
   const sale = (name, channel, price, date) => ({ id: uid(), item: "", cards: name ? [{ id: uid(), name, basis: 0 }] : [], channel, price, fees: 0, shipping: 0, consign: 0, date, seed: true });
   return {
     version: 6, rips: [], inventory: [],
@@ -975,9 +1009,17 @@ function seed() {
    that syncs. Defaults first, so a ledger from before a setting existed reads
    the default and a stored value wins. */
 const SETTINGS_DEFAULTS = { binderShowSold: true };
-function migrate(s) {
+/* `seedBuys` is false when the ledger came from a backup file. See the v6
+   branch below: an in-place upgrade wants the starter buys back, a restore
+   never does. */
+export function migrate(s, { seedBuys = true } = {}) {
   s = { ...s };
-  if (!s.inventory) s.inventory = [];
+  /* Guard all four collections, not just inventory. The v2 branch below reads
+     s.sales directly, and a ledger with no `version` always takes that branch —
+     so a partial ledger threw on load and the app never rendered. Restoring a
+     backup makes that reachable from a file the user picked, and a crash there
+     would look like the backup destroyed the ledger. */
+  for (const k of ["inventory", "buys", "sales", "rips"]) if (!Array.isArray(s[k])) s[k] = [];
   s.settings = { ...SETTINGS_DEFAULTS, ...(s.settings || {}) };
   // defaults first so existing values win — this runs on every local and
   // remote load, which is what back-fills `variant` onto pre-scanner cards
@@ -1006,16 +1048,31 @@ function migrate(s) {
   });
   const buySig = (b) => `${b.source}|${(Number(b.cost) || 0).toFixed(2)}|${b.date}`;
   if (!s.version || s.version < 6) {
-    const LEGACY = ["Booster / sealed haul", "Singles & lots", "Singles haul", "Sealed / singles", "TikTok Shop order", "GameStop pickup", "PSA grading"];
-    const seedSigs = new Set(SEED_BUYS.map(buySig));
-    const oldSig = {};
-    (s.buys || []).forEach((b) => { oldSig[b.id] = buySig(b); });
-    s.buys = (s.buys || []).filter((b) => !b.seed && !LEGACY.includes(b.item) && !seedSigs.has(buySig(b)));
-    const fresh = SEED_BUYS.map((b) => ({ id: uid(), ...b, seed: true }));
-    s.buys = [...s.buys, ...fresh];
-    const newBySig = {};
-    fresh.forEach((b) => { newBySig[buySig(b)] = b.id; });
-    s.rips = (s.rips || []).map((r) => (r.buyId && oldSig[r.buyId] && newBySig[oldSig[r.buyId]] ? { ...r, buyId: newBySig[oldSig[r.buyId]] } : r));
+    /* This whole branch swaps one generation of starter buys for the next, and
+       it only makes sense when upgrading a ledger in place.
+
+       A restored backup must skip ALL of it, not just the append. The filter
+       drops every buy flagged `seed`, every buy whose item is in LEGACY, and
+       every buy whose source|cost|date matches a SEED_BUYS row — and a real
+       buy can match that signature. Restoring then deleted the user's own row
+       and left any rip that referenced it pointing at a buy that no longer
+       exists, so ripCostOf read 0 and every pull's basis collapsed with it.
+
+       The version is still stamped, because the v7 and v8 tests below read
+       `s.version < 7` — and `undefined < 7` is false, so leaving it unset would
+       silently skip every later migration too. */
+    if (seedBuys) {
+      const LEGACY = ["Booster / sealed haul", "Singles & lots", "Singles haul", "Sealed / singles", "TikTok Shop order", "GameStop pickup", "PSA grading"];
+      const seedSigs = new Set(SEED_BUYS.map(buySig));
+      const oldSig = {};
+      (s.buys || []).forEach((b) => { oldSig[b.id] = buySig(b); });
+      s.buys = (s.buys || []).filter((b) => !b.seed && !LEGACY.includes(b.item) && !seedSigs.has(buySig(b)));
+      const fresh = SEED_BUYS.map((b) => ({ id: uid(), ...b, seed: true }));
+      s.buys = [...s.buys, ...fresh];
+      const newBySig = {};
+      fresh.forEach((b) => { newBySig[buySig(b)] = b.id; });
+      s.rips = (s.rips || []).map((r) => (r.buyId && oldSig[r.buyId] && newBySig[oldSig[r.buyId]] ? { ...r, buyId: newBySig[oldSig[r.buyId]] } : r));
+    }
     s.version = 6;
   }
   /* v7: cards from Japanese-only products were logged as English (the
@@ -1697,6 +1754,9 @@ export default function App() {
     } else setTab(k);
   }, []);
   const [sync, setSync] = useState(() => (syncToken() ? "checking" : "off"));
+  // size of the ledger as it was last saved — drives the headroom warning and
+  // the "too big" message in the sync panel
+  const [ledgerBytes, setLedgerBytes] = useState(0);
   const saving = useRef(false);
   const pushTimer = useRef(null);
   const pendingPush = useRef(null);
@@ -1718,6 +1778,13 @@ export default function App() {
     // Do not abort a keepalive push. The browser sends it after the page closes.
     // Every other push uses the timeout. A stalled push then returns to the
     // queue, and the app sends it again.
+    /* Measure before sending. An oversized ledger can only ever be rejected, so
+       retrying it forever is worse than stopping: it hides the real problem
+       behind a generic error and leaves this device holding the only copy.
+       Drop the push and name the fault. The next edit queues a fresh push, so
+       trimming the ledger recovers sync on its own. */
+    const bytes = byteLen(p.data);
+    if (bytes > LEDGER_MAX_BYTES) { setSync("toobig"); return; }
     const ctl = new AbortController();
     const t = keepalive ? null : setTimeout(() => ctl.abort(), SYNC_TIMEOUT);
     try {
@@ -1732,8 +1799,12 @@ export default function App() {
       if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; }
       setSync("on");
     } catch (e) {
+      /* 413 is the server's own size refusal. It can only mean the same body
+         will be refused again, so this one does NOT go back on the queue —
+         re-queueing an impossible push is what hid the fault before. */
+      if (e.status === 413) { setSync("toobig"); return; }
       if (!pendingPush.current) pendingPush.current = p; // keep it queued — retried on next edit or focus change
-      setSync(e.status === 401 ? "badtoken" : "error");
+      setSync(syncErrState(e));
     } finally { clearTimeout(t); }
   }, [adoptRemote]);
 
@@ -1783,7 +1854,7 @@ export default function App() {
       }
       setSync("on");
     } catch (e) {
-      setSync(e.status === 401 ? "badtoken" : "error");
+      setSync(syncErrState(e));
     }
   })(); }, [adoptRemote]);
 
@@ -1792,15 +1863,23 @@ export default function App() {
     if (remoteApply.current) {
       // cloud-sourced state: cache it locally but never push it back
       remoteApply.current = false;
-      storage.set(KEY, JSON.stringify(state)).catch(() => {});
+      const remoteJson = JSON.stringify(state);
+      // the gauge follows an adopted cloud ledger too — otherwise a ledger
+      // that arrived over the cap showed no warning until the next local edit
+      setLedgerBytes(byteLen(remoteJson));
+      storage.set(KEY, remoteJson).catch(() => {});
       return;
     }
     saving.current = true;
     const ts = Math.max(Date.now(), localStamp() + 1); // monotonic across device clock skew
     setLocalStamp(ts);
-    storage.set(KEY, JSON.stringify(state)).catch(() => {}).finally(() => { saving.current = false; });
+    // one stringify: the local save, the size gauge and the push all want the
+    // same bytes, and this runs on every keystroke that reaches the ledger
+    const json = JSON.stringify(state);
+    setLedgerBytes(byteLen(json));
+    storage.set(KEY, json).catch(() => {}).finally(() => { saving.current = false; });
     if (!syncToken() || choosing.current) return;
-    pendingPush.current = { ts, data: JSON.stringify(state) };
+    pendingPush.current = { ts, data: json };
     clearTimeout(pushTimer.current);
     pushTimer.current = setTimeout(() => flushPush(), 1200);
   }, [state, flushPush]);
@@ -1829,7 +1908,7 @@ export default function App() {
       if (remote) adoptRemote(remote);
       else if (state) { const ts = Math.max(Date.now(), localStamp() + 1); setLocalStamp(ts); await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(state) }); }
       setSync("on");
-    } catch (e) { setSync(e.status === 401 ? "badtoken" : "error"); }
+    } catch (e) { setSync(syncErrState(e)); }
   }, [state, adoptRemote]);
   const resolveChoice = useCallback(async (useCloud) => {
     const remote = pendingRemote.current;
@@ -1841,12 +1920,17 @@ export default function App() {
       else if (state) { const ts = Math.max(Date.now(), localStamp() + 1); setLocalStamp(ts); await syncFetch("PUT", { updatedAt: ts, data: JSON.stringify(state) }); }
       choosing.current = false;
       setSync("on");
-    } catch (e) { choosing.current = false; setSync(e.status === 401 ? "badtoken" : "error"); }
+    } catch (e) { choosing.current = false; setSync(syncErrState(e)); }
   }, [state, adoptRemote]);
   const disconnectSync = useCallback(() => { setSyncTokenLS(""); choosing.current = false; pendingRemote.current = null; setSync("off"); }, []);
 
   const patch = useCallback((fn) => setState((s) => ({ ...s, ...fn(s) })), []);
   const reset = useCallback(() => { const fresh = seed(); storage.set(KEY, JSON.stringify(fresh)).catch(() => {}); setState(fresh); }, []);
+  /* A restored ledger goes through migrate() like any other load, so a backup
+     taken several versions ago still opens. It is a local edit, not a cloud
+     one — so it stamps, saves and pushes through the normal effect, and the
+     cloud copy follows this device. */
+  const restore = useCallback((ledger) => { setState(migrate(ledger, { seedBuys: false })); }, []);
   if (!state) return <div className="cl-root"><Fonts /><div className="cl-center">Loading your ledger…</div></div>;
 
   // `__BB_SCAN__` is baked in at build time (vite.config.js): the Scan tab is a
@@ -1872,7 +1956,7 @@ export default function App() {
       </nav>
       <RateLimitBanner />
       <main className="cl-main cl-tabpane" key={tab}>
-        {tab === "dash" && <Dashboard state={state} patch={patch} go={switchTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} resolveChoice={resolveChoice} />}
+        {tab === "dash" && <Dashboard state={state} patch={patch} go={switchTab} reset={reset} sync={sync} connectSync={connectSync} disconnectSync={disconnectSync} resolveChoice={resolveChoice} ledgerBytes={ledgerBytes} restore={restore} />}
         {tab === "month" && <Monthly state={state} />}
         {tab === "rips" && <Rips state={state} patch={patch} />}
         {tab === "buys" && <Buys state={state} patch={patch} />}
@@ -1886,10 +1970,65 @@ export default function App() {
 }
 
 /* ================================================================== */
-function Dashboard({ state, patch, go, reset, sync, connectSync, disconnectSync, resolveChoice }) {
+/* Ledger backup — the only copy of this data that leaves the device on the
+   user's terms. Cloud sync is a mirror, not an archive: it holds exactly one
+   ledger, last write wins, and it stops entirely once the ledger outgrows the
+   DynamoDB item (see LEDGER_MAX_BYTES). Without this, a device wiped between
+   pushes takes the ledger with it.
+
+   The file wraps the ledger rather than dumping it bare, so a restore can tell
+   a BinderBooks backup from any other JSON before it overwrites anything. */
+export const BACKUP_KIND = "binderbooks-backup";
+export const backupName = () => `BinderBooks-backup-${today()}.json`;
+export const makeBackup = (state) => JSON.stringify({ kind: BACKUP_KIND, v: 1, exportedAt: new Date().toISOString(), ledger: state }, null, 2);
+/* Accepts our own wrapper, and also a bare ledger — a backup someone unwrapped
+   by hand is still their data, and refusing it helps nobody. Returns
+   { ledger } or { error }; never throws, because the caller is a file picker. */
+export const readBackup = (text) => {
+  let j;
+  try { j = JSON.parse(text); } catch { return { error: "That file isn't JSON." }; }
+  const led = j && j.kind === BACKUP_KIND ? j.ledger : j;
+  if (!led || typeof led !== "object") return { error: "That file isn't a BinderBooks backup." };
+  const looksLikeLedger = ["buys", "sales", "rips", "inventory"].some((k) => Array.isArray(led[k]));
+  if (!looksLikeLedger) return { error: "That file has no buys, sales, rips or cards in it." };
+  return { ledger: led };
+};
+/* "27 buys, 6 cards" — the sentence a destructive confirm is built from, so it
+   counts properly rather than saying "1 buys". */
+const COUNT_NOUNS = { buys: ["buy", "buys"], sales: ["sale", "sales"], rips: ["rip", "rips"], inventory: ["card", "cards"] };
+export const backupCounts = (led) => Object.entries(COUNT_NOUNS)
+  .map(([k, [one, many]]) => [Array.isArray(led?.[k]) ? led[k].length : 0, one, many])
+  .filter(([n]) => n > 0)
+  .map(([n, one, many]) => `${n} ${n === 1 ? one : many}`)
+  .join(", ") || "nothing";
+
+function Dashboard({ state, patch, go, reset, sync, connectSync, disconnectSync, resolveChoice, ledgerBytes, restore }) {
   const settings = { ...SETTINGS_DEFAULTS, ...(state.settings || {}) };
   const setSetting = (k, v) => patch((s) => ({ settings: { ...SETTINGS_DEFAULTS, ...(s.settings || {}), [k]: v } }));
   const [confirmReset, setConfirmReset] = useState(false);
+  const [backupMsg, setBackupMsg] = useState("");
+  const restoreRef = useRef(null);
+  const doBackup = useCallback(() => {
+    downloadFile(backupName(), makeBackup(state), "application/json");
+    setBackupMsg(`Backed up ${backupCounts(state)}.`);
+  }, [state]);
+  const onRestoreFile = (e) => {
+    const file = e.target.files?.[0];
+    if (restoreRef.current) restoreRef.current.value = ""; // let the same file be picked again
+    if (!file) return;
+    const rd = new FileReader();
+    rd.onerror = () => setBackupMsg("Couldn't read that file.");
+    rd.onload = () => {
+      const { ledger, error } = readBackup(String(rd.result || ""));
+      if (error) { setBackupMsg(error); return; }
+      // Restoring replaces everything, including anything entered since the
+      // backup was taken. Say what is arriving and what it displaces.
+      if (!window.confirm(`Restore ${backupCounts(ledger)}?\n\nThis replaces everything on this device (${backupCounts(state)}) and, if sync is on, the cloud copy too.`)) return;
+      restore(ledger);
+      setBackupMsg(`Restored ${backupCounts(ledger)}.`);
+    };
+    rd.readAsText(file);
+  };
   // both languages: ripSetSplit and saleSetSplit look for a set name inside
   // free text, and a Japanese box has to be findable there as well
   const sets = useAllSetNames();
@@ -1965,11 +2104,26 @@ function Dashboard({ state, patch, go, reset, sync, connectSync, disconnectSync,
           <input type="checkbox" className="cl-switch" checked={settings.binderShowSold} onChange={(e) => setSetting("binderShowSold", e.target.checked)} />
         </label>
       </Panel>
-      <Panel title="Cloud sync"><SyncPanel sync={sync} connect={connectSync} disconnect={disconnectSync} choose={resolveChoice} /></Panel>
+      <Panel title="Cloud sync"><SyncPanel sync={sync} connect={connectSync} disconnect={disconnectSync} choose={resolveChoice} bytes={ledgerBytes} onBackup={doBackup} /></Panel>
+      {/* Cloud sync mirrors one ledger; it does not archive. A file you hold is
+          the only thing that survives a wipe, a bad restore, or the size cap. */}
+      <Panel title="Backup">
+        <button className="cl-import-btn" onClick={doBackup}><Download size={14} /> Download a backup</button>
+        <input ref={restoreRef} type="file" accept="application/json,.json" hidden onChange={onRestoreFile} />
+        <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => restoreRef.current?.click()}><Upload size={14} /> Restore from a backup</button>
+        {backupMsg && <div className="cl-import-msg">{backupMsg}</div>}
+      </Panel>
       <div className="cl-reset">
         {!confirmReset
           ? <button className="cl-reset-btn" onClick={() => setConfirmReset(true)}>Reset all data</button>
-          : <div className="cl-reset-confirm cl-tabpane"><span>Wipes everything and reloads the starter data.</span><div className="cl-reset-actions"><button className="cl-cancel" onClick={() => setConfirmReset(false)}>Cancel</button><button className="cl-reset-go" onClick={() => { reset(); setConfirmReset(false); }}>Reset</button></div></div>}
+          : <div className="cl-reset-confirm cl-tabpane">
+              <span>Wipes everything and reloads the starter data. Download a backup first — this cannot be undone.</span>
+              <div className="cl-reset-actions">
+                <button className="cl-cancel" onClick={() => setConfirmReset(false)}>Cancel</button>
+                <button className="cl-cancel" onClick={doBackup}>Back up first</button>
+                <button className="cl-reset-go" onClick={() => { reset(); setConfirmReset(false); }}>Reset</button>
+              </div>
+            </div>}
       </div>
     </div>
   );
@@ -2062,25 +2216,65 @@ function Monthly({ state }) {
   );
 }
 
-function SyncPanel({ sync, connect, disconnect, choose }) {
+function SyncPanel({ sync, connect, disconnect, choose, bytes = 0, onBackup }) {
   const [tok, setTok] = useState("");
   const [copied, setCopied] = useState(false);
+  const kb = (n) => `${Math.round(n / 1024)} KB`;
+  const pct = Math.round((bytes / LEDGER_MAX_BYTES) * 100);
+  /* Lead the warning with the percentage and the headroom left, not with two
+     KB figures: near the cap they round to the same number ("342 KB of the
+     342 KB limit"), which reads as though sync had already stopped. */
+  const headroom = Math.max(0, LEDGER_MAX_BYTES - bytes);
   const shareLink = async () => {
     const link = `${location.origin}${location.pathname}#sync=${syncToken()}`;
     if (navigator.share) { try { await navigator.share({ title: "BinderBooks", url: link }); } catch {} }
     else { try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {} }
   };
-  const label = {
-    off: "Not connected — paste your sync token to back up this ledger",
-    checking: "Connecting…",
-    on: "Synced — changes back up to your AWS account",
-    error: "Sync hiccup — working locally, will retry on your next change",
-    badtoken: "Token rejected — paste it again",
-    choose: "The cloud has a ledger and so does this device — pick which one wins",
-  }[sync];
+  /* Over the cap is a FACT about the ledger, not a transient request status.
+     Derive it from the measured size, and only fall back to the `sync` status
+     for a server 413 the client's own measure somehow missed. A status alone
+     was wrong: a push refused for size clears pendingPush, so the next focus
+     change took the plain GET path and set the status back to "on" — the
+     warning vanished and the app claimed it was synced while nothing had been
+     pushed. */
+  const over = bytes > LEDGER_MAX_BYTES || sync === "toobig";
+  /* A device with no token is not connected, and that is the more useful thing
+     to say — connecting is still the next step, and the size band below says
+     the rest. The label only becomes the size fault once a token exists and
+     the push is what is failing. */
+  const overBlocksSync = over && sync !== "off" && sync !== "badtoken";
+  const label = overBlocksSync
+    ? `Too big to back up — the ledger is ${kb(bytes)} and the limit is ${kb(LEDGER_MAX_BYTES)}`
+    : {
+        off: "Not connected — paste your sync token to back up this ledger",
+        checking: "Connecting…",
+        on: "Synced — changes back up to your AWS account",
+        error: "Sync hiccup — working locally, will retry on your next change",
+        badtoken: "Token rejected — paste it again",
+        choose: "The cloud has a ledger and so does this device — pick which one wins",
+      }[sync];
   return (
     <div className="cl-sync">
-      <div className="cl-sync-status"><span className={"cl-sync-dot " + sync} />{label}</div>
+      <div className="cl-sync-status"><span className={"cl-sync-dot " + (overBlocksSync ? "toobig" : sync)} />{label}</div>
+      {/* An oversized ledger stops syncing, so this device holds the only copy.
+          Say that plainly, and put the backup button right next to it. */}
+      {over && (
+        <div className="cl-sync-warn">
+          <div>
+            {overBlocksSync
+              ? "Cloud sync has stopped. This device now holds the only copy of your ledger."
+              : "This ledger is over the cloud-sync limit, so connecting will not back it up yet."}
+            {" "}Download a backup now, then delete some sold cards to get back under the limit.
+          </div>
+          {onBackup && <button className="cl-sync-connect" style={{ marginTop: 8 }} onClick={onBackup}>Download a backup</button>}
+        </div>
+      )}
+      {!over && bytes > LEDGER_WARN_BYTES && (
+        <div className="cl-sync-warn">
+          Ledger is at {pct}% of the cloud-sync limit, with about {kb(headroom)} left.
+          {" "}Past the limit it stops backing up. Delete some sold cards, and keep a downloaded backup.
+        </div>
+      )}
       {(sync === "off" || sync === "badtoken") && (
         <div className="cl-sync-join">
           <input className="cl-in" type="password" placeholder="Sync token" value={tok} onChange={(e) => setTok(e.target.value)} />
@@ -2093,8 +2287,12 @@ function SyncPanel({ sync, connect, disconnect, choose }) {
           <button className="cl-sync-connect" onClick={() => choose(false)}>Upload this device's copy — replace cloud</button>
         </div>
       )}
-      {sync === "on" && <button className="cl-link cl-sync-off" onClick={shareLink}>{copied ? "Link copied!" : "Send setup link to another device"}</button>}
-      {(sync === "on" || sync === "error") && <button className="cl-link cl-sync-off" onClick={disconnect}>Disconnect this device</button>}
+      {/* No setup link while the ledger is over the cap: the new device would
+          pull the last copy that fit, which is not what this device holds. */}
+      {sync === "on" && !over && <button className="cl-link cl-sync-off" onClick={shareLink}>{copied ? "Link copied!" : "Send setup link to another device"}</button>}
+      {/* overBlocksSync, not over: a device with no token has nothing to
+          disconnect, and offering it there is a dead control. */}
+      {(sync === "on" || sync === "error" || overBlocksSync) && <button className="cl-link cl-sync-off" onClick={disconnect}>Disconnect this device</button>}
     </div>
   );
 }
@@ -3181,12 +3379,12 @@ const tcgpAge = (t) => {
 // file is written, and nothing reports an error — so the export button silently
 // does nothing. The shell takes {name, text} and puts the file through the
 // system share sheet instead, which reaches Files, Mail and AirDrop.
-const downloadFile = (name, text) => {
+const downloadFile = (name, text, mime = "text/csv") => {
   if (window.__BINDERBOOKS_NATIVE__) {
     window.webkit?.messageHandlers?.saveFile?.postMessage({ name, text });
     return;
   }
-  const url = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
   const a = document.createElement("a");
   a.href = url; a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
@@ -3953,7 +4151,7 @@ function Inventory({ state, patch }) {
    submission also lands in Buys as one Grading entry, because "Spent" and "Net on
    cards" count buys, not card fields. The money is typed once and counted once:
    the buy carries the cash, and each card carries its share. */
-const splitEvenly = (total, n) => {
+export const splitEvenly = (total, n) => {
   // split in cents, so the shares always add back to the total exactly — a naive
   // divide leaves a stray cent that makes the basis disagree with the buy
   const cents = Math.round((Number(total) || 0) * 100);
@@ -5577,8 +5775,12 @@ function Fonts() {
     .cl-sync-status{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--mut);}
     .cl-sync-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--mut);}
     .cl-sync-dot.on{background:var(--pos);box-shadow:0 0 8px rgba(63,214,140,.55);}
-    .cl-sync-dot.error,.cl-sync-dot.badtoken{background:var(--neg);}
+    .cl-sync-dot.error,.cl-sync-dot.badtoken,.cl-sync-dot.toobig{background:var(--neg);}
     .cl-sync-dot.checking{background:var(--out);}
+    /* the ledger is at or near the sync ceiling — this is the one sync message
+       that means data is at risk, so it gets a panel, not a grey line */
+    .cl-sync-warn{margin-top:9px;padding:9px 11px;border-radius:9px;font-size:12.5px;line-height:1.45;
+      background:rgba(232,90,106,.10);border:1px solid rgba(232,90,106,.34);color:var(--ink);}
     .cl-sync-join{display:flex;gap:6px;}
     .cl-sync-join .cl-in{flex:1;}
     .cl-sync-connect{background:#222a36;border:1px solid var(--line);color:var(--ink);border-radius:9px;padding:0 16px;cursor:pointer;font-family:'Inter';font-size:13px;flex:none;}
