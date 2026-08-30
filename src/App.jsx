@@ -1180,13 +1180,17 @@ function updHitInState(s, ripId, hit) {
   // an edited value moves every hit's share of the cost, not just this one's
   return { rips, inventory: syncRipBasis({ ...s, rips, inventory }) };
 }
-/* Attaches inventory cards that already exist — added straight to the Binder
-   before their rip was ever logged — onto a rip after the fact. Each becomes
-   a hit sized at the value the card already carries, and the card's own row
-   switches to costAuto, so the rip's cost splits across it exactly like a
-   hit logged the normal way. A card already tied to a hit, or Sold, is left
-   alone rather than restated. This is what makes catching up on unlogged
-   rips a bulk pick instead of re-searching every card by hand. */
+/* Attaches inventory cards to a rip after the fact. This covers a card
+   added straight to the Binder before its rip was logged.
+   A card with no cost gets costAuto. The rip then splits its cost across
+   that card by value, the same as a normal hit.
+   A card with a real cost keeps that cost. The function does not split
+   cost across it — the number already states what that one card cost, the
+   normal case for a lot of singles bought off Whatnot.
+   The function sets each attached card's source to "Rip pull". This marks
+   the card as already paid for in a buy.
+   The function skips a card that already has a hit, or a Sold card, so a
+   user can attach many unlogged cards in one action. */
 function attachHitsToState(s, ripId, invIds) {
   const ids = new Set(invIds);
   const rip = s.rips.find((r) => r.id === ripId);
@@ -1196,11 +1200,38 @@ function attachHitsToState(s, ripId, invIds) {
     if (!ids.has(c.id) || c.hitId || c.status === "Sold") return c;
     const h = { id: uid(), name: c.name, set: c.set || "", number: c.number || "", variant: c.variant || "", tcgplayerId: c.tcgplayerId || "", productId: c.productId || "", lang: cardLang(c), grade: c.grade || "Raw", value: Number(c.value) || 0 };
     newHits.push(h);
-    return { ...c, hitId: h.id, costAuto: true, source: "Rip pull" };
+    return { ...c, hitId: h.id, costAuto: !(Number(c.cost) > 0), source: "Rip pull" };
   });
   if (!newHits.length) return s;
   const rips = s.rips.map((r) => (r.id === ripId ? { ...r, hits: [...(r.hits || []), ...newHits] } : r));
   return { rips, inventory: syncRipBasis({ ...s, rips, inventory }) };
+}
+
+/* Links a batch of already-priced Binder cards to the buy they came from.
+   This covers a Whatnot lot of slabs, where each card already carries its
+   own real cost.
+   `buyId` picks a buy already logged. The function reuses its rip, or
+   makes one if the buy has none yet.
+   `newBuy` logs a new buy here instead.
+   Either way, attachHitsToState does the real work and keeps each card's
+   own cost. This function only makes sure a rip and a buy exist first. */
+function attachToBuyInState(s, { ids, buyId, newBuy }) {
+  let buys = s.buys || [], rips = s.rips || [], targetId = buyId;
+  if (!targetId && newBuy) {
+    const buy = { id: uid(), item: newBuy.item, name: "", category: newBuy.category || "Lot", source: newBuy.source, date: newBuy.date, cost: Number(newBuy.cost) || 0 };
+    buys = [buy, ...buys];
+    targetId = buy.id;
+  }
+  const buy = buys.find((b) => b.id === targetId);
+  if (!buy) return s;
+  let rip = rips.find((r) => r.buyId === targetId);
+  if (!rip) {
+    rip = { id: uid(), product: buy.name || buy.item, source: buy.source, date: buy.date, buyId: buy.id, hits: [] };
+    rips = [rip, ...rips];
+  }
+  // attachHitsToState hands back only `rips` and `inventory`. Add `buys`
+  // here, or a new buy never reaches the ledger.
+  return { buys, ...attachHitsToState({ ...s, buys, rips }, rip.id, ids) };
 }
 
 /* the three ways an identified card enters the ledger. Each takes a card in
@@ -3439,6 +3470,7 @@ function Inventory({ state, patch }) {
   const [syncMsg, setSyncMsg] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [gradeOpen, setGradeOpen] = useState(false);
+  const [lotOpen, setLotOpen] = useState(false);
   const add = (c) => { patch((s) => ({ inventory: [{ id: uid(), ...c }, ...(s.inventory || [])] })); setAdding(false); };
   // typing a different basis onto a rip pull is a statement about what it
   // cost — the card is the user's to price from then on, so the rip stops
@@ -3451,6 +3483,12 @@ function Inventory({ state, patch }) {
   // from the card's own edit view instead — for the one-off case of catching
   // a single card up rather than a whole batch.
   const attachToRip = useCallback((invId, ripId) => patch((s) => attachHitsToState(s, ripId, [invId])), [patch]);
+  // Cards sitting in the Binder with no rip of their own yet. A lot buy
+  // picks its cards from this list. The rule matches the Rips screen's own
+  // "attach cards already in your Binder" list: named, not Sold, not
+  // already tied to a hit.
+  const unattached = useMemo(() => inv.filter((c) => c.name && !c.hitId && c.status !== "Sold"), [inv]);
+  const attachToBuy = useCallback((payload) => patch((s) => attachToBuyInState(s, payload)), [patch]);
   const onOpenRow = useCallback((id) => setViewId(id), []);
   // Send a submission: flip the cards, stamp each one's share of the cost, and
   // write the single Grading buy that carries the cash. One patch, so the whole
@@ -4038,6 +4076,8 @@ function Inventory({ state, patch }) {
         </div>}
         {gradable.length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => { setGradeOpen(!gradeOpen); setSyncMsg(""); }}><Sparkles size={14} /> Send cards to grading — log the fee and the postage</button>}
         {gradeOpen && <GradingForm cards={gradable} onSend={sendToGrading} onCancel={() => setGradeOpen(false)} />}
+        {unattached.length > 0 && <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={() => { setLotOpen(!lotOpen); setSyncMsg(""); }}><PackageOpen size={14} /> Add priced cards to a buy ({unattached.length})</button>}
+        {lotOpen && <BuyAttachForm cards={unattached} buys={state.buys} onAttach={(payload) => { attachToBuy(payload); setLotOpen(false); }} onCancel={() => setLotOpen(false)} />}
         <button className="cl-import-btn" style={{ marginTop: 8 }} onClick={toggleTcgp}><Upload size={14} /> Upload to TCGplayer — choose cards for a staged CSV</button>
         <input ref={tcgpFileRef} type="file" accept=".csv" hidden onChange={onTcgpFile} />
         <input ref={catFileRef} type="file" accept=".csv" hidden onChange={onCatalogFile} />
@@ -4199,6 +4239,82 @@ function GradingForm({ cards, onSend, onCancel }) {
     </Form>
   );
 }
+/* Links cards already priced by hand to the buy that paid for them. A lot
+   of graded slabs off Whatnot is the case this exists for.
+   attachHitsToState keeps each card's own cost — this form never touches
+   it. Picking an existing buy keeps its total as logged. The gap between
+   that total and what the selected cards sum to is tax, shipping, or fees.
+   That gap stays on the buy, not on any one card.
+   Logging a new buy here does the same thing in one step. */
+function BuyAttachForm({ cards, buys, onAttach, onCancel }) {
+  const [sel, setSel] = useState(new Set());
+  const openBuys = useMemo(() => (buys || []).filter((b) => !b.ripped).sort(byDateDesc), [buys]);
+  const [buyId, setBuyId] = useState("");
+  const [item, setItem] = useState("");
+  const [source, setSource] = useState("Whatnot");
+  const [category, setCategory] = useState("Lot");
+  const [date, setDate] = useState(today());
+  const [totalOverride, setTotalOverride] = useState("");
+  const tick = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const picked = cards.filter((c) => sel.has(c.id));
+  const ids = picked.map((c) => c.id);
+  const n = ids.length;
+  const sumCost = picked.reduce((a, c) => a + (Number(c.cost) || 0), 0);
+  const chosenBuy = openBuys.find((b) => b.id === buyId);
+  const shownTotal = totalOverride !== "" ? totalOverride : numStr(sumCost);
+  const newTotal = Number(totalOverride !== "" ? totalOverride : sumCost) || 0;
+  const total = chosenBuy ? (Number(chosenBuy.cost) || 0) : newTotal;
+  const extra = Math.round((total - sumCost) * 100) / 100;
+  const label = item.trim() || `${source} lot (${n || "?"} card${n === 1 ? "" : "s"})`;
+  const valid = n > 0 && (chosenBuy || (!!label && total > 0));
+  const save = () => (chosenBuy ? onAttach({ ids, buyId: chosenBuy.id }) : onAttach({ ids, newBuy: { item: label, category, source, date, cost: total } }));
+  return (
+    <Form>
+      <div className="cl-tcgp-pick-head">
+        <span>{n} of {cards.length} selected{n > 0 ? ` · ${fmt(sumCost)} already priced` : ""}</span>
+        <span>
+          <button className="cl-link" onClick={() => setSel(new Set(cards.map((c) => c.id)))}>All</button>
+          <button className="cl-link" onClick={() => setSel(new Set())}>None</button>
+        </span>
+      </div>
+      <div className="cl-stack sm" style={{ maxHeight: 260, overflowY: "auto" }}>
+        {cards.map((c) => <label key={c.id} className="cl-tcgp-pick-row">
+          <input type="checkbox" checked={sel.has(c.id)} onChange={() => tick(c.id)} />
+          <span className="cl-tcgp-pick-name">{c.name}</span>
+          <span className="cl-row-meta">{c.set}{c.number ? ` · ${c.number}` : ""}</span>
+          <span className="cl-money">{fmt(Number(c.cost) || 0)}</span>
+        </label>)}
+      </div>
+      {openBuys.length > 0 && <Field label="Buy">
+        <select className="cl-in" value={buyId} onChange={(e) => setBuyId(e.target.value)}>
+          <option value="">— log a new buy —</option>
+          {openBuys.map((b) => <option key={b.id} value={b.id}>{b.name || b.item} · {b.source} · {fmt(Number(b.cost) || 0)}</option>)}
+        </select>
+      </Field>}
+      {!chosenBuy && <>
+        <Field label="Order name"><input className="cl-in" placeholder={label} value={item} onChange={(e) => setItem(e.target.value)} /></Field>
+        <div className="cl-grid2">
+          <Field label="Bought from"><Select opts={SOURCES} value={source} onChange={setSource} /></Field>
+          <Field label="Category"><Select opts={BUY_CATS} value={category} onChange={setCategory} /></Field>
+        </div>
+        <div className="cl-grid2">
+          <Field label="Total charged"><MoneyInput value={shownTotal} onChange={setTotalOverride} /></Field>
+          <Field label="Date"><input className="cl-in" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+        </div>
+      </>}
+      {n > 0 && <div className="cl-net-preview">
+        <span>{n} card{n === 1 ? "" : "s"} · {fmt(sumCost)} priced individually</span>
+        <span className="cl-money out">{fmt(total)}</span>
+      </div>}
+      {n > 0 && extra !== 0 && <div className="cl-gradeest-note">
+        {extra > 0
+          ? `This buy has ${fmt(extra)} not tied to one card. This covers tax, shipping, or fees. The buy keeps this amount. Each card keeps the price you gave it.`
+          : `This buy totals ${fmt(-extra)} less than the selected cards. Check the total. Check that you did not pick a card twice.`}
+      </div>}
+      <Actions onCancel={onCancel} label={n ? `Attach ${n} card${n === 1 ? "" : "s"}` : "Attach to a buy"} disabled={!valid} onSave={save} />
+    </Form>
+  );
+}
 export function InvForm({ initial, onSave, onCancel, rips, onAttachRip }) {
   const estStr = (e, grader) => Object.fromEntries(GRADER_LADDER[grader].map((g) => [g, numStr(e?.[g])]));
   const [f, setF] = useState(initial
@@ -4328,6 +4444,7 @@ export function InvForm({ initial, onSave, onCancel, rips, onAttachRip }) {
       {f.lang === "jp" && <div className="cl-gradeest-note">Japanese cards are priced from their own eBay solds. “Refresh market prices” leaves them out of the English TCGplayer data, so a JP card can never pick up the price of the English card with the same name and number.</div>}
       <div className="cl-grid2"><Field label="Grade"><Select ref={gradeRef} opts={GRADES} value={f.grade} onChange={(v) => setF({ ...f, grade: v })} /></Field><Field label="Status"><Select opts={INV_STATUS} value={f.status} onChange={(v) => setF({ ...f, status: v })} /></Field></div>
       <Field label="Source"><Select opts={INV_SOURCES} value={f.source} onChange={(v) => setF({ ...f, source: v })} /></Field>
+      {!ownRip && <div className="cl-gradeest-note">Pick where this one card came from. Do not name a bigger order here, such as a Whatnot lot. Attach the card to a buy instead — below, or from the Binder's “Add priced cards to a buy”. That sets this field to “Rip pull” for you and records the order's source on the buy.</div>}
       {initial && (ownRip
         ? <div className="cl-gradeest-note">Part of the “{ownRip.product || "Rip"}” rip — its cost is this card's share of that rip (see Rips to move or remove it).</div>
         : rips?.length > 0 && <Field label="Add to a rip">
