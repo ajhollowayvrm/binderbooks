@@ -3563,7 +3563,7 @@ function Inventory({ state, patch }) {
     setRefreshing(true);
     setSyncMsg(`Checking ${total} card${total === 1 ? "" : "s"}…`);
     const updates = {};
-    let priced = 0, changed = 0, graded = 0, ownComps = 0, wrongCard = 0, gradedNote = "";
+    let priced = 0, changed = 0, graded = 0, ownComps = 0, wrongCard = 0, throttled = 0, gradedNote = "", stopComps = false;
     const waitOut = makeThrottleWaiter();
     const applyPrice = (c, price) => {
       updates[c.id] = { ...(updates[c.id] || {}), value: price };
@@ -3617,7 +3617,7 @@ function Inventory({ state, patch }) {
     // one /graded pull per card serves both jobs below, and the fetch caches for
     // 24h, so a card that needs a slab price and a ladder costs one lookup
     for (const c of compCands) {
-      if (gradedNote) break; // budget gone or route unavailable — the rest would fail the same way
+      if (stopComps) break; // budget gone, no token, or route unavailable — the rest would fail the same way
       let r;
       // this loop had no progress line of its own, which was survivable until a
       // pause could write one — without it the countdown stayed on screen,
@@ -3627,13 +3627,15 @@ function Inventory({ state, patch }) {
         r = await gradedCompsWaiting([c.name, c.set, c.number, cardLang(c), c.productId || ""], waitOut,
           (left) => setSyncMsg(`Rate limited — resuming in ${left}s… (${priced} priced so far)`));
       } catch (e) {
-        // a throttle only reaches here once the run has spent its whole patience,
-        // and "still rate-limited" is all we can honestly say about it — the
-        // budget may be entirely untouched
-        if (isThrottled(e)) gradedNote = " · eBay comps are still rate-limited — run this again in a minute for the rest, it isn't the daily budget";
-        else if (e.status === 429) gradedNote = " · eBay comps budget used up, try the rest tomorrow";
-        else if (e.status === 401) { gradedNote = " · " + NO_TOKEN_MSG; break; }
-        else if (e.status === 501) gradedNote = " · eBay graded comps aren't set up";
+        /* A throttle only reaches here once this run's own wait budget
+           (RUN_WAIT_CAP_MS) is spent on earlier cards. That is not the daily
+           comps budget — the very next card can still succeed — so this
+           skips only this one card and keeps going, instead of giving up
+           on every card still left in the run. */
+        if (isThrottled(e)) { throttled++; continue; }
+        if (e.status === 429) { gradedNote = " · eBay comps budget used up, try the rest tomorrow"; stopComps = true; continue; }
+        if (e.status === 401) { gradedNote = " · " + NO_TOKEN_MSG; stopComps = true; continue; }
+        if (e.status === 501) { gradedNote = " · eBay graded comps aren't set up"; stopComps = true; continue; }
         continue; // 404 / transient: just skip comps for this card
       }
       // comps for a near miss are worse than none — they overwrite a good value
@@ -3664,7 +3666,7 @@ function Inventory({ state, patch }) {
     setRefreshing(false);
     const missed = cands.length - (priced - ownComps);
     setSyncMsg(priced || graded
-      ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${ownComps ? `, ${ownComps} from their own eBay solds` : ""}${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the price database — those price from your imported TCGplayer CSV when it covers them` : ""}${wrongCard ? `; ${wrongCard} skipped — the sold data came back for a different card, check their set and number` : ""}${gradedNote}.`
+      ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${ownComps ? `, ${ownComps} from their own eBay solds` : ""}${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the price database — those price from your imported TCGplayer CSV when it covers them` : ""}${wrongCard ? `; ${wrongCard} skipped — the sold data came back for a different card, check their set and number` : ""}${throttled ? `; ${throttled} hit a per-minute rate limit — run this again for those, it is not the daily budget` : ""}${gradedNote}.`
       : `None of those ${total} card${total === 1 ? "" : "s"} are in the database yet — check back later${gradedNote}.`);
   };
   // Grading-candidate scan: pull eBay graded comps for every held raw card at
