@@ -258,13 +258,16 @@ async function cachePut(id, body) {
 }
 
 const SETS_TTL = 7 * 24 * 3600 * 1000;
+// v2: a brand-new set (Japan-exclusive ones especially) can sit on PPT for a
+// while before TCGplayer lists it, so requiring tcgPlayerNumericId here used
+// to hide sets that PPT already knows about. pptSetData falls back to a
+// name-based card lookup for the ones with no numericId.
 async function pptSets(lang = "en") {
-  const id = `sets:${lang}`;
+  const id = `sets:v2:${lang}`;
   const hit = await cacheGet(id, SETS_TTL);
   if (hit) return hit;
   const data = await pptFetch("sets", { language: pptLang(lang), limit: "500" });
   const list = (data.data || [])
-    .filter((s) => s.tcgPlayerNumericId)
     .map((s) => ({ name: s.name, numericId: s.tcgPlayerNumericId, releaseDate: (s.releaseDate || "").slice(0, 10), cardCount: s.cardCount || 0 }))
     .sort((a, b) => b.releaseDate.localeCompare(a.releaseDate));
   const body = { list };
@@ -317,7 +320,10 @@ async function pptSetData(setName, lang = "en") {
   const raw = [];
   for (let offset = 0; ; ) {
     const page = await pptFetch("cards", {
-      setId: String(group.numericId), fetchAllInSet: "true", language: pptLang(lang),
+      // a set with no TCGplayer listing has no numericId to key off of yet;
+      // fall back to the name lookup cardSearch already relies on
+      ...(group.numericId ? { setId: String(group.numericId) } : { set: foldSet(group.name) }),
+      fetchAllInSet: "true", language: pptLang(lang),
       ...(offset ? { limit: "200", offset: String(offset) } : {}),
     });
     const got = page.data || [];

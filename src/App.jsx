@@ -243,6 +243,7 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 for (const dead of [
   "cardledger:setimages:v1", // art URLs from before the PPT migration; nothing reads this key now
   "cardledger:sets:v1", "cardledger:sets:v2", "cardledger:sets:v3", // v3 held one English list; v4 holds both languages
+  "cardledger:sets:v4", // v4 filtered out any set with no TCGplayer listing yet, hiding brand-new sets
   "cardledger:qcache:v1", "cardledger:qcache:v2",
   "cardledger:matchcache:v1", "cardledger:matchcache:v2", // v2 keyed matches without productId
   "cardledger:invview", // the grid/list toggle; the grid is the only view now
@@ -263,7 +264,7 @@ for (const dead of [
    rather than merging into one array: the dropdowns want every set, and the
    scanner and the set browsers want the one language whose catalogue they
    are about to ask. A flat merged list cannot tell those two apart. */
-const SETS_KEY = "cardledger:sets:v4"; // v4: English and Japanese, kept apart
+const SETS_KEY = "cardledger:sets:v5"; // v5: no longer drops sets without a TCGplayer listing yet
 let setsPromise = null;
 /* The Japanese half is optional on purpose. PPT indexes it far behind the
    English one, and a JP outage must not leave the buy form with no sets at
