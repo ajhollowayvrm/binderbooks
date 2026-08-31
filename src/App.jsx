@@ -249,6 +249,7 @@ for (const dead of [
   "cardledger:setprices:v1",
   "cardledger:setcatalog:v1", // dumps the Lambda may have resolved to the wrong set, cached for 30 days
   "cardledger:graded:v1",
+  "cardledger:trend:v1", // trend moved onto the card itself, refreshed on demand instead of once a day
 ]) { try { localStorage.removeItem(dead); } catch {} }
 
 /* set list for the structured buy form — the Lambda's /sets route (PPT's
@@ -1532,76 +1533,23 @@ function throttledCardMatch(card) {
     cardImgInFlight < CARD_IMG_PARALLEL ? run() : cardImgQueue.push(run);
   });
 }
-/* A card's recent price direction, for the binder tiles: ~30 days of
-   market points slimmed to a dozen, plus the percent change across them.
-   One /history call per held card, throttled and cached a day — the whole
-   binder costs ~2 credits per card per day, and a card that can't resolve
-   just shows no trend rather than an error. */
-const TREND_KEY = "cardledger:trend:v1";
-const TREND_TTL = 24 * 3600 * 1000;
-const trendCacheRead = () => { try { return JSON.parse(localStorage.getItem(TREND_KEY)) || {}; } catch { return {}; } };
-const trendCacheGet = (k) => { const c = trendCacheRead()[k]; return c && Date.now() - c.t < TREND_TTL ? c.r : undefined; };
-const trendCachePut = (k, r) => {
-  try {
-    const all = trendCacheRead();
-    all[k] = { t: Date.now(), r };
-    Object.keys(all).sort((a, b) => all[b].t - all[a].t).slice(120).forEach((x) => delete all[x]);
-    localStorage.setItem(TREND_KEY, JSON.stringify(all));
-  } catch {}
-};
-const trendMiss = new Map(); // session-only: don't re-ask for a card that just failed
-const trendPending = new Map(); // key -> promise, so a re-keyed effect shares the running call
-function fetchCardTrend(card) {
+/* A card's recent price direction, for the binder tiles: ~30 days of market
+   points slimmed to a dozen, plus the percent change across them. This used
+   to auto-pull on every Binder open, a day-old cache or not — one /history
+   call per held card, every day, whether or not that card was ever looked
+   at. Now it rides "Refresh market prices" instead, the same on-demand,
+   persisted-on-the-card path `value` and `gradeEst` already use, so opening
+   the Binder costs the network nothing. `card.trend` is `undefined` until a
+   refresh runs, `null` after a refresh that found nothing to show. */
+async function fetchCardTrend(card) {
   const lang = cardLang(card);
-  const key = `${card.name}|${card.set || ""}|${card.number || ""}|${lang}`.toLowerCase();
-  const hit = trendCacheGet(key);
-  if (hit !== undefined) return Promise.resolve(hit);
-  if (trendMiss.has(key)) return Promise.resolve(null);
-  if (trendPending.has(key)) return trendPending.get(key);
-  const p = fetchCardTrendNow(card, key, lang).finally(() => trendPending.delete(key));
-  trendPending.set(key, p);
-  return p;
-}
-async function fetchCardTrendNow(card, key, lang) {
-  try {
-    const h = await cardFetch("history", { productId: card.productId || "", name: card.productId ? "" : card.name, set: card.productId ? "" : card.set, number: card.productId ? "" : card.number, lang: lang === "jp" ? "jp" : "", days: "30" });
-    const pts = h?.points || [];
-    if (pts.length < 2) { trendMiss.set(key, 1); return null; }
-    const step = Math.max(1, Math.ceil(pts.length / 12));
-    const slim = pts.filter((_, i) => i % step === 0 || i === pts.length - 1).map((p) => p.market);
-    const delta = ((slim[slim.length - 1] - slim[0]) / slim[0]) * 100;
-    const r = { pts: slim.map((v) => Math.round(v * 100) / 100), delta: Math.round(delta * 10) / 10 };
-    trendCachePut(key, r);
-    return r;
-  } catch { trendMiss.set(key, 1); return null; }
-}
-const TREND_PARALLEL = 3;
-let trendInFlight = 0;
-const trendQueue = [];
-function throttledTrend(card) {
-  return new Promise((resolve) => {
-    const run = () => {
-      trendInFlight++;
-      fetchCardTrend(card).then(resolve, () => resolve(null)).finally(() => {
-        trendInFlight--;
-        trendQueue.shift()?.();
-      });
-    };
-    trendInFlight < TREND_PARALLEL ? run() : trendQueue.push(run);
-  });
-}
-function useCardTrends(cards) {
-  const [trends, setTrends] = useState({}); // id -> {pts, delta} | null
-  const cardIds = cards.map((c) => c.id).join("|");
-  useEffect(() => {
-    let live = true;
-    cards.forEach((c) => {
-      if (!c.name) return;
-      throttledTrend(c).then((r) => { if (live && r) setTrends((s) => ({ ...s, [c.id]: r })); });
-    });
-    return () => { live = false; };
-  }, [cardIds]); // eslint-disable-line react-hooks/exhaustive-deps
-  return trends;
+  const h = await cardFetch("history", { productId: card.productId || "", name: card.productId ? "" : card.name, set: card.productId ? "" : card.set, number: card.productId ? "" : card.number, lang: lang === "jp" ? "jp" : "", days: "30" });
+  const pts = h?.points || [];
+  if (pts.length < 2) return null;
+  const step = Math.max(1, Math.ceil(pts.length / 12));
+  const slim = pts.filter((_, i) => i % step === 0 || i === pts.length - 1).map((p) => p.market);
+  const delta = ((slim[slim.length - 1] - slim[0]) / slim[0]) * 100;
+  return { pts: slim.map((v) => Math.round(v * 100) / 100), delta: Math.round(delta * 10) / 10 };
 }
 
 // One hook for every screen that wants card pictures. Cards batch by set
@@ -3558,12 +3506,13 @@ function Inventory({ state, patch }) {
     const hasEst = (c) => estGrades(c).some((g) => Number(c.gradeEst?.[g]) > 0);
     // a slab or a JP card needs no set/number — the comps route can search on a name
     const compCands = held.filter((c) => !tcgPriceable(c) || c.status === "At grading" || hasEst(c));
-    const total = new Set([...cands, ...compCands]).size;
+    const total = new Set([...cands, ...compCands, ...held]).size;
     if (!total) { setSyncMsg("Nothing to refresh — held cards need a set or number to match against the database."); return; }
     setRefreshing(true);
     setSyncMsg(`Checking ${total} card${total === 1 ? "" : "s"}…`);
     const updates = {};
     let priced = 0, changed = 0, graded = 0, ownComps = 0, wrongCard = 0, throttled = 0, gradedNote = "", stopComps = false;
+    let trended = 0, trendThrottled = 0, trendNote = "", stopTrend = false;
     const waitOut = makeThrottleWaiter();
     const applyPrice = (c, price) => {
       updates[c.id] = { ...(updates[c.id] || {}), value: price };
@@ -3662,12 +3611,32 @@ function Inventory({ state, patch }) {
         }
       }
     }
+    /* Price trend for the sparkline draws from the card-data budget (see
+       fetchCardTrend), not the comps budget spent above, so one running out
+       says nothing about the other. It runs last — every card's actual price
+       and grading estimate outrank a trend line — and, like the comps loop,
+       a stray per-minute throttle only skips the one card it hit rather than
+       the whole rest of the run. */
+    for (const c of held) {
+      if (stopTrend) break; // budget gone or no token — the rest would fail the same way
+      setSyncMsg(`Pulling price trends… (${trended} so far)`);
+      try {
+        const r = await fetchCardTrend(c);
+        updates[c.id] = { ...(updates[c.id] || {}), trend: r };
+        trended++;
+      } catch (e) {
+        if (isThrottled(e)) { trendThrottled++; continue; }
+        if (e.status === 429) { trendNote = " · price-trend budget used up, try the rest tomorrow"; stopTrend = true; continue; }
+        if (e.status === 401) { stopTrend = true; continue; } // already surfaced by the passes above
+        continue; // 404 / transient: this one card just keeps no trend
+      }
+    }
     if (Object.keys(updates).length) patch((s) => ({ inventory: (s.inventory || []).map((c) => (updates[c.id] ? { ...c, ...updates[c.id] } : c)) }));
     setRefreshing(false);
     const missed = cands.length - (priced - ownComps);
-    setSyncMsg(priced || graded
-      ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${ownComps ? `, ${ownComps} from their own eBay solds` : ""}${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the price database — those price from your imported TCGplayer CSV when it covers them` : ""}${wrongCard ? `; ${wrongCard} skipped — the sold data came back for a different card, check their set and number` : ""}${throttled ? `; ${throttled} hit a per-minute rate limit — run this again for those, it is not the daily budget` : ""}${gradedNote}.`
-      : `None of those ${total} card${total === 1 ? "" : "s"} are in the database yet — check back later${gradedNote}.`);
+    setSyncMsg(priced || graded || trended
+      ? `Refreshed ${priced} price${priced === 1 ? "" : "s"} (${changed} changed)${ownComps ? `, ${ownComps} from their own eBay solds` : ""}${graded ? `, ${graded} graded comp${graded === 1 ? "" : "s"}` : ""}${trended ? `, ${trended} price trend${trended === 1 ? "" : "s"}` : ""}${missed ? `; ${missed} not in the price database — those price from your imported TCGplayer CSV when it covers them` : ""}${wrongCard ? `; ${wrongCard} skipped — the sold data came back for a different card, check their set and number` : ""}${throttled ? `; ${throttled} hit a per-minute rate limit — run this again for those, it is not the daily budget` : ""}${trendThrottled ? `; ${trendThrottled} trend${trendThrottled === 1 ? "" : "s"} hit a rate limit too — run this again for those` : ""}${gradedNote}${trendNote}.`
+      : `None of those ${total} card${total === 1 ? "" : "s"} are in the database yet — check back later${gradedNote}${trendNote}.`);
   };
   // Grading-candidate scan: pull eBay graded comps for every held raw card at
   // or above a value floor (highest value first, so the budget goes to the
@@ -4020,7 +3989,6 @@ function Inventory({ state, patch }) {
   }, [gridCards, view]);
   const lookupCards = useMemo(() => inv.filter((c) => c.name && fuzzyMatch(qSettled, c.name, c.set, c.number, c.grade, c.status) && passesStatus(c)), [inv, filter, qSettled, showSold]); // eslint-disable-line react-hooks/exhaustive-deps
   const [images, rarities, reseedImages] = useCardImages(lookupCards, true);
-  const trends = useCardTrends(useMemo(() => lookupCards.filter((c) => c.status !== "Sold"), [lookupCards]));
   const viewCard = viewId ? inv.find((c) => c.id === viewId) : null;
   // whole binder, not just the current filter/search — a card hidden behind
   // another pill is still missing its art
@@ -4178,7 +4146,7 @@ function Inventory({ state, patch }) {
               at all — "no separations" means none, not an empty bar */}
           {p.key && <div className="cl-binder-page-head"><span>{p.key}</span><span className="cl-row-meta">{p.cards.length} card{p.cards.length === 1 ? "" : "s"}</span></div>}
           <BinderGrid>
-            {p.cards.map((c) => <BinderCard key={c.id} card={c} img={images[c.id]} rarity={rarities[c.id]} trend={trends[c.id]} onOpen={onOpenRow} />)}
+            {p.cards.map((c) => <BinderCard key={c.id} card={c} img={images[c.id]} rarity={rarities[c.id]} trend={c.trend} onOpen={onOpenRow} />)}
           </BinderGrid>
         </div>
       ))}
