@@ -3160,7 +3160,7 @@ export function SaleForm({ initial, inventory, onSave, onCancel }) {
   const [tname, setTname] = useState("");
   const [tbasis, setTbasis] = useState("");
   const [tmeta, setTmeta] = useState(null); // set/number from a picked search result
-  const addInv = (id) => { const c = kept.find((x) => x.id === id); if (!c) return; setF((s) => ({ ...s, cards: [...s.cards, { id: uid(), invId: c.id, name: c.name, set: c.set, number: c.number, basis: invBasis(c) }] })); };
+  const addInv = (id) => { const c = kept.find((x) => x.id === id); if (!c) return; setF((s) => ({ ...s, cards: [...s.cards, { id: uid(), invId: c.id, name: c.name, set: c.set, number: c.number, grade: c.grade, basis: invBasis(c) }] })); };
   // A sale has no single "this card" to save — it bundles several into one
   // transaction — so a pick here has nothing to jump to but the button that
   // adds this row to that bundle.
@@ -3178,17 +3178,31 @@ export function SaleForm({ initial, inventory, onSave, onCancel }) {
   const basis = f.cards.reduce((a, c) => a + (Number(c.basis) || 0), 0);
   const profit = basis > 0 ? net - basis : null;
   const availInv = kept.filter((c) => !f.cards.some((fc) => fc.invId === c.id));
+  const [invQ, setInvQ] = useState("");
+  const invMatches = invQ.trim() ? availInv.filter((c) => fuzzyMatch(invQ, c.name, c.set, c.number, c.grade)) : availInv;
   return (
     <Form editing={!!initial}>
       <Field label="Cards in this sale">
         <div className="cl-cardchips">
           {f.cards.length === 0 && <span className="cl-cardchips-empty">No cards attached yet</span>}
           {f.cards.map((c) => (
-            <span key={c.id} className="cl-cardchip">{c.invId && <span className="holo-dot" />}{c.name}{c.number ? ` ${c.number}` : ""}{c.basis ? ` · ${fmt(Number(c.basis))}` : ""}<button className="cl-chip-x" onClick={() => rmCard(c.id)}><X size={11} /></button></span>
+            <span key={c.id} className="cl-cardchip">{c.invId && <span className="holo-dot" />}{c.name}{c.number ? ` ${c.number}` : ""}{c.grade && c.grade !== "Raw" && <span className="cl-chip">{c.grade}</span>}{c.basis ? ` · ${fmt(Number(c.basis))}` : ""}<button className="cl-chip-x" onClick={() => rmCard(c.id)}><X size={11} /></button></span>
           ))}
         </div>
       </Field>
-      {availInv.length > 0 && <Field label="Add a card you kept"><select className="cl-in" value="" onChange={(e) => { addInv(e.target.value); }}><option value="">— choose from inventory —</option>{availInv.map((c) => <option key={c.id} value={c.id}>{c.name}{c.number ? " " + c.number : ""} · basis {fmt(invBasis(c))}</option>)}</select></Field>}
+      {availInv.length > 0 && <Field label="Add a card you kept">
+        <input className="cl-in" placeholder="Filter your inventory — name, set, number, grade" value={invQ} onChange={(e) => setInvQ(e.target.value)} />
+        <div className="cl-invpick">
+          {invMatches.length === 0 && <div className="cl-cardchips-empty">No kept card matches “{invQ}”</div>}
+          {invMatches.slice(0, 40).map((c) => (
+            <button key={c.id} type="button" className="cl-invpick-row" onClick={() => { addInv(c.id); setInvQ(""); }}>
+              <span className="cl-invpick-name">{c.name}{c.number ? ` ${c.number}` : ""}</span>
+              {c.grade && c.grade !== "Raw" && <span className="cl-chip">{c.grade}</span>}
+              <span className="cl-invpick-basis">{fmt(invBasis(c))}</span>
+            </button>
+          ))}
+        </div>
+      </Field>}
       {/* The search stands on its own row: it carries a set picker and a
           result list, and squeezing those beside the basis box left no
           room for either. */}
@@ -5848,6 +5862,10 @@ function Fonts() {
     @keyframes spin{to{transform:rotate(360deg);}}
     .cl-cardchips{display:flex;flex-wrap:wrap;gap:6px;}
     .cl-cardchips-empty{font-size:12px;color:var(--mut);}
+    .cl-invpick{display:flex;flex-direction:column;gap:4px;max-height:180px;overflow-y:auto;margin-top:6px;}
+    .cl-invpick-row{display:flex;align-items:center;gap:8px;width:100%;background:#10141b;border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--ink);font-family:'Inter';font-size:12.5px;cursor:pointer;text-align:left;}
+    .cl-invpick-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .cl-invpick-basis{color:var(--mut);white-space:nowrap;}
     .cl-cardchip{display:inline-flex;align-items:center;gap:5px;background:#10141b;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:12px;}
     /* 11x11 was the smallest target in the app, and it deletes work. 44 is out of
        reach without a taller chip, so this takes every pixel the chip has: the
