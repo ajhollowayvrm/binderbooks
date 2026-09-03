@@ -10,7 +10,7 @@ import { fmt, saleNet, saleBasis, SaleForm } from "../App.jsx";
 function SaleRow({ sale: x, inventory, isEditing, onEdit, onDelete, onSave, onCancelEdit }) {
   if (isEditing) return <SaleForm initial={x} inventory={inventory} onSave={onSave} onCancel={onCancelEdit} />;
   const net = saleNet(x);
-  const ded = (Number(x.fees) || 0) + (Number(x.shipping) || 0) + (Number(x.consign) || 0);
+  const ded = (Number(x.fees) || 0) + (Number(x.shipping) || 0) + (Number(x.tax) || 0) + (Number(x.consign) || 0);
   const cards = x.cards || [];
   const title = cards.length ? cards[0].name + (cards.length > 1 ? ` +${cards.length - 1}` : "") : (x.item || "Sale");
   const basis = saleBasis(x);

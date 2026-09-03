@@ -957,7 +957,7 @@ const TCGP_ORDERS = [
   {o:"B221B",p:24.49,d:"2026-05-14"},{o:"76FC9",p:26.49,d:"2026-05-25"},
   {o:"0F1B6",p:35.99,d:"2026-06-03"},
 ];
-const tcgpSales = () => TCGP_ORDERS.map((x) => ({ id: uid(), item: `TCGP ${x.o}`, cards: [], channel: "TCGplayer", price: x.p, fees: 0, shipping: 0, consign: 0, date: x.d, seed: true }));
+const tcgpSales = () => TCGP_ORDERS.map((x) => ({ id: uid(), item: `TCGP ${x.o}`, cards: [], channel: "TCGplayer", price: x.p, fees: 0, shipping: 0, tax: 0, consign: 0, date: x.d, seed: true }));
 
 const SEED_BUYS = [
   { item: "PokeBank", source: "PokeBank", category: "Lot", cost: 169.72, date: "2026-04-20" },
@@ -990,7 +990,7 @@ const SEED_BUYS = [
 ];
 
 export function seed() {
-  const sale = (name, channel, price, date) => ({ id: uid(), item: "", cards: name ? [{ id: uid(), name, basis: 0 }] : [], channel, price, fees: 0, shipping: 0, consign: 0, date, seed: true });
+  const sale = (name, channel, price, date) => ({ id: uid(), item: "", cards: name ? [{ id: uid(), name, basis: 0 }] : [], channel, price, fees: 0, shipping: 0, tax: 0, consign: 0, date, seed: true });
   return {
     version: 6, rips: [], inventory: [],
     buys: SEED_BUYS.map((b) => ({ id: uid(), ...b, seed: true })),
@@ -1323,7 +1323,7 @@ const ripSetSplit = (r, buys, sets) => {
   }
   return out;
 };
-export const saleNet = (s) => (Number(s.price) || 0) - (Number(s.fees) || 0) - (Number(s.shipping) || 0) - (Number(s.consign) || 0);
+export const saleNet = (s) => (Number(s.price) || 0) - (Number(s.fees) || 0) - (Number(s.shipping) || 0) - (Number(s.tax) || 0) - (Number(s.consign) || 0);
 export const saleBasis = (s) => (s.cards || []).reduce((a, c) => a + (Number(c.basis) || 0), 0);
 // Dedup signature for a sale. Orders key off the TCGplayer order suffix (matches whether
 // the ref was imported as "TCGP 5236F" or the full id "62955D06-88B131-5236F"); rows with no
@@ -2045,7 +2045,7 @@ function Dashboard({ state, patch, go, reset, sync, connectSync, disconnectSync,
   state.rips.forEach((r) => Object.entries(ripSetSplit(r, state.buys, sets)).forEach(([k, v]) => { ripBySet[k] = (ripBySet[k] || 0) + v; }));
   const salesBySet = {};
   state.sales.forEach((s) => Object.entries(saleSetSplit(s, state.inventory, sets)).forEach(([k, v]) => { salesBySet[k] = (salesBySet[k] || 0) + v; }));
-  const hasFees = state.sales.some((s) => s.fees || s.shipping || s.consign);
+  const hasFees = state.sales.some((s) => s.fees || s.shipping || s.tax || s.consign);
 
   return (
     <div className="cl-stack">
@@ -3016,7 +3016,7 @@ function Sales({ state, patch }) {
   const mergeDupes = () => {
     const groups = new Map();
     state.sales.forEach((x) => { const k = saleSig(x); const g = groups.get(k); g ? g.push(x) : groups.set(k, [x]); });
-    const score = (x) => (x.cards?.length || 0) * 1000 + ((Number(x.fees) || 0) > 0 ? 40 : 0) + ((Number(x.shipping) || 0) > 0 ? 20 : 0) + Math.min(String(x.item || "").length, 99);
+    const score = (x) => (x.cards?.length || 0) * 1000 + ((Number(x.fees) || 0) > 0 ? 40 : 0) + ((Number(x.shipping) || 0) > 0 ? 20 : 0) + ((Number(x.tax) || 0) > 0 ? 10 : 0) + Math.min(String(x.item || "").length, 99);
     const dropIds = new Set();
     for (const g of groups.values()) {
       if (g.length < 2) continue;
@@ -3043,7 +3043,7 @@ function Sales({ state, patch }) {
         if (!total) continue;
         const title = r["Item Title"] || "";
         const orderNo = r["Order #"] ? String(r["Order #"]).trim() : "";
-        const sale = { id: uid(), item: orderNo, cards: title ? [{ id: uid(), name: title, basis: 0 }] : [], channel: orderNo ? "TCGplayer" : "eBay", price: total, fees: 0, shipping: 0, consign: 0, date: cleanDate(r["Order Date"] || r["Sale Date"] || "") };
+        const sale = { id: uid(), item: orderNo, cards: title ? [{ id: uid(), name: title, basis: 0 }] : [], channel: orderNo ? "TCGplayer" : "eBay", price: total, fees: 0, shipping: 0, tax: 0, consign: 0, date: cleanDate(r["Order Date"] || r["Sale Date"] || "") };
         const sig = saleSig(sale);
         const match = sig ? bySig.get(sig) : null;
         if (match) {
@@ -3098,6 +3098,7 @@ function Sales({ state, patch }) {
       price: Number(order.price) || lineSum,
       fees: Number(order.fees) || 0,
       shipping: Number(order.shipping) || 0,
+      tax: 0,
       consign: 0,
       date: cleanDate(order.date),
     });
@@ -3154,8 +3155,8 @@ function Sales({ state, patch }) {
 export function SaleForm({ initial, inventory, onSave, onCancel }) {
   const kept = (inventory || []).filter((c) => c.status !== "Sold");
   const [f, setF] = useState(initial
-    ? { item: initial.item || "", channel: initial.channel, price: String(initial.price), fees: numStr(initial.fees), shipping: numStr(initial.shipping), consign: numStr(initial.consign), date: initial.date, cards: (initial.cards || []).map((c) => ({ ...c })) }
-    : { item: "", channel: "TCGplayer", price: "", fees: "", shipping: "", consign: "", date: today(), cards: [] });
+    ? { item: initial.item || "", channel: initial.channel, price: String(initial.price), fees: numStr(initial.fees), shipping: numStr(initial.shipping), tax: numStr(initial.tax), consign: numStr(initial.consign), date: initial.date, cards: (initial.cards || []).map((c) => ({ ...c })) }
+    : { item: "", channel: "TCGplayer", price: "", fees: "", shipping: "", tax: "", consign: "", date: today(), cards: [] });
   const [tname, setTname] = useState("");
   const [tbasis, setTbasis] = useState("");
   const [tmeta, setTmeta] = useState(null); // set/number from a picked search result
@@ -3171,7 +3172,9 @@ export function SaleForm({ initial, inventory, onSave, onCancel }) {
   };
   const addTyped = () => { if (!tname) return; setF((s) => ({ ...s, cards: [...s.cards, { id: uid(), name: tname, ...(tmeta || {}), basis: Number(tbasis) || 0 }] })); setTname(""); setTbasis(""); setTmeta(null); };
   const rmCard = (cid) => setF((s) => ({ ...s, cards: s.cards.filter((c) => c.id !== cid) }));
-  const net = (Number(f.price) || 0) - (Number(f.fees) || 0) - (Number(f.shipping) || 0) - (Number(f.consign) || 0);
+  // `saleNet` coerces, so the string-valued form state feeds it directly — one
+  // formula for the preview and the saved row, with no second copy to drift.
+  const net = saleNet(f);
   const basis = f.cards.reduce((a, c) => a + (Number(c.basis) || 0), 0);
   const profit = basis > 0 ? net - basis : null;
   const availInv = kept.filter((c) => !f.cards.some((fc) => fc.invId === c.id));
@@ -3195,10 +3198,11 @@ export function SaleForm({ initial, inventory, onSave, onCancel }) {
         <button ref={addCardRef} className="cl-add-card" onClick={addTyped}><Plus size={15} /> Add card</button>
       </div>
       <div className="cl-grid2"><Field label="Channel"><Select opts={CHANNELS} value={f.channel} onChange={(v) => setF({ ...f, channel: v })} /></Field><Field label="Sale price"><MoneyInput value={f.price} onChange={(v) => setF({ ...f, price: v })} /></Field></div>
-      <div className="cl-grid3"><Field label="Platform fees"><MoneyInput value={f.fees} onChange={(v) => setF({ ...f, fees: v })} /></Field><Field label="Shipping you paid"><MoneyInput value={f.shipping} onChange={(v) => setF({ ...f, shipping: v })} /></Field><Field label="Consignment cut"><MoneyInput value={f.consign} onChange={(v) => setF({ ...f, consign: v })} /></Field></div>
+      <div className="cl-grid2"><Field label="Platform fees"><MoneyInput value={f.fees} onChange={(v) => setF({ ...f, fees: v })} /></Field><Field label="Shipping you paid"><MoneyInput value={f.shipping} onChange={(v) => setF({ ...f, shipping: v })} /></Field></div>
+      <div className="cl-grid2"><Field label="Sales tax"><MoneyInput value={f.tax} onChange={(v) => setF({ ...f, tax: v })} /></Field><Field label="Consignment cut"><MoneyInput value={f.consign} onChange={(v) => setF({ ...f, consign: v })} /></Field></div>
       <div className="cl-grid2"><Field label="Listing / order ref"><input className="cl-in" placeholder="optional" value={f.item} onChange={(e) => setF({ ...f, item: e.target.value })} /></Field><Field label="Date"><input className="cl-in" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field></div>
       <div className="cl-net-preview"><span>Net <span className="cl-money in">{fmt(net)}</span></span>{profit != null && <span>Profit <span className={"cl-money " + (profit >= 0 ? "pos" : "neg")}>{fmt(profit)}</span></span>}</div>
-      <Actions onCancel={onCancel} label={initial ? "Update sale" : "Save sale"} disabled={(f.cards.length === 0 && !f.item) || !f.price} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), item: f.item, cards: f.cards, channel: f.channel, date: f.date, price: Number(f.price) || 0, fees: Number(f.fees) || 0, shipping: Number(f.shipping) || 0, consign: Number(f.consign) || 0 })} />
+      <Actions onCancel={onCancel} label={initial ? "Update sale" : "Save sale"} disabled={(f.cards.length === 0 && !f.item) || !f.price} onSave={() => onSave({ ...(initial ? { id: initial.id } : {}), item: f.item, cards: f.cards, channel: f.channel, date: f.date, price: Number(f.price) || 0, fees: Number(f.fees) || 0, shipping: Number(f.shipping) || 0, tax: Number(f.tax) || 0, consign: Number(f.consign) || 0 })} />
     </Form>
   );
 }
