@@ -72,8 +72,12 @@ describe("ripHitShares", () => {
 });
 
 describe("saleNet", () => {
-  it("subtracts fees, shipping and the consignment cut", () => {
-    expect(saleNet({ price: 100, fees: 13, shipping: 5, consign: 2 })).toBe(80);
+  it("subtracts fees, shipping, sales tax and the consignment cut", () => {
+    expect(saleNet({ price: 100, fees: 13, shipping: 5, tax: 8, consign: 2 })).toBe(72);
+  });
+
+  it("subtracts sales tax on its own", () => {
+    expect(saleNet({ price: 100, tax: 8.25 })).toBe(91.75);
   });
 
   it("treats missing deductions as zero, never NaN", () => {
