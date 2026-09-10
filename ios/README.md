@@ -142,7 +142,19 @@ GRDB only. Gunzip uses the system zlib. Checksums use CryptoKit.
 
 ## Sideloading
 
-A free developer account signs for 7 days and allows 3 sideloaded apps. The old
-BinderBooks install script handled the profile refresh and the team ID lookup. It
-lives in git history at `scripts/ios-device.mjs` (commit `04dff1b`). Port it when
-the first device install happens.
+```sh
+python3 scripts/ios-device.py            # build Release, sign, install, launch
+python3 scripts/ios-device.py --dry-run  # show the plan, change nothing
+```
+
+A free developer account signs for 7 days and allows three sideloaded apps per
+device. The script handles the four things that makes awkward, and its header
+documents each: the team id comes from the certificate's OU field; a cached profile
+with fewer than 6 days left is moved aside so Apple issues a fresh one; the
+three-app limit is explained when an install fails; and the script checks that
+Xcode holds a usable Apple ID credential before it builds.
+
+Xcode can look signed in while it is not. When the script stops with "Xcode has no
+signed-in Apple ID", open Xcode > Settings > Accounts, remove the stale entry, and
+sign in again. xcodebuild cannot answer the two-factor prompt, so this step is
+manual. The signing certificate is not the problem and lasts a year.
