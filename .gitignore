@@ -1,17 +1,17 @@
-node_modules
-dist
-.env
 .DS_Store
-.sync-token
-backups/
+.env
 
-# iOS: both are generated. `npm run ios` rebuilds them from project.yml and the
-# Vite build, so neither belongs in the repo.
-ios/www
-ios/BinderBooks.xcodeproj
-# glob, not `ios/build`: a device build uses its own derived-data path
-# (ios/build-device), and an exact match silently let that whole tree into a commit
+# Output of catalog/build_catalog.py. The release holds the published copy.
+build/
+
+# Python
+__pycache__/
+*.pyc
+
+# Xcode. The project is generated; derived data never belongs in the repo.
 ios/build*
+xcuserdata/
+*.xcuserstate
 
-# Playwright MCP screenshot output — a tool artifact, not project code
+# Playwright MCP screenshot output
 .playwright-mcp
