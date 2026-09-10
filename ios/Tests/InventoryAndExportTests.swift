@@ -3,7 +3,8 @@ import SwiftData
 import Testing
 @testable import BinderBooks
 
-/// A store with one purchase, two lines, three cards, and a committed session.
+/// A store with one purchase, two lines, three cards, a committed session, a
+/// grading submission, and a sale with two lines.
 @MainActor
 private func seed(_ context: ModelContext) throws {
     let purchase = Purchase(date: Date(timeIntervalSinceReferenceDate: 800_000_000.123), vendor: "Whatnot", note: "slab lot", itemCostCents: 5_700)
@@ -57,6 +58,40 @@ private func seed(_ context: ModelContext) throws {
     bulk.scanSession = session
     context.insert(bulk)
 
+    // The sealed line is the pack. There is no rip row.
+    line1.isSealed = true
+    line1.isRipped = true
+    pull.gradedCompCents = ["10": 12_000, "9.5": 5_100]
+
+    let submission = GradingSubmission(graderRaw: "psa", shippedAt: Date(timeIntervalSinceReferenceDate: 800_000_060), gradingFeesCents: 26_897)
+    submission.id = UUID(uuidString: "00000000-0000-0000-0000-000000000009")!
+    submission.sourceRef = "sub1"
+    context.insert(submission)
+
+    let entry = GradingEntry(submission: submission, card: slab)
+    entry.id = UUID(uuidString: "00000000-0000-0000-0000-00000000000a")!
+    entry.grade = 9.5
+    entry.certNumber = "12345678"
+    entry.allocatedFeeCents = 26_897
+    context.insert(entry)
+
+    let sale = Sale(soldAt: Date(timeIntervalSinceReferenceDate: 800_000_070), channelRaw: "tcgplayer", grossCents: 1_515)
+    sale.id = UUID(uuidString: "00000000-0000-0000-0000-00000000000b")!
+    sale.marketplaceFeesCents = 232
+    sale.sourceRef = "z9kftlmj"
+    context.insert(sale)
+
+    let soldLine = SaleLine(sale: sale, card: pull, basisCents: 1_600)
+    soldLine.id = UUID(uuidString: "00000000-0000-0000-0000-00000000000c")!
+    soldLine.describedAs = "Charizard"
+    context.insert(soldLine)
+
+    // The older orders record a price and no card. Revenue is real; cost is not there.
+    let unknownLine = SaleLine(sale: sale, card: nil, basisCents: 0, basisIncomplete: true)
+    unknownLine.id = UUID(uuidString: "00000000-0000-0000-0000-00000000000d")!
+    unknownLine.describedAs = "Poke Pad"
+    context.insert(unknownLine)
+
     try context.save()
 }
 
@@ -79,9 +114,16 @@ private func seed(_ context: ModelContext) throws {
         #expect(file.purchaseItems.count == 2)
         #expect(file.cards.count == 3)
         #expect(file.sessions.count == 1)
+        #expect(file.grading?.count == 1)
+        #expect(file.gradingEntries?.count == 1)
+        #expect(file.sales?.count == 1)
+        #expect(file.saleLines?.count == 2)
 
         let report = try CollectionExport.apply(file, to: target.mainContext, mode: .merge)
-        #expect(report == CollectionExport.Report(purchases: 1, purchaseItems: 2, cards: 3, sessions: 1, deleted: 0))
+        #expect(report == CollectionExport.Report(
+            purchases: 1, purchaseItems: 2, cards: 3, sessions: 1,
+            grading: 1, gradingEntries: 1, sales: 1, saleLines: 2, deleted: 0
+        ))
 
         let second = try CollectionExport.exportData(target.mainContext, now: now)
         #expect(first == second)
@@ -94,6 +136,20 @@ private func seed(_ context: ModelContext) throws {
         #expect(pull.basisIsAllocated)
         #expect(pull.candidateProductIds == [2, 7])
         #expect(pull.isCommitted)
+        #expect(pull.sourceItem?.parentItem?.isRipped == true)
+        #expect(pull.gradedCompCents == ["10": 12_000, "9.5": 5_100])
+
+        let sale = try #require(try target.mainContext.fetch(FetchDescriptor<Sale>()).first)
+        #expect(sale.lines.count == 2)
+        #expect(sale.netCents == 1_283)
+        // One line has no known cost, so the sale reports no gain rather than
+        // a gain of the whole price.
+        #expect(sale.realizedGainCents == nil)
+        #expect(sale.lines.contains { $0.card?.productId == 2 })
+
+        let submission = try #require(try target.mainContext.fetch(FetchDescriptor<GradingSubmission>()).first)
+        #expect(submission.entries.first?.card?.certNumber == "12345678")
+        #expect(submission.totalCostCents == 26_897)
     }
 
     @Test @MainActor func importIsIdempotent() throws {
@@ -156,6 +212,131 @@ private func seed(_ context: ModelContext) throws {
         #expect(try CollectionExport.encode(file) == CollectionExport.encode(file))
         let text = try #require(String(data: CollectionExport.encode(file), encoding: .utf8))
         #expect(text.contains("\"format\" : \"cardtracker-collection\""))
+    }
+}
+
+/// The real BinderBooks ledger, converted by scripts/import_binderbooks.py.
+///
+/// The file in `seed/` is what he actually imports, so these numbers are the
+/// ones on his books. They come from docs/04-seed-import.md. A converter or an
+/// importer that loses money fails here and nowhere else.
+@Suite struct SeedLedgerImportTests {
+    static let file: URL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()  // Tests
+        .deletingLastPathComponent()  // ios
+        .deletingLastPathComponent()  // repo root
+        .appendingPathComponent("seed/binderbooks-collection.json")
+
+    private func load() throws -> CollectionExport.File {
+        try CollectionExport.decode(try Data(contentsOf: Self.file))
+    }
+
+    @Test @MainActor func theLedgerImportsAndTheMoneyReconciles() throws {
+        let file = try load()
+        let store = try CollectionStore.container(inMemory: true)
+        let report = try CollectionExport.apply(file, to: store.mainContext, mode: .replace)
+
+        #expect(report.purchases == 93)
+        #expect(report.grading == 8)
+        #expect(report.purchaseItems == 58)
+        #expect(report.sales == 131)
+        #expect(report.saleLines == 210)
+
+        let context = store.mainContext
+        let purchases = try context.fetch(FetchDescriptor<Purchase>())
+        #expect(purchases.reduce(0) { $0 + $1.itemCostCents } == 1_128_302)
+
+        let grading = try context.fetch(FetchDescriptor<GradingSubmission>())
+        #expect(grading.reduce(0) { $0 + $1.gradingFeesCents } == 175_288)
+
+        let sales = try context.fetch(FetchDescriptor<Sale>())
+        #expect(sales.reduce(0) { $0 + $1.grossCents } == 355_159)
+        #expect(sales.reduce(0) { $0 + $1.netCents } == 292_210)
+
+        // docs/04 records this as byMarketValue, because that is what happened.
+        // Re-allocating would change the basis on cards that have already sold.
+        #expect(purchases.allSatisfy { $0.allocationMethod == .byMarketValue })
+    }
+
+    @Test @MainActor func importingTheLedgerTwiceChangesNothing() throws {
+        let file = try load()
+        let store = try CollectionStore.container(inMemory: true)
+        try CollectionExport.apply(file, to: store.mainContext, mode: .merge)
+        let first = try CollectionExport.exportData(store.mainContext, now: Date(timeIntervalSinceReferenceDate: 0))
+        try CollectionExport.apply(file, to: store.mainContext, mode: .merge)
+        let second = try CollectionExport.exportData(store.mainContext, now: Date(timeIntervalSinceReferenceDate: 0))
+
+        // The converter derives every id from the BinderBooks id, so a second
+        // run upserts the same rows instead of doubling the ledger.
+        #expect(first == second)
+        #expect(try store.mainContext.fetch(FetchDescriptor<Sale>()).count == 131)
+    }
+
+    @Test @MainActor func aCardHeIsGradingKeepsItsCostAndItsComps() throws {
+        let file = try load()
+        let store = try CollectionStore.container(inMemory: true)
+        try CollectionExport.apply(file, to: store.mainContext, mode: .replace)
+        let cards = try store.mainContext.fetch(FetchDescriptor<OwnedCard>())
+
+        let atGrader = cards.filter { $0.tags.contains("at grader") }
+        #expect(atGrader.count == 40)
+        #expect(atGrader.allSatisfy { $0.graderRaw != nil })
+        // Nine carry no per-card fee: the outstanding May 2026 PSA submission
+        // that docs/00 names. Its two charges sit in `buys` and were never
+        // spread over the cards, so the cost is on the submission, not here.
+        #expect(atGrader.filter { $0.gradingBasisCents > 0 }.count == 31)
+        // docs/04: the 8 charges name a card count and no cards, so nothing
+        // joins them. Each card carries its own grading cost instead.
+        #expect(try store.mainContext.fetch(FetchDescriptor<GradingEntry>()).isEmpty)
+
+        let withComps = cards.filter { !$0.gradedCompCents.isEmpty }
+        #expect(withComps.count == 33)
+    }
+
+    @Test @MainActor func kePtIsADefaultAndNeverMeansPersonalCollection() throws {
+        let file = try load()
+        let store = try CollectionStore.container(inMemory: true)
+        try CollectionExport.apply(file, to: store.mainContext, mode: .replace)
+        let cards = try store.mainContext.fetch(FetchDescriptor<OwnedCard>())
+
+        #expect(cards.allSatisfy { !$0.isPersonalCollection })
+        #expect(cards.contains { $0.tags.contains("sold") })
+        #expect(cards.allSatisfy { !$0.tags.contains("kept") })
+    }
+
+    @Test @MainActor func aRipPullSaysItsCostWasDerived() throws {
+        let file = try load()
+        let store = try CollectionStore.container(inMemory: true)
+        try CollectionExport.apply(file, to: store.mainContext, mode: .replace)
+        let cards = try store.mainContext.fetch(FetchDescriptor<OwnedCard>())
+
+        // The sealed line is the pack. There is no rip row to point at.
+        let pulls = cards.filter { $0.sourceItem?.isSealed == true }
+        #expect(pulls.count > 200)
+        #expect(pulls.allSatisfy { $0.sourceItem?.isRipped == true })
+        #expect(pulls.allSatisfy { $0.sourceItem?.purchase != nil })
+
+        // docs/04: the $193 box that produced three near-worthless hits. The
+        // basis is allocated, and the card says so.
+        let allocated = cards.filter(\.basisIsAllocated)
+        #expect(allocated.allSatisfy { !$0.basisIsManual })
+        // The Whatnot slabs he priced himself are the other case.
+        let typed = cards.filter(\.basisIsManual)
+        #expect(!typed.isEmpty)
+        #expect(typed.allSatisfy { !$0.basisIsAllocated })
+    }
+
+    @Test @MainActor func aSaleWithNoKnownCostReportsNoGain() throws {
+        let file = try load()
+        let store = try CollectionStore.container(inMemory: true)
+        try CollectionExport.apply(file, to: store.mainContext, mode: .replace)
+        let sales = try store.mainContext.fetch(FetchDescriptor<Sale>())
+
+        // 35 orders carry a price and no line at all, and many lines carry no
+        // basis. Revenue is real either way; a 100% margin would not be.
+        let unknown = sales.filter { $0.realizedGainCents == nil }
+        #expect(unknown.count >= 35)
+        #expect(sales.allSatisfy { $0.externalOrderId.isEmpty })
     }
 }
 

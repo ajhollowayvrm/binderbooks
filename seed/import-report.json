@@ -1,0 +1,1473 @@
+{
+  "faults": {
+    "grading_without_entries": {
+      "count": 8,
+      "rows": [
+        {
+          "id": "am1ab8u1",
+          "item": "PSA grading"
+        },
+        {
+          "id": "eyh21ix9",
+          "item": "PSA grading"
+        },
+        {
+          "id": "xo3j757t",
+          "item": "PSA grading (3 cards)"
+        },
+        {
+          "id": "6aizsvzs",
+          "item": "CGC grading (3 cards)"
+        },
+        {
+          "id": "x14f5sh4",
+          "item": "PSA grading (5 cards)"
+        },
+        {
+          "id": "hmqdhk3m",
+          "item": "CGC grading (6 cards)"
+        },
+        {
+          "id": "7tyrnqhg",
+          "item": "CGC grading (11 cards)"
+        },
+        {
+          "id": "q5irs2pj",
+          "item": "PSA grading (2 cards)"
+        }
+      ]
+    },
+    "hit_id_without_hit": {
+      "count": 25,
+      "rows": [
+        {
+          "hitId": "sim0",
+          "id": "8rubpibg",
+          "name": "Mewtwo VSTAR"
+        },
+        {
+          "hitId": "sim1",
+          "id": "r7omy2py",
+          "name": "Mega Gardevoir ex"
+        },
+        {
+          "hitId": "sim2",
+          "id": "b85o2l4u",
+          "name": "Charmeleon"
+        },
+        {
+          "hitId": "sim3",
+          "id": "1x1e0ln5",
+          "name": "Espeon & Deoxys GX"
+        },
+        {
+          "hitId": "sim4",
+          "id": "cxf61juw",
+          "name": "Lt. Surge's Rattata"
+        },
+        {
+          "hitId": "sim5",
+          "id": "r0wfmllb",
+          "name": "Lt. Surge's Raticate"
+        },
+        {
+          "hitId": "sim6",
+          "id": "0s6jyvbo",
+          "name": "Bulbasaur"
+        },
+        {
+          "hitId": "sim7",
+          "id": "q3p7i2wt",
+          "name": "Ivysaur"
+        },
+        {
+          "hitId": "sim8",
+          "id": "ftg0bs4p",
+          "name": "Zamazenta"
+        },
+        {
+          "hitId": "sim9",
+          "id": "5lvzsk0h",
+          "name": "Chansey"
+        },
+        {
+          "hitId": "sim10",
+          "id": "9s3gkjel",
+          "name": "Flygon"
+        },
+        {
+          "hitId": "sim11",
+          "id": "j0fss5k9",
+          "name": "Charizard"
+        },
+        {
+          "hitId": "sim12",
+          "id": "u23zucca",
+          "name": "Latios GX"
+        },
+        {
+          "hitId": "sim13",
+          "id": "1qdeaxnf",
+          "name": "Zamazenta V"
+        },
+        {
+          "hitId": "sim14",
+          "id": "d7dr6ve1",
+          "name": "Sandslash"
+        },
+        {
+          "hitId": "sim15",
+          "id": "xaaef9w7",
+          "name": "Jolteon"
+        },
+        {
+          "hitId": "sim16",
+          "id": "3h77mfdz",
+          "name": "N's Zoroark ex"
+        },
+        {
+          "hitId": "jmy7slsr",
+          "id": "ak9shgdq",
+          "name": "Ampharos"
+        },
+        {
+          "hitId": "wkb3si05",
+          "id": "duoegixg",
+          "name": "Xerneas"
+        },
+        {
+          "hitId": "8f3yy9di",
+          "id": "n3uf5jvm",
+          "name": "Froakie"
+        },
+        {
+          "hitId": "x790isw3",
+          "id": "lannx4d4",
+          "name": "Groudon"
+        },
+        {
+          "hitId": "sim17",
+          "id": "3qsunv9k",
+          "name": "Rowlet"
+        },
+        {
+          "hitId": "sim18",
+          "id": "48ev3mv2",
+          "name": "Gengar VMAX"
+        },
+        {
+          "hitId": "sim19",
+          "id": "b1sjukhl",
+          "name": "Team Rocket's Mimikyu"
+        },
+        {
+          "hitId": "bskkoemo",
+          "id": "c7sioqld",
+          "name": "Leafeon ex"
+        }
+      ]
+    },
+    "hit_without_inventory": {
+      "count": 28,
+      "rows": [
+        {
+          "hitId": "it8ow6hu",
+          "rip": "6ljychoa"
+        },
+        {
+          "hitId": "5a5pg25d",
+          "rip": "6ljychoa"
+        },
+        {
+          "hitId": "6r5a05z2",
+          "rip": "reiq4k99"
+        },
+        {
+          "hitId": "9nsxti59",
+          "rip": "j7ir0qxu"
+        },
+        {
+          "hitId": "cx4pcab1",
+          "rip": "frgpnwlo"
+        },
+        {
+          "hitId": "0dfggr5i",
+          "rip": "frgpnwlo"
+        },
+        {
+          "hitId": "b4kyxn45",
+          "rip": "frgpnwlo"
+        },
+        {
+          "hitId": "vfqp028k",
+          "rip": "frgpnwlo"
+        },
+        {
+          "hitId": "1ig5njlf",
+          "rip": "2ri3ooql"
+        },
+        {
+          "hitId": "1rjyjeit",
+          "rip": "2ri3ooql"
+        },
+        {
+          "hitId": "664m4oj8",
+          "rip": "sz5tr19d"
+        },
+        {
+          "hitId": "9od8ptec",
+          "rip": "lqnugkcj"
+        },
+        {
+          "hitId": "fo37bwsm",
+          "rip": "0ue86m68"
+        },
+        {
+          "hitId": "oorf8mr1",
+          "rip": "d6n9k31r"
+        },
+        {
+          "hitId": "51keh582",
+          "rip": "s913sco5"
+        },
+        {
+          "hitId": "jr5rvlbz",
+          "rip": "5odmx7b4"
+        },
+        {
+          "hitId": "jgnzuwp3",
+          "rip": "5odmx7b4"
+        },
+        {
+          "hitId": "hgqa27tl",
+          "rip": "5odmx7b4"
+        },
+        {
+          "hitId": "bleqfs7g",
+          "rip": "stx16994"
+        },
+        {
+          "hitId": "k99g0v07",
+          "rip": "kxbapaj6"
+        },
+        {
+          "hitId": "p8d35ksc",
+          "rip": "ihd0ilqd"
+        },
+        {
+          "hitId": "seaayysw",
+          "rip": "ihd0ilqd"
+        },
+        {
+          "hitId": "3fn2b7s4",
+          "rip": "ihd0ilqd"
+        },
+        {
+          "hitId": "ubg554mm",
+          "rip": "ihd0ilqd"
+        },
+        {
+          "hitId": "o97jny9d",
+          "rip": "anhwoex9"
+        },
+        {
+          "hitId": "t00q7duz",
+          "rip": "duw902jw"
+        },
+        {
+          "hitId": "llmh3ajn",
+          "rip": "xtfloc0n"
+        },
+        {
+          "hitId": "9o2vxf1j",
+          "rip": "xtfloc0n"
+        }
+      ]
+    },
+    "rip_before_buy": {
+      "count": 3,
+      "rows": [
+        {
+          "buy": "05jxx2b7",
+          "buyDate": "2026-08-01",
+          "rip": "qhp129f5",
+          "ripDate": "2026-07-31"
+        },
+        {
+          "buy": "jf7ziut4",
+          "buyDate": "2026-05-19",
+          "rip": "s913sco5",
+          "ripDate": "2026-05-07"
+        },
+        {
+          "buy": "kouh5b8v",
+          "buyDate": "2026-05-14",
+          "rip": "duw902jw",
+          "ripDate": "2026-05-13"
+        }
+      ]
+    },
+    "sale_line_without_card": {
+      "count": 53,
+      "rows": [
+        {
+          "invId": "031na31q",
+          "name": "Reshiram ex",
+          "sale": "alfm9r3w"
+        },
+        {
+          "invId": "xs5tth4c",
+          "name": "Reshiram ex",
+          "sale": "alfm9r3w"
+        },
+        {
+          "invId": "smjxn7w0",
+          "name": "Mega Delphox ex",
+          "sale": "alfm9r3w"
+        },
+        {
+          "invId": "dn21yr8n",
+          "name": "Mega Slowbro ex",
+          "sale": "alfm9r3w"
+        },
+        {
+          "invId": "mprwz29n",
+          "name": "Mega Chandelure ex",
+          "sale": "fzozle5s"
+        },
+        {
+          "invId": "p7jwlta9",
+          "name": "Mega Floette ex",
+          "sale": "77dlqmke"
+        },
+        {
+          "invId": "h93k4ej4",
+          "name": "Krookodile ex",
+          "sale": "77dlqmke"
+        },
+        {
+          "invId": "wvp6bfzy",
+          "name": "Fomantis",
+          "sale": "ken9yj7m"
+        },
+        {
+          "invId": "yg1jaasi",
+          "name": "Lurantis ex",
+          "sale": "qjp555ve"
+        },
+        {
+          "invId": "airfxw33",
+          "name": "Fomantis",
+          "sale": "qjp555ve"
+        },
+        {
+          "invId": "4x8cnl57",
+          "name": "Mega Excadrill ex",
+          "sale": "68rf1c18"
+        },
+        {
+          "invId": "eomscanp",
+          "name": "Mega Pyroar ex",
+          "sale": "jhk0bf4t"
+        },
+        {
+          "invId": "lfbt5qln",
+          "name": "Gourgeist ex",
+          "sale": "lz9lqptf"
+        },
+        {
+          "invId": "g04avlvo",
+          "name": "Mega Pyroar ex",
+          "sale": "0eoaufw3"
+        },
+        {
+          "invId": "p3mj1to2",
+          "name": "Mega Dragalge ex",
+          "sale": "0eoaufw3"
+        },
+        {
+          "invId": "g9jyjeg9",
+          "name": "Krookodile ex",
+          "sale": "0eoaufw3"
+        },
+        {
+          "invId": "o7l8iz2o",
+          "name": "Krookodile ex",
+          "sale": "0eoaufw3"
+        },
+        {
+          "invId": "kkhblia1",
+          "name": "Lapras ex",
+          "sale": "0eoaufw3"
+        },
+        {
+          "invId": "f73fp25n",
+          "name": "Rowlet",
+          "sale": "e3nbuz3e"
+        },
+        {
+          "invId": "97uow8o6",
+          "name": "Alakazam ex",
+          "sale": "pu4zowwv"
+        },
+        {
+          "invId": "zmr2g91k",
+          "name": "Alcremie VMAX",
+          "sale": "t8kj0ewy"
+        },
+        {
+          "invId": "76cf604g",
+          "name": "Energy Retrieval",
+          "sale": "gpldjj2g"
+        },
+        {
+          "invId": "5vpya4pt",
+          "name": "Ampharos",
+          "sale": "paag2c3w"
+        },
+        {
+          "invId": "6273k77w",
+          "name": "Xerneas",
+          "sale": "h87fyxjk"
+        },
+        {
+          "invId": "pr5qgfbw",
+          "name": "Mega Gallade ex",
+          "sale": "8q4vjhzb"
+        },
+        {
+          "invId": "rnm6ypr2",
+          "name": "Mega Audino ex",
+          "sale": "kb9igrn9"
+        },
+        {
+          "invId": "ii9de0cj",
+          "name": "Simipour",
+          "sale": "nd6i9l5r"
+        },
+        {
+          "invId": "mmmswibz",
+          "name": "Tauros",
+          "sale": "nd6i9l5r"
+        },
+        {
+          "invId": "l8b45kfe",
+          "name": "Clobbopus",
+          "sale": "nd6i9l5r"
+        },
+        {
+          "invId": "m4zrd3qm",
+          "name": "Mega Skarmory ex",
+          "sale": "08uq4zui"
+        },
+        {
+          "invId": "0u6w1ae4",
+          "name": "Cobalion ex",
+          "sale": "08uq4zui"
+        },
+        {
+          "invId": "mozlqo3x",
+          "name": "Drayton",
+          "sale": "mfsk621a"
+        },
+        {
+          "invId": "elvneq37",
+          "name": "Whimsicott ex",
+          "sale": "l42ocudp"
+        },
+        {
+          "invId": "2meh84jl",
+          "name": "Dreepy",
+          "sale": "468f1ups"
+        },
+        {
+          "invId": "5eiyj92f",
+          "name": "Charizard V",
+          "sale": "1nuy2ib1"
+        },
+        {
+          "invId": "tblo9quu",
+          "name": "Klang",
+          "sale": "7gfnedho"
+        },
+        {
+          "invId": "4iu0m2ks",
+          "name": "Lillie's Ribombee",
+          "sale": "uagker4u"
+        },
+        {
+          "invId": "3tb43308",
+          "name": "Froakie",
+          "sale": "ccsd11sl"
+        },
+        {
+          "invId": "7bo8km4d",
+          "name": "Mega Greninja ex",
+          "sale": "9n6pjyqa"
+        },
+        {
+          "invId": "nq4cpdmw",
+          "name": "Poke Pad",
+          "sale": "mgxf1acm"
+        },
+        {
+          "invId": "zw4hojt2",
+          "name": "Metang",
+          "sale": "ekt5c8iw"
+        },
+        {
+          "invId": "2t7ntynz",
+          "name": "Mega Greninja ex",
+          "sale": "iyicaofw"
+        },
+        {
+          "invId": "69vyfxwc",
+          "name": "Emma",
+          "sale": "iyicaofw"
+        },
+        {
+          "invId": "3c3i8aij",
+          "name": "Gourgeist ex",
+          "sale": "owr2nzjn"
+        },
+        {
+          "invId": "bv5csrrw",
+          "name": "Gourgeist ex",
+          "sale": "owr2nzjn"
+        },
+        {
+          "invId": "l27hp2dq",
+          "name": "Mega Floette ex",
+          "sale": "owr2nzjn"
+        },
+        {
+          "invId": "9fdccg64",
+          "name": "Frogadier",
+          "sale": "2s2r3v5t"
+        },
+        {
+          "invId": "lybxowwa",
+          "name": "Beedrill ex",
+          "sale": "1qra8qvp"
+        },
+        {
+          "invId": "8mekzhp7",
+          "name": "Mega Greninja ex",
+          "sale": "1qra8qvp"
+        },
+        {
+          "invId": "35ex85f6",
+          "name": "Mega Greninja ex",
+          "sale": "4b66v9yx"
+        },
+        {
+          "invId": "ugc89k24",
+          "name": "Philippe",
+          "sale": "ph4977oi"
+        },
+        {
+          "invId": "c8e3iwv4",
+          "name": "Ampharos",
+          "sale": "7nhj1enb"
+        },
+        {
+          "invId": "t2904guc",
+          "name": "Ampharos",
+          "sale": "7nhj1enb"
+        }
+      ]
+    },
+    "sale_without_lines": {
+      "count": 35,
+      "rows": [
+        {
+          "date": "2026-06-12",
+          "id": "6x4d5r2s",
+          "priceCents": 2699
+        },
+        {
+          "date": "2026-06-12",
+          "id": "armw3t6v",
+          "priceCents": 344
+        },
+        {
+          "date": "2026-06-11",
+          "id": "pyidodub",
+          "priceCents": 2899
+        },
+        {
+          "date": "2026-06-11",
+          "id": "nmflqzen",
+          "priceCents": 339
+        },
+        {
+          "date": "2026-06-09",
+          "id": "x4pg082x",
+          "priceCents": 347
+        },
+        {
+          "date": "2026-05-13",
+          "id": "16xcsspt",
+          "priceCents": 531
+        },
+        {
+          "date": "2026-05-13",
+          "id": "98yd9dm0",
+          "priceCents": 531
+        },
+        {
+          "date": "2026-05-14",
+          "id": "uuy7h7k4",
+          "priceCents": 1499
+        },
+        {
+          "date": "2026-05-14",
+          "id": "op3dfe15",
+          "priceCents": 581
+        },
+        {
+          "date": "2026-05-14",
+          "id": "ir8jy86c",
+          "priceCents": 281
+        },
+        {
+          "date": "2026-05-14",
+          "id": "sgttevz9",
+          "priceCents": 699
+        },
+        {
+          "date": "2026-05-15",
+          "id": "angtqn8z",
+          "priceCents": 2799
+        },
+        {
+          "date": "2026-05-15",
+          "id": "7osurdu4",
+          "priceCents": 649
+        },
+        {
+          "date": "2026-05-15",
+          "id": "q2815xdb",
+          "priceCents": 331
+        },
+        {
+          "date": "2026-05-15",
+          "id": "g3a35vb1",
+          "priceCents": 406
+        },
+        {
+          "date": "2026-05-18",
+          "id": "w9vixj6x",
+          "priceCents": 481
+        },
+        {
+          "date": "2026-05-18",
+          "id": "mrs29awf",
+          "priceCents": 481
+        },
+        {
+          "date": "2026-05-20",
+          "id": "znbbicdi",
+          "priceCents": 306
+        },
+        {
+          "date": "2026-05-20",
+          "id": "2u1m0nnm",
+          "priceCents": 1149
+        },
+        {
+          "date": "2026-05-22",
+          "id": "mcthiq21",
+          "priceCents": 2599
+        },
+        {
+          "date": "2026-05-25",
+          "id": "42mdmuxi",
+          "priceCents": 599
+        },
+        {
+          "date": "2026-05-27",
+          "id": "ylcvinvo",
+          "priceCents": 227
+        },
+        {
+          "date": "2026-05-29",
+          "id": "61xpq7ju",
+          "priceCents": 1699
+        },
+        {
+          "date": "2026-05-29",
+          "id": "q2tf77kh",
+          "priceCents": 650
+        },
+        {
+          "date": "2026-05-31",
+          "id": "vhaptimm",
+          "priceCents": 439
+        },
+        {
+          "date": "2026-06-02",
+          "id": "xm97wtsr",
+          "priceCents": 1895
+        },
+        {
+          "date": "2026-06-02",
+          "id": "fzmrs9t5",
+          "priceCents": 769
+        },
+        {
+          "date": "2026-06-04",
+          "id": "m3unw1a7",
+          "priceCents": 519
+        },
+        {
+          "date": "2026-06-07",
+          "id": "6jr2lfiv",
+          "priceCents": 5149
+        },
+        {
+          "date": "2026-05-10",
+          "id": "hd8niika",
+          "priceCents": 799
+        },
+        {
+          "date": "2026-05-10",
+          "id": "72fzjlg5",
+          "priceCents": 849
+        },
+        {
+          "date": "2026-05-13",
+          "id": "pgikhtjm",
+          "priceCents": 1199
+        },
+        {
+          "date": "2026-05-14",
+          "id": "qpk66ozh",
+          "priceCents": 2449
+        },
+        {
+          "date": "2026-05-25",
+          "id": "5o3ymj0n",
+          "priceCents": 2649
+        },
+        {
+          "date": "2026-06-03",
+          "id": "8cdogkx4",
+          "priceCents": 3599
+        }
+      ]
+    },
+    "sealed_without_product": {
+      "count": 58,
+      "rows": [
+        {
+          "id": "3plwlfm5",
+          "product": "Shinning Crobat V Premium box & Alakazam VMax Box"
+        },
+        {
+          "id": "e3uz5fb7",
+          "product": "1x Chaos Rising Tin"
+        },
+        {
+          "id": "mlidu2zu",
+          "product": "1x Inferno X Single Card"
+        },
+        {
+          "id": "l995q8k8",
+          "product": "10x Prismatic Evolutions Booster Pack + 10x Ascended Heroes Booster Pack"
+        },
+        {
+          "id": "i4bk1pkr",
+          "product": "GameStop Power Pack"
+        },
+        {
+          "id": "j1pbixzu",
+          "product": "1x Ascended Heroes Tin + 1x Destined Rivals Elite Trainer Box"
+        },
+        {
+          "id": "l2qppnph",
+          "product": "20x Prismatic Evolutions Booster Pack"
+        },
+        {
+          "id": "80ad66yi",
+          "product": "FB Marketplace Lot"
+        },
+        {
+          "id": "cjug91p6",
+          "product": "FB Marketplace Lot"
+        },
+        {
+          "id": "ew0n48x7",
+          "product": "2 OneRip Packs"
+        },
+        {
+          "id": "6ljychoa",
+          "product": "2x Chaos Rising Booster Pack + 7x Pitch Black Booster Pack"
+        },
+        {
+          "id": "ai3mseg1",
+          "product": "10x Storm Emeralda Booster Pack"
+        },
+        {
+          "id": "reiq4k99",
+          "product": "Whatnot Card"
+        },
+        {
+          "id": "j7ir0qxu",
+          "product": "9x Pitch Black Booster Pack"
+        },
+        {
+          "id": "frgpnwlo",
+          "product": "Mega Charizard X ex UPC"
+        },
+        {
+          "id": "exaxjtfe",
+          "product": "151 Alakazam ex Box"
+        },
+        {
+          "id": "t89m8nke",
+          "product": "1x Pitch Black Booster Bundle"
+        },
+        {
+          "id": "atrw7xhq",
+          "product": "6x Pitch Black Booster Pack + 5x Chaos Rising Booster Pack"
+        },
+        {
+          "id": "3i25xsvc",
+          "product": "6 Reshiram ex Boxes"
+        },
+        {
+          "id": "jwg2n4q0",
+          "product": "Whatnot Slabs"
+        },
+        {
+          "id": "digbgz3r",
+          "product": "Amazon Mystery 3 Boosters"
+        },
+        {
+          "id": "ob0kho9a",
+          "product": "Amazon Mystery 3 Boosters"
+        },
+        {
+          "id": "4l1y89qb",
+          "product": "3x Multiple Single Card + 1x Pitch Black Booster Bundle + 5x Pitch Black Booster Pack"
+        },
+        {
+          "id": "ok3he89s",
+          "product": "Whatnot Lottery"
+        },
+        {
+          "id": "awhuh3ry",
+          "product": "1x Pitch Black Booster Bundle + 1x Chaos Rising Booster Pack + 1x Perfect Order Booster Pack"
+        },
+        {
+          "id": "r4mta5s8",
+          "product": "1x Pitch Black Elite Trainer Box"
+        },
+        {
+          "id": "yz48mavh",
+          "product": "2x Chaos Rising Booster Bundle"
+        },
+        {
+          "id": "lqadq9g5",
+          "product": "2x Chaos Rising Tin + 2x Perfect Order Booster Pack"
+        },
+        {
+          "id": "5ossagev",
+          "product": "First Partner Illustration Series 3"
+        },
+        {
+          "id": "ajj2m693",
+          "product": "Facebook Marketplace Bulk Set"
+        },
+        {
+          "id": "ohok32v1",
+          "product": "1x Pitch Black Booster Bundle"
+        },
+        {
+          "id": "2ri3ooql",
+          "product": "1x Pitch Black Booster Box"
+        },
+        {
+          "id": "13nk0sug",
+          "product": "2x Pitch Black Booster Pack + 2x Pitch Black Blister"
+        },
+        {
+          "id": "s1vx7bp3",
+          "product": "1x Pitch Black Booster Pack"
+        },
+        {
+          "id": "qhp129f5",
+          "product": "1x Pitch Black Booster Bundle"
+        },
+        {
+          "id": "sz5tr19d",
+          "product": "1x Chaos Rising Booster Bundle"
+        },
+        {
+          "id": "lqnugkcj",
+          "product": "Mega Greninja EX Premium Collection"
+        },
+        {
+          "id": "0ue86m68",
+          "product": "Mega Greninja EX Premium Collection"
+        },
+        {
+          "id": "6k30etym",
+          "product": "1x Chaos Rising Booster Bundle"
+        },
+        {
+          "id": "d6n9k31r",
+          "product": "PokeBank Hits Mystery Packs"
+        },
+        {
+          "id": "8py7z2s3",
+          "product": "1x Perfect Order Collection Box"
+        },
+        {
+          "id": "ehdefz30",
+          "product": "1x Poke Bank Hits Premium Mystery Pack"
+        },
+        {
+          "id": "g741ql2p",
+          "product": "3x Chaos Rising Booster Pack"
+        },
+        {
+          "id": "sefuunml",
+          "product": "Mega Zygarde Ex Box"
+        },
+        {
+          "id": "aqhjpdbs",
+          "product": "1x Paradox Rift Booster Pack + 1x Twilight Masquerade Booster Pack + 1x Chaos Rising Booster Bundle"
+        },
+        {
+          "id": "ptu5vg4b",
+          "product": "1x Perfect Order Collection Box + 1x Chaos Rising Booster Pack"
+        },
+        {
+          "id": "s913sco5",
+          "product": "5x Perfect Order Booster Pack"
+        },
+        {
+          "id": "5odmx7b4",
+          "product": "1x Chaos Rising Booster Box"
+        },
+        {
+          "id": "stx16994",
+          "product": "5x Perfect Order Booster Bundle"
+        },
+        {
+          "id": "kxbapaj6",
+          "product": "1x Ascended Heroes Collection Box"
+        },
+        {
+          "id": "ihd0ilqd",
+          "product": "8x Chaos Rising Booster Pack + 1x Mega Evolution Gengar Tin"
+        },
+        {
+          "id": "g1l3v2zi",
+          "product": "2x Chaos Rising Booster Pack"
+        },
+        {
+          "id": "anhwoex9",
+          "product": "20x Chaos Rising Booster Pack"
+        },
+        {
+          "id": "tter77uj",
+          "product": "25x Ascended Heroes Booster Pack"
+        },
+        {
+          "id": "duw902jw",
+          "product": "1x Prismatic Evolutions SPC"
+        },
+        {
+          "id": "yzppttdw",
+          "product": "1x Ascended Heroes Booster Bundle"
+        },
+        {
+          "id": "mv8vnjmq",
+          "product": "5x Chaos Rising Booster Pack"
+        },
+        {
+          "id": "xtfloc0n",
+          "product": "5x Chaos Rising Booster Pack"
+        }
+      ]
+    },
+    "seed_row": {
+      "count": 14,
+      "rows": [
+        {
+          "array": "buys",
+          "id": "3o6yglhz",
+          "item": "Gamecraft"
+        },
+        {
+          "array": "buys",
+          "id": "1ouu7cmo",
+          "item": "Gamecraft"
+        },
+        {
+          "array": "buys",
+          "id": "brbxhk4q",
+          "item": "Gamecraft"
+        },
+        {
+          "array": "buys",
+          "id": "u50hqlow",
+          "item": "GameStop"
+        },
+        {
+          "array": "buys",
+          "id": "ldqqrrv9",
+          "item": "GameStop"
+        },
+        {
+          "array": "buys",
+          "id": "oh50wj2g",
+          "item": "Gamecraft"
+        },
+        {
+          "array": "buys",
+          "id": "fggs79bd",
+          "item": "Gamecraft"
+        },
+        {
+          "array": "buys",
+          "id": "qr8dzmn5",
+          "item": "GameStop"
+        },
+        {
+          "array": "sales",
+          "channel": "eBay",
+          "id": "6g9886qt"
+        },
+        {
+          "array": "sales",
+          "channel": "eBay",
+          "id": "pm5ydoqu"
+        },
+        {
+          "array": "sales",
+          "channel": "eBay",
+          "id": "5e4g9x32"
+        },
+        {
+          "array": "sales",
+          "channel": "eBay",
+          "id": "4ylkstua"
+        },
+        {
+          "array": "sales",
+          "channel": "eBay",
+          "id": "syr7wdd2"
+        },
+        {
+          "array": "sales",
+          "channel": "eBay",
+          "id": "26lzpiok"
+        }
+      ]
+    },
+    "sold_without_sale": {
+      "count": 63,
+      "rows": [
+        {
+          "costCents": 1156,
+          "id": "hkryvnal",
+          "name": "Mega Slowbro ex"
+        },
+        {
+          "costCents": 446,
+          "id": "6zfzv6po",
+          "name": "Reshiram ex (Journey Together Stamped)"
+        },
+        {
+          "costCents": 446,
+          "id": "nefhg77y",
+          "name": "Reshiram ex (Journey Together Stamped)"
+        },
+        {
+          "costCents": 94,
+          "id": "9r5hg5ll",
+          "name": "Mega Delphox ex"
+        },
+        {
+          "costCents": 2638,
+          "id": "abyvs6p3",
+          "name": "Mega Chandelure ex"
+        },
+        {
+          "costCents": 255,
+          "id": "o3h45s2k",
+          "name": "Mega Floette ex"
+        },
+        {
+          "costCents": 208,
+          "id": "dtqkxnpp",
+          "name": "Krookodile ex"
+        },
+        {
+          "costCents": 2309,
+          "id": "k93x469g",
+          "name": "Dedenne"
+        },
+        {
+          "costCents": 7000,
+          "id": "30dpcllu",
+          "name": "Houndstone"
+        },
+        {
+          "costCents": 1105,
+          "id": "ooqxmzh5",
+          "name": "Fomantis"
+        },
+        {
+          "costCents": 1235,
+          "id": "eegrqc47",
+          "name": "Fomantis"
+        },
+        {
+          "costCents": 173,
+          "id": "9swqbegw",
+          "name": "Mega Zeraora ex"
+        },
+        {
+          "costCents": 134,
+          "id": "eyy5mja3",
+          "name": "Lurantis ex"
+        },
+        {
+          "costCents": 3258,
+          "id": "hw4kszjz",
+          "name": "Mega Excadrill ex"
+        },
+        {
+          "costCents": 4261,
+          "id": "1v3d0v6z",
+          "name": "Mega Pyroar ex"
+        },
+        {
+          "costCents": 299,
+          "id": "lcgf7pyn",
+          "name": "Mega Pyroar ex"
+        },
+        {
+          "costCents": 271,
+          "id": "of83bn9y",
+          "name": "Krookodile ex"
+        },
+        {
+          "costCents": 271,
+          "id": "jsi8173f",
+          "name": "Krookodile ex"
+        },
+        {
+          "costCents": 271,
+          "id": "01s01qmn",
+          "name": "Lapras ex"
+        },
+        {
+          "costCents": 3203,
+          "id": "540qp76a",
+          "name": "Rowlet"
+        },
+        {
+          "costCents": 209,
+          "id": "acioq1w0",
+          "name": "Mega Gallade ex"
+        },
+        {
+          "costCents": 860,
+          "id": "dcv4f4py",
+          "name": "Energy Retrieval"
+        },
+        {
+          "costCents": 528,
+          "id": "aqoey7ht",
+          "name": "Gourgeist ex"
+        },
+        {
+          "costCents": 3425,
+          "id": "934o7f23",
+          "name": "Ampharos"
+        },
+        {
+          "costCents": 209,
+          "id": "ego88xev",
+          "name": "Mega Dragalge ex"
+        },
+        {
+          "costCents": 4627,
+          "id": "vgqcozyx",
+          "name": "Xerneas"
+        },
+        {
+          "costCents": 979,
+          "id": "6u1mj4nl",
+          "name": "Dreepy"
+        },
+        {
+          "costCents": 154,
+          "id": "8se094z8",
+          "name": "Mega Audino ex"
+        },
+        {
+          "costCents": 49,
+          "id": "ip1ncv8q",
+          "name": "Cobalion ex"
+        },
+        {
+          "costCents": 438,
+          "id": "juo7al0x",
+          "name": "Tauros"
+        },
+        {
+          "costCents": 30208,
+          "id": "jnq2x82i",
+          "name": "Charizard V"
+        },
+        {
+          "costCents": 465,
+          "id": "7p9261wh",
+          "name": "Alcremie VMAX"
+        },
+        {
+          "costCents": 715,
+          "id": "idaxuax8",
+          "name": "Klang"
+        },
+        {
+          "costCents": 621,
+          "id": "6gi5asop",
+          "name": "Clobbopus"
+        },
+        {
+          "costCents": 709,
+          "id": "7c7xd9aw",
+          "name": "Drayton"
+        },
+        {
+          "costCents": 2679,
+          "id": "ntqzztnf",
+          "name": "Whimsicott ex"
+        },
+        {
+          "costCents": 1054,
+          "id": "bmb03ajj",
+          "name": "Alakazam ex"
+        },
+        {
+          "costCents": 1181,
+          "id": "au1hp5fb",
+          "name": "Simipour"
+        },
+        {
+          "costCents": 406,
+          "id": "1320fsh2",
+          "name": "Mega Skarmory ex"
+        },
+        {
+          "costCents": 576,
+          "id": "cwzx8z7x",
+          "name": "Lillie's Ribombee"
+        },
+        {
+          "costCents": 282,
+          "id": "b8njihp8",
+          "name": "Froakie"
+        },
+        {
+          "costCents": 1186,
+          "id": "sykecfii",
+          "name": "Roxie's Performance"
+        },
+        {
+          "costCents": 875,
+          "id": "68xbojm7",
+          "name": "AZ's Tranquility"
+        },
+        {
+          "costCents": 2831,
+          "id": "mxmr8nmx",
+          "name": "Special Red Card"
+        },
+        {
+          "costCents": 1245,
+          "id": "nfqybqow",
+          "name": "Claydol"
+        },
+        {
+          "costCents": 178,
+          "id": "s8xm8bfn",
+          "name": "Mega Pyroar ex"
+        },
+        {
+          "costCents": 168,
+          "id": "ne2ve1em",
+          "name": "Mega Gallade ex"
+        },
+        {
+          "costCents": 11523,
+          "id": "amyfl2s9",
+          "name": "Roxie's Performance"
+        },
+        {
+          "costCents": 12353,
+          "id": "kdeorqvf",
+          "name": "Poke Pad"
+        },
+        {
+          "costCents": 8159,
+          "id": "6053xvaq",
+          "name": "Mega Greninja ex"
+        },
+        {
+          "costCents": 312,
+          "id": "do42dcbn",
+          "name": "Metang"
+        },
+        {
+          "costCents": 3160,
+          "id": "gcyixiv5",
+          "name": "Ampharos"
+        },
+        {
+          "costCents": 138,
+          "id": "ye60vcsb",
+          "name": "Gourgeist ex"
+        },
+        {
+          "costCents": 271,
+          "id": "f59lifpy",
+          "name": "Beedrill ex"
+        },
+        {
+          "costCents": 1175,
+          "id": "cim0hlsy",
+          "name": "Emma"
+        },
+        {
+          "costCents": 2906,
+          "id": "o8gdmz8g",
+          "name": "Frogadier"
+        },
+        {
+          "costCents": 157,
+          "id": "1vwwfare",
+          "name": "Mega Floette ex"
+        },
+        {
+          "costCents": 459,
+          "id": "3o7kjhha",
+          "name": "Mega Greninja ex"
+        },
+        {
+          "costCents": 5137,
+          "id": "2g6wzbn8",
+          "name": "Mega Greninja ex"
+        },
+        {
+          "costCents": 138,
+          "id": "uae0eotn",
+          "name": "Gourgeist ex"
+        },
+        {
+          "costCents": 37,
+          "id": "ck7q0e4d",
+          "name": "Philippe"
+        },
+        {
+          "costCents": 4059,
+          "id": "r9hw1nqm",
+          "name": "Mega Greninja ex"
+        },
+        {
+          "costCents": 193,
+          "id": "1aq0g3ll",
+          "name": "Ampharos"
+        }
+      ]
+    }
+  },
+  "heldBack": {
+    "basisCentsHeldBack": 6404,
+    "count": 6,
+    "rows": [
+      {
+        "costCents": 1800,
+        "id": "vs5dha58",
+        "lang": "en",
+        "name": "Torchic",
+        "number": "56",
+        "reason": "no product matches the name or the number",
+        "set": "First Partner Collection 2026",
+        "status": "At grading",
+        "valueCents": 1039
+      },
+      {
+        "costCents": 1615,
+        "id": "xenqg07w",
+        "lang": "en",
+        "name": "Treecko",
+        "number": "55",
+        "reason": "no product matches the name or the number",
+        "set": "First Partner Collection 2026",
+        "status": "At grading",
+        "valueCents": 996
+      },
+      {
+        "costCents": 1030,
+        "id": "hhq1s9qs",
+        "lang": "en",
+        "name": "Froakie",
+        "number": "60",
+        "reason": "no product matches the name or the number",
+        "set": "First Partner Collection 2026",
+        "status": "Sold",
+        "valueCents": 1119
+      },
+      {
+        "costCents": 985,
+        "id": "84lj7awa",
+        "lang": "en",
+        "name": "Chespin",
+        "number": "58",
+        "reason": "no product matches the name or the number",
+        "set": "First Partner Collection 2026",
+        "status": "Sold",
+        "valueCents": 1071
+      },
+      {
+        "costCents": 974,
+        "id": "9709e3mq",
+        "lang": "en",
+        "name": "Fennekin",
+        "number": "59",
+        "reason": "no product matches the name or the number",
+        "set": "First Partner Collection 2026",
+        "status": "Sold",
+        "valueCents": 1059
+      },
+      {
+        "costCents": 0,
+        "id": "cd8yw8mi",
+        "lang": "en",
+        "name": "Blue-Eyes White Dragon",
+        "number": "FL1-EN001",
+        "reason": "the catalog has no set named YGO Forbidden Legacy (2005)",
+        "set": "YGO Forbidden Legacy (2005)",
+        "status": "At grading",
+        "valueCents": 1300
+      }
+    ]
+  },
+  "wrote": {
+    "cards": 279,
+    "grading": 8,
+    "purchaseItems": 58,
+    "purchases": 93,
+    "saleLines": 210,
+    "sales": 131
+  }
+}

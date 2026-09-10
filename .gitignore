@@ -4,6 +4,11 @@
 # Output of catalog/build_catalog.py. The release holds the published copy.
 build/
 
+# The catalog the seed converter matches against. Download it from the
+# catalog-latest release; it is 42 MB and rebuilds from the source data.
+catalog.sqlite
+catalog.sqlite.gz
+
 # Python
 __pycache__/
 *.pyc

@@ -196,8 +196,16 @@ can't be known before purchase is which sets a given box will contain.
     var isPersonalCollection: Bool
 
     var sourceItem: PurchaseItem?
-    var sourceRip: RipEvent?
     var scanSession: ScanSession?
+
+    /// What he believes the card sells for at each grade, in cents, keyed by
+    /// the grade as printed: "10", "9.5". Entered by hand from Card Ladder.
+    var gradedCompCents: [String: Int]
+
+    /// The row's id in the BinderBooks ledger it was imported from. Empty for
+    /// anything entered in this app. Also on `Purchase`, `Sale`, `SaleLine`,
+    /// and `GradingSubmission`. See `04`.
+    var sourceRef: String
 
     /// How sure the scanner was. Drives review filtering; survives commit so a
     /// shaky match stays visible later.
@@ -328,33 +336,32 @@ give any rounding remainder to the highest-value item.
 
 ## Later-phase models
 
-Not built in Phase 1. Specified so Phase 1 doesn't require migrations later.
+Specified so Phase 1 doesn't require migrations later. `GradingSubmission`,
+`GradingEntry`, `Sale`, and `SaleLine` were **built on 2026-09-10**, ahead of
+their phase, because the seed import in `04` carries those rows and holding them
+back would have lost the history.
 
-### RipEvent
+### There is no RipEvent
 
-Consumes a sealed `PurchaseItem`. Output is **polymorphic**: cards and/or child
-sealed items.
+**Removed 2026-09-10.** This section specified a `RipEvent` model, and the seed
+import wrote 58 of them. AJ overruled it: *"We don't really need to record a rip.
+The Rip can be a temporary screen that just adds stuff to the inventory with the
+right cost basis."*
 
-```swift
-@Model final class RipEvent {
-    var id: UUID = UUID()
-    var rippedAt: Date
-    var sealedItem: PurchaseItem?
+Opening a pack is an **intake path, not a record**. He opens a purchase, taps
+Open it, scans what came out, and the cards land in inventory carrying their
+share of what the purchase cost. Nothing writes a row for the opening.
 
-    @Relationship(deleteRule: .nullify, inverse: \OwnedCard.sourceRip)
-    var pulls: [OwnedCard]
+Nothing was lost with the model. The sealed `PurchaseItem` **is** the pack: it
+holds the cost, its `childItems` hold nested packs, and its `cards` hold the
+pulls. `RipEvent` only added a date and a second pointer at that item.
 
-    /// Count of cards not individually tracked. No rows created for these.
-    var bulkCount: Int
-}
-```
-
-Rip performance = `sum(market value of pulls) − sealedItem.allocatedCostCents`.
-
-Read rip performance at the **pack** level as well as per card. Under equal split the
-hit shows a large gain and any tracked filler shows small losses; that is an artifact
-of the method. The per-card figure still shows, because it is what he compares a sale
-against (see the amendment in `04`).
+Rip performance is therefore read on the purchase:
+`sum(market value of the sealed item's cards) − sealedItem.allocatedCostCents`.
+Read it there rather than per card. Under any allocation the hit shows a large
+gain and the filler shows small losses, and that is an artifact of the method.
+The per-card figure still shows, because it is what he compares a sale against
+(see the amendment in `04`).
 
 ### Grading
 
@@ -414,17 +421,18 @@ Insights API is limited-release and rarely granted, and as of 2026-07-22 eBay
 redirects signed-out visitors to a login on any sold or completed search. He has a
 Card Ladder subscription and will enter comps by hand.
 
-### Sale
+### Sale and SaleLine
 
-Must reference **either** an owned card or a sealed item — premium collections
-sometimes hold more value unopened than ripped.
+**Amended 2026-09-10.** This section gave `Sale` a single `card`. His real
+ledger disproves it: 30 of his 131 orders carry more than one card and one
+carries 18, because a TCGplayer order is one payment over several cards. So the
+sale holds the money and its lines hold the cards, the way a purchase holds its
+items. A line points at an owned card **or** a sealed item, because a premium
+collection sometimes holds more value unopened than ripped.
 
 ```swift
 @Model final class Sale {
     var id: UUID = UUID()
-    var card: OwnedCard?
-    var sealedItem: PurchaseItem?    // exactly one of these two is set
-
     var soldAt: Date
     var channelRaw: String           // tcgplayer / ebay / whatnot / local
 
@@ -436,16 +444,37 @@ sometimes hold more value unopened than ripped.
     var otherFeesCents: Int
 
     /// eBay orderId / TCGplayer order number. Dedupe key for later import.
+    /// Empty on every imported row — see `04`.
     var externalOrderId: String
+
+    @Relationship(deleteRule: .cascade, inverse: \SaleLine.sale)
+    var lines: [SaleLine]
 
     var netCents: Int {
         grossCents + shippingChargedCents
-            - marketplaceFeesCents - shippingCostCents - otherFeesCents
+            - marketplaceFeesCents - salesTaxCents - shippingCostCents - otherFeesCents
     }
+}
+
+@Model final class SaleLine {
+    var id: UUID = UUID()
+    var sale: Sale?
+    var card: OwnedCard?
+    var sealedItem: PurchaseItem?    // one of these two, or neither
+
+    var basisCents: Int
+    /// True when the cost of what sold is unknown.
+    var basisIncomplete: Bool
+    /// The card's name as the order recorded it. The store holds no card name,
+    /// but a line whose card is unknown has nothing else to show.
+    var describedAs: String
 }
 ```
 
-`realizedGainCents = sale.netCents − card.totalBasisCents`
+`realizedGainCents = sale.netCents − Σ line.basisCents`, and it is **nil when
+any line has no basis**. Many of his older orders record a price and no card at
+all. A sale with an unknown cost must not report a gain, because the gain would
+be the whole price.
 
 ### BulkDisposition
 

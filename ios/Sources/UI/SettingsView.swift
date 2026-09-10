@@ -58,7 +58,7 @@ struct SettingsView: View {
             }
             if let importReport {
                 Section("Last import") {
-                    Text("\(importReport.purchases) purchases, \(importReport.purchaseItems) lines, \(importReport.cards) cards, \(importReport.sessions) sessions. \(importReport.deleted) rows deleted first.")
+                    Text(importReport.summary)
                         .font(.footnote)
                 }
             }

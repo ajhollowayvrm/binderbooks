@@ -10,10 +10,13 @@ import SwiftData
 /// sorted by id so two exports of the same store are byte-identical.
 enum CollectionExport {
     static let format = "cardtracker-collection"
-    /// Version 2 added `OwnedCardDTO.tags` and `basisIsManual`. The gate is `file.version <= version`,
-    /// so a version 1 file still imports. The bump stops an older build from
-    /// importing a tagged file and dropping every label in silence.
-    static let version = 2
+    /// Version 2 added `OwnedCardDTO.tags` and `basisIsManual`. Version 3 added
+    /// rips, grading, sales, and the `sourceRef` that ties an imported row back
+    /// to the BinderBooks ledger. Version 4 removed the rip: opening a pack is
+    /// an intake path, not a record. A version 3 file still imports and its
+    /// `rips` array is ignored, because `JSONDecoder` drops a key the struct
+    /// does not declare. The gate is `file.version <= version`.
+    static let version = 4
 
     struct File: Codable, Equatable {
         var format: String = CollectionExport.format
@@ -23,9 +26,19 @@ enum CollectionExport {
         var purchaseItems: [PurchaseItemDTO]
         var cards: [OwnedCardDTO]
         var sessions: [ScanSessionDTO]
+        /// Optional, like `OwnedCardDTO.tags`: the synthesised decoder throws
+        /// `keyNotFound` for a non-optional property, so a version 2 file would
+        /// stop importing the day these arrived.
+        var grading: [GradingSubmissionDTO]?
+        var gradingEntries: [GradingEntryDTO]?
+        var sales: [SaleDTO]?
+        var saleLines: [SaleLineDTO]?
 
         var counts: String {
-            "\(purchases.count) purchases, \(purchaseItems.count) lines, \(cards.count) cards, \(sessions.count) sessions"
+            var parts = ["\(purchases.count) purchases", "\(purchaseItems.count) lines", "\(cards.count) cards", "\(sessions.count) sessions"]
+            if let grading, !grading.isEmpty { parts.append("\(grading.count) submissions") }
+            if let sales, !sales.isEmpty { parts.append("\(sales.count) sales") }
+            return parts.joined(separator: ", ")
         }
     }
 
@@ -40,6 +53,7 @@ enum CollectionExport {
         var taxCents: Int
         var feesCents: Int
         var allocationMethodRaw: String
+        var sourceRef: String?
     }
 
     struct PurchaseItemDTO: Codable, Equatable {
@@ -81,10 +95,62 @@ enum CollectionExport {
         var ocrNumber: String?
         var candidateProductIds: [Int]
         var scannedAt: Date
+        var gradedCompCents: [String: Int]?
+        var sourceRef: String?
         /// Optional on purpose. The synthesised decoder calls `decode` for a
         /// non-optional property and throws `keyNotFound`, so a non-optional
         /// field would make every file written before tags unimportable.
         var tags: [String]?
+    }
+
+    struct GradingSubmissionDTO: Codable, Equatable {
+        var id: UUID
+        var graderRaw: String
+        var submissionNumber: String
+        var serviceLevel: String
+        var declaredValueCents: Int
+        var shippedAt: Date?
+        var returnedAt: Date?
+        var gradingFeesCents: Int
+        var shipToGraderCents: Int
+        var shipReturnCents: Int
+        var insuranceCents: Int
+        var sourceRef: String?
+    }
+
+    struct GradingEntryDTO: Codable, Equatable {
+        var id: UUID
+        var submissionId: UUID?
+        var cardId: UUID?
+        var grade: Double?
+        var certNumber: String
+        var allocatedFeeCents: Int
+        var noGrade: Bool
+    }
+
+    struct SaleDTO: Codable, Equatable {
+        var id: UUID
+        var soldAt: Date
+        var channelRaw: String
+        var grossCents: Int
+        var marketplaceFeesCents: Int
+        var salesTaxCents: Int
+        var shippingChargedCents: Int
+        var shippingCostCents: Int
+        var otherFeesCents: Int
+        var externalOrderId: String
+        var sourceRef: String?
+    }
+
+    struct SaleLineDTO: Codable, Equatable {
+        var id: UUID
+        var saleId: UUID?
+        var cardId: UUID?
+        var sealedItemId: UUID?
+        var basisCents: Int
+        var basisIncomplete: Bool
+        var describedAs: String
+        var sourceRef: String?
     }
 
     struct ScanSessionDTO: Codable, Equatable {
@@ -121,7 +187,21 @@ enum CollectionExport {
         var purchaseItems = 0
         var cards = 0
         var sessions = 0
+        var grading = 0
+        var gradingEntries = 0
+        var sales = 0
+        var saleLines = 0
         var deleted = 0
+
+        /// What the import wrote, leaving out anything the file did not carry.
+        var summary: String {
+            var parts = ["\(purchases) purchases", "\(purchaseItems) lines", "\(cards) cards", "\(sessions) sessions"]
+            if grading > 0 { parts.append("\(grading) submissions") }
+            if gradingEntries > 0 { parts.append("\(gradingEntries) grading entries") }
+            if sales > 0 { parts.append("\(sales) sales") }
+            if saleLines > 0 { parts.append("\(saleLines) sale lines") }
+            return parts.joined(separator: ", ") + ". \(deleted) rows deleted first."
+        }
     }
 
     // MARK: - Export
@@ -132,6 +212,10 @@ enum CollectionExport {
         let items = try context.fetch(FetchDescriptor<PurchaseItem>())
         let cards = try context.fetch(FetchDescriptor<OwnedCard>())
         let sessions = try context.fetch(FetchDescriptor<ScanSession>())
+        let grading = try context.fetch(FetchDescriptor<GradingSubmission>())
+        let gradingEntries = try context.fetch(FetchDescriptor<GradingEntry>())
+        let sales = try context.fetch(FetchDescriptor<Sale>())
+        let saleLines = try context.fetch(FetchDescriptor<SaleLine>())
 
         return File(
             exportedAt: ISO8601DateFormatter().string(from: now),
@@ -139,7 +223,7 @@ enum CollectionExport {
                 PurchaseDTO(
                     id: $0.id, date: $0.date, vendor: $0.vendor, note: $0.note, receiptImageData: $0.receiptImageData,
                     itemCostCents: $0.itemCostCents, shippingCents: $0.shippingCents, taxCents: $0.taxCents,
-                    feesCents: $0.feesCents, allocationMethodRaw: $0.allocationMethodRaw
+                    feesCents: $0.feesCents, allocationMethodRaw: $0.allocationMethodRaw, sourceRef: $0.sourceRef
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString },
             purchaseItems: items.map {
@@ -158,13 +242,44 @@ enum CollectionExport {
                     isBulk: $0.isBulk, isPersonalCollection: $0.isPersonalCollection,
                     sourceItemId: $0.sourceItem?.id, scanSessionId: $0.scanSession?.id, matchConfidenceRaw: $0.matchConfidenceRaw,
                     certNumber: $0.certNumber, graderRaw: $0.graderRaw, ocrName: $0.ocrName, ocrNumber: $0.ocrNumber,
-                    candidateProductIds: $0.candidateProductIds, scannedAt: $0.scannedAt, tags: $0.tags
+                    candidateProductIds: $0.candidateProductIds, scannedAt: $0.scannedAt,
+                    gradedCompCents: $0.gradedCompCents, sourceRef: $0.sourceRef,
+                    tags: $0.tags
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString },
             sessions: sessions.map {
                 ScanSessionDTO(
                     id: $0.id, startedAt: $0.startedAt, committedAt: $0.committedAt, defaultCondition: $0.defaultCondition,
                     defaultPrinting: $0.defaultPrinting, purchaseId: $0.purchase?.id, observedGroupIds: $0.observedGroupIds
+                )
+            }.sorted { $0.id.uuidString < $1.id.uuidString },
+            grading: grading.map {
+                GradingSubmissionDTO(
+                    id: $0.id, graderRaw: $0.graderRaw, submissionNumber: $0.submissionNumber, serviceLevel: $0.serviceLevel,
+                    declaredValueCents: $0.declaredValueCents, shippedAt: $0.shippedAt, returnedAt: $0.returnedAt,
+                    gradingFeesCents: $0.gradingFeesCents, shipToGraderCents: $0.shipToGraderCents,
+                    shipReturnCents: $0.shipReturnCents, insuranceCents: $0.insuranceCents, sourceRef: $0.sourceRef
+                )
+            }.sorted { $0.id.uuidString < $1.id.uuidString },
+            gradingEntries: gradingEntries.map {
+                GradingEntryDTO(
+                    id: $0.id, submissionId: $0.submission?.id, cardId: $0.card?.id, grade: $0.grade,
+                    certNumber: $0.certNumber, allocatedFeeCents: $0.allocatedFeeCents, noGrade: $0.noGrade
+                )
+            }.sorted { $0.id.uuidString < $1.id.uuidString },
+            sales: sales.map {
+                SaleDTO(
+                    id: $0.id, soldAt: $0.soldAt, channelRaw: $0.channelRaw, grossCents: $0.grossCents,
+                    marketplaceFeesCents: $0.marketplaceFeesCents, salesTaxCents: $0.salesTaxCents,
+                    shippingChargedCents: $0.shippingChargedCents, shippingCostCents: $0.shippingCostCents,
+                    otherFeesCents: $0.otherFeesCents, externalOrderId: $0.externalOrderId, sourceRef: $0.sourceRef
+                )
+            }.sorted { $0.id.uuidString < $1.id.uuidString },
+            saleLines: saleLines.map {
+                SaleLineDTO(
+                    id: $0.id, saleId: $0.sale?.id, cardId: $0.card?.id, sealedItemId: $0.sealedItem?.id,
+                    basisCents: $0.basisCents, basisIncomplete: $0.basisIncomplete, describedAs: $0.describedAs,
+                    sourceRef: $0.sourceRef
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString }
         )
@@ -203,6 +318,10 @@ enum CollectionExport {
         var report = Report()
 
         if mode == .replace {
+            for line in try context.fetch(FetchDescriptor<SaleLine>()) { context.delete(line); report.deleted += 1 }
+            for sale in try context.fetch(FetchDescriptor<Sale>()) { context.delete(sale); report.deleted += 1 }
+            for entry in try context.fetch(FetchDescriptor<GradingEntry>()) { context.delete(entry); report.deleted += 1 }
+            for submission in try context.fetch(FetchDescriptor<GradingSubmission>()) { context.delete(submission); report.deleted += 1 }
             for card in try context.fetch(FetchDescriptor<OwnedCard>()) { context.delete(card); report.deleted += 1 }
             for item in try context.fetch(FetchDescriptor<PurchaseItem>()) { context.delete(item); report.deleted += 1 }
             for session in try context.fetch(FetchDescriptor<ScanSession>()) { context.delete(session); report.deleted += 1 }
@@ -214,6 +333,10 @@ enum CollectionExport {
         var sessions = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<ScanSession>()).map { ($0.id, $0) })
         var items = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<PurchaseItem>()).map { ($0.id, $0) })
         var cards = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<OwnedCard>()).map { ($0.id, $0) })
+        var submissions = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<GradingSubmission>()).map { ($0.id, $0) })
+        var entries = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<GradingEntry>()).map { ($0.id, $0) })
+        var sales = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<Sale>()).map { ($0.id, $0) })
+        var saleLines = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<SaleLine>()).map { ($0.id, $0) })
 
         for dto in file.purchases {
             let purchase = purchases[dto.id] ?? {
@@ -232,6 +355,7 @@ enum CollectionExport {
             purchase.taxCents = dto.taxCents
             purchase.feesCents = dto.feesCents
             purchase.allocationMethodRaw = dto.allocationMethodRaw
+            purchase.sourceRef = dto.sourceRef ?? ""
             report.purchases += 1
         }
 
@@ -306,7 +430,87 @@ enum CollectionExport {
             card.candidateProductIds = dto.candidateProductIds
             card.scannedAt = dto.scannedAt
             card.tags = dto.tags ?? []
+            card.gradedCompCents = dto.gradedCompCents ?? [:]
+            card.sourceRef = dto.sourceRef ?? ""
             report.cards += 1
+        }
+
+        for dto in file.grading ?? [] {
+            let submission = submissions[dto.id] ?? {
+                let g = GradingSubmission(graderRaw: dto.graderRaw)
+                g.id = dto.id
+                context.insert(g)
+                submissions[dto.id] = g
+                return g
+            }()
+            submission.graderRaw = dto.graderRaw
+            submission.submissionNumber = dto.submissionNumber
+            submission.serviceLevel = dto.serviceLevel
+            submission.declaredValueCents = dto.declaredValueCents
+            submission.shippedAt = dto.shippedAt
+            submission.returnedAt = dto.returnedAt
+            submission.gradingFeesCents = dto.gradingFeesCents
+            submission.shipToGraderCents = dto.shipToGraderCents
+            submission.shipReturnCents = dto.shipReturnCents
+            submission.insuranceCents = dto.insuranceCents
+            submission.sourceRef = dto.sourceRef ?? ""
+            report.grading += 1
+        }
+
+        for dto in file.gradingEntries ?? [] {
+            let entry = entries[dto.id] ?? {
+                let e = GradingEntry()
+                e.id = dto.id
+                context.insert(e)
+                entries[dto.id] = e
+                return e
+            }()
+            entry.submission = dto.submissionId.flatMap { submissions[$0] }
+            entry.card = dto.cardId.flatMap { cards[$0] }
+            entry.grade = dto.grade
+            entry.certNumber = dto.certNumber
+            entry.allocatedFeeCents = dto.allocatedFeeCents
+            entry.noGrade = dto.noGrade
+            report.gradingEntries += 1
+        }
+
+        for dto in file.sales ?? [] {
+            let sale = sales[dto.id] ?? {
+                let s = Sale(channelRaw: dto.channelRaw)
+                s.id = dto.id
+                context.insert(s)
+                sales[dto.id] = s
+                return s
+            }()
+            sale.soldAt = dto.soldAt
+            sale.channelRaw = dto.channelRaw
+            sale.grossCents = dto.grossCents
+            sale.marketplaceFeesCents = dto.marketplaceFeesCents
+            sale.salesTaxCents = dto.salesTaxCents
+            sale.shippingChargedCents = dto.shippingChargedCents
+            sale.shippingCostCents = dto.shippingCostCents
+            sale.otherFeesCents = dto.otherFeesCents
+            sale.externalOrderId = dto.externalOrderId
+            sale.sourceRef = dto.sourceRef ?? ""
+            report.sales += 1
+        }
+
+        for dto in file.saleLines ?? [] {
+            let line = saleLines[dto.id] ?? {
+                let l = SaleLine()
+                l.id = dto.id
+                context.insert(l)
+                saleLines[dto.id] = l
+                return l
+            }()
+            line.sale = dto.saleId.flatMap { sales[$0] }
+            line.card = dto.cardId.flatMap { cards[$0] }
+            line.sealedItem = dto.sealedItemId.flatMap { items[$0] }
+            line.basisCents = dto.basisCents
+            line.basisIncomplete = dto.basisIncomplete
+            line.describedAs = dto.describedAs
+            line.sourceRef = dto.sourceRef ?? ""
+            report.saleLines += 1
         }
 
         try context.save()
