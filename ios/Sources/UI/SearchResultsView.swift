@@ -30,9 +30,6 @@ struct SearchResultsView: View {
         .task(id: recents.productIds) {
             await loadRecents()
         }
-        .navigationDestination(for: SearchHit.self) { hit in
-            ProductDetailView(productId: hit.productId)
-        }
     }
 
     @ViewBuilder

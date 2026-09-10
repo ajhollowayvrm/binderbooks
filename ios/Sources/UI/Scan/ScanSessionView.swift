@@ -168,10 +168,24 @@ struct ScanSessionView: View {
         for entry in raw.split(separator: ";") {
             model.simulate(String(entry))
         }
-        if ProcessInfo.processInfo.environment["CT_OPEN_REVIEW"] == "1" {
+        let env = ProcessInfo.processInfo.environment
+        if env["CT_OPEN_REVIEW"] == "1" {
             Task {
                 while model.inFlight > 0 { try? await Task.sleep(for: .milliseconds(100)) }
                 showReview = true
+            }
+        }
+        // `CT_AUTO_COMMIT="Walmart|4997"` commits the simulated session to a new
+        // purchase with that vendor and total in cents, then closes the scanner.
+        if let spec = env["CT_AUTO_COMMIT"] {
+            let parts = spec.split(separator: "|")
+            Task {
+                while model.inFlight > 0 { try? await Task.sleep(for: .milliseconds(100)) }
+                try? await Task.sleep(for: .milliseconds(500))
+                let purchase = Purchase(vendor: String(parts.first ?? "Debug"), itemCostCents: parts.count > 1 ? Int(parts[1]) ?? 0 : 0)
+                modelContext.insert(purchase)
+                model.commit(to: purchase)
+                onClose()
             }
         }
         #endif

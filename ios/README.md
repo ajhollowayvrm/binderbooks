@@ -27,6 +27,7 @@ iOS 26.0. Every simulator on the Mac and the phone run iOS 26. The data model in
 | `Sources/Catalog/` | Step 2: manifest, download, checksum, gunzip, sanity checks, atomic swap. |
 | `Sources/Model/` | The collection store: `Purchase`, `PurchaseItem`, `OwnedCard`, `ScanSession` in SwiftData, and the allocator. |
 | `Sources/Scan/` | Step 4: the VisionKit scanner, the frame interpreter, the matcher, the printing rules, and the session model. |
+| `Sources/Inventory/` | Step 5: the inventory model, filters, and summary. |
 | `Sources/Search/` | Step 3: the query builder, the ranker, the engine, the debounced model, and recently viewed. |
 | `Sources/UI/` | The shell, the results list, the filter chips, the set picker sheet, the product detail, the first-run download screen, and the catalog status screen. |
 | `Tests/` | Swift Testing suites. No network. |
@@ -67,12 +68,6 @@ one set chosen from a searchable sheet. An empty query with a set chosen browses
 that set in number order. An empty query with no filter shows recently viewed
 products.
 
-For a screenshot or a timing run, pre-fill the field:
-
-```sh
-SIMCTL_CHILD_CT_SEARCH_QUERY="legendary warriors" xcrun simctl launch booted com.ajholloway.cardtracker
-```
-
 ## Scan session
 
 `ScanSessionView` runs VisionKit's `DataScannerViewController` with live text in
@@ -96,20 +91,50 @@ non-bulk lines, and writes each card's basis with `basisIsAllocated` set. A card
 inventory once its session commits.
 
 The simulator has no camera. Debug builds show a text field in the viewfinder that
-feeds the same path, and these launch variables drive it for screenshots:
-
-```sh
-SIMCTL_CHILD_CT_OPEN_SCANNER=1 \
-SIMCTL_CHILD_CT_SIMULATE_SCANS="Mega Zeraora ex 114/084;Charizard 4/102" \
-SIMCTL_CHILD_CT_OPEN_REVIEW=1 \
-xcrun simctl launch booted com.ajholloway.cardtracker
-```
+feeds the same path. See the debug launch variables below.
 
 Known behavior worth knowing: a card that TCGplayer lists several times with the
 same name and number, such as a main-set print, a Prize Pack reprint, and a stamped
 copy in Miscellaneous, lands uncertain on the first sighting. TCGCSV's supplemental
 flag does not separate those groups. The session bias resolves later cards in the
 same run.
+
+## Inventory
+
+`InventoryView` lists committed cards newest first with market value from the
+catalog, the basis, and the difference. Filters are chips: set, status, uncertain,
+slabs, hide bulk, personal. Graded cards render as a small slab with the grader and
+cert number on the label. The detail screen shows the basis breakdown, the source
+purchase, and the edits that need no other model.
+
+A card whose basis the allocator wrote shows "alloc." instead of a gain or a loss,
+and the summary's unrealized figure covers priced cards only. That follows docs/04:
+a rip pull's per-card basis is an artifact.
+
+## Export and import
+
+Settings prepares the export when the screen opens, so exporting is one tap into
+the share sheet. The file holds every purchase, line, card, and session, with
+relationships as UUIDs and dates as seconds since the reference date, sorted by id.
+Two exports of the same store are byte-identical, and importing an export then
+exporting again reproduces the file exactly. Import offers merge, which upserts by
+id, and replace, which empties the store first and asks twice. The catalog is not in
+the file.
+
+## Debug launch variables
+
+The simulator cannot type or tap for a script, so debug builds read these on launch:
+
+| Variable | Effect |
+|---|---|
+| `CT_SEARCH_QUERY` | Pre-fills the search field. |
+| `CT_OPEN_SCANNER=1` | Opens the scan session once the catalog is ready. |
+| `CT_SIMULATE_SCANS` | Feeds `Name number` entries separated by `;` through the matcher. |
+| `CT_OPEN_REVIEW=1` | Opens review after the simulated scans settle. |
+| `CT_AUTO_COMMIT="Vendor\|cents"` | Commits the session to a new purchase and closes the scanner. |
+| `CT_OPEN_INVENTORY=1` | Pushes the inventory view. |
+
+Prefix each with `SIMCTL_CHILD_` on `xcrun simctl launch`.
 
 ## Dependencies
 

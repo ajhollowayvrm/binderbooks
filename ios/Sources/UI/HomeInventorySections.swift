@@ -18,7 +18,25 @@ struct HomeInventorySections: View {
         cards.filter { $0.isCommitted && $0.matchConfidence == .uncertain }.prefix(20).map { $0 }
     }
 
+    private var inventoryCount: Int { cards.filter(\.isCommitted).count }
+
     var body: some View {
+        if inventoryCount > 0 {
+            Section {
+                NavigationLink {
+                    InventoryView()
+                } label: {
+                    HStack {
+                        Image(systemName: "tray.full")
+                        Text("Inventory")
+                        Spacer()
+                        Text("\(inventoryCount) cards")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+
         if let open = openSessions.first {
             Section {
                 Button(action: onResumeSession) {

@@ -18,6 +18,6 @@ pipeline, the data model, the Phase 1 build spec, and the seed import plan.
 
 ## Status
 
-Phase 1, steps 1 to 4 are done: the catalog pipeline, the on-device download and
-swap, search, and the scan session with review and commit. The next steps are the
-inventory view and JSON export. See `docs/03-phase1-search-and-scan.md`.
+Phase 1 is built: the catalog pipeline, the on-device download and swap, search,
+the scan session with review and commit, the inventory view, and JSON export and
+import. The live scanner has not run on a phone yet. See `ios/README.md`.

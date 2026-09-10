@@ -12,6 +12,7 @@ struct RootView: View {
     @State private var search = SearchModel(context: .browsing)
     @State private var recents = RecentlyViewed()
     @State private var activeSession: ScanSession?
+    @State private var pushInventory = false
 
     var body: some View {
         @Bindable var search = search
@@ -25,13 +26,27 @@ struct RootView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink {
+                        InventoryView()
+                    } label: {
+                        Label("Inventory", systemImage: "tray.full")
+                    }
+                    .disabled(!catalog.isReady)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
-                        CatalogStatusView()
+                        SettingsView()
                     } label: {
-                        Label("Catalog", systemImage: "externaldrive")
+                        Label("Settings", systemImage: "gearshape")
                     }
                 }
+            }
+            .navigationDestination(for: SearchHit.self) { hit in
+                ProductDetailView(productId: hit.productId)
+            }
+            .navigationDestination(isPresented: $pushInventory) {
+                InventoryView()
             }
         }
         .environment(recents)
@@ -73,6 +88,12 @@ struct RootView: View {
         let env = ProcessInfo.processInfo.environment
         if let query = env["CT_SEARCH_QUERY"], search.text.isEmpty {
             search.text = query
+        }
+        if env["CT_OPEN_INVENTORY"] == "1" {
+            Task {
+                while !catalog.isReady { try? await Task.sleep(for: .milliseconds(200)) }
+                pushInventory = true
+            }
         }
         if env["CT_OPEN_SCANNER"] == "1" {
             Task {
