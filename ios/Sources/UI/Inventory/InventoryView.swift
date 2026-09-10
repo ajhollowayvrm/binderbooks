@@ -58,10 +58,8 @@ struct InventoryView: View {
             // same room.
             if isSelecting {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        isSelecting = false
-                        selection = []
-                    }
+                    Button("Done") { endSelection() }
+                        .transition(.opacity.combined(with: .scale(scale: 0.7)))
                 }
             }
             ToolbarItemGroup(placement: .bottomBar) {
@@ -135,8 +133,15 @@ struct InventoryView: View {
             // `CT_SELECT_ALL=1` enters selection with every row ticked, because
             // simctl cannot long press.
             if env["CT_SELECT_ALL"] == "1" {
-                isSelecting = true
-                selection = Set(rows.map(\.card.id))
+                // Late and animated on purpose: a screen recording then catches
+                // the same transition a long press produces.
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    withAnimation(.snappy(duration: 0.28)) {
+                        isSelecting = true
+                        selection = Set(rows.map(\.card.id))
+                    }
+                }
             }
             #endif
         }
@@ -176,11 +181,7 @@ struct InventoryView: View {
                             isSelecting: isSelecting,
                             selection: selection,
                             onToggle: toggleSelection,
-                            onLongPress: { id in
-                                guard !isSelecting else { return }
-                                isSelecting = true
-                                selection = [id]
-                            }
+                            onLongPress: beginSelection
                         )
                             .padding(.horizontal, 12)
                             .padding(.top, 12)
@@ -210,6 +211,8 @@ struct InventoryView: View {
                 HStack(spacing: 10) {
                     Image(systemName: selection.contains(row.card.id) ? "checkmark.circle.fill" : "circle")
                         .foregroundStyle(selection.contains(row.card.id) ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                        .contentTransition(.symbolEffect(.replace))
+                        .transition(.move(edge: .leading).combined(with: .opacity))
                     OwnedCardRow(row: row)
                 }
             }
@@ -227,9 +230,7 @@ struct InventoryView: View {
     /// Selection starts on a long press, with that card already ticked.
     private func longPress(_ id: UUID) -> some Gesture {
         LongPressGesture(minimumDuration: 0.4).onEnded { _ in
-            guard !isSelecting else { return }
-            isSelecting = true
-            selection = [id]
+            beginSelection(id)
         }
     }
 
@@ -285,7 +286,27 @@ struct InventoryView: View {
     private var isFiltered: Bool { model.filter.isActive || !query.isEmpty }
 
     private func toggleSelection(_ id: UUID) {
-        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+        withAnimation(.snappy(duration: 0.15)) {
+            if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+        }
+    }
+
+    /// The long press lands here. One animation covers the Done button, the
+    /// bottom bar, and every mark on the cards, so selection mode arrives as
+    /// one movement instead of three pops.
+    private func beginSelection(_ id: UUID) {
+        guard !isSelecting else { return }
+        withAnimation(.snappy(duration: 0.28)) {
+            isSelecting = true
+            selection = [id]
+        }
+    }
+
+    private func endSelection() {
+        withAnimation(.snappy(duration: 0.28)) {
+            isSelecting = false
+            selection = []
+        }
     }
 
     private func loadRecents() async {

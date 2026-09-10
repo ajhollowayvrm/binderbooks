@@ -128,12 +128,17 @@ struct OwnedCardCard: View {
                     .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
                     .background(Circle().fill(.black.opacity(isSelected ? 0 : 0.25)))
                     .padding(4)
+                    // The mark morphs between the two symbols, and scales in
+                    // from the corner it sits in.
+                    .contentTransition(.symbolEffect(.replace))
+                    .transition(.scale(scale: 0.4, anchor: .topTrailing).combined(with: .opacity))
             }
         }
         .overlay {
             if isSelecting, isSelected {
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(.tint, lineWidth: 3)
+                    .transition(.opacity)
             }
         }
     }
