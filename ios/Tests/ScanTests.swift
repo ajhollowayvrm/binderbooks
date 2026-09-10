@@ -43,6 +43,30 @@ import Testing
         #expect(FrameInterpreter.nameCandidate(items, excluding: nil) == "Charizard")
     }
 
+    /// The Sableye that failed on the phone, at its measured proportions. A
+    /// still holds the whole desk, so the name is the tallest line on the card
+    /// rather than the highest line in the frame.
+    @Test func theTallestLineWinsWhenTheNameIsNotTheHighestThing() {
+        let items = [
+            item("Sableye", top: 0.278, height: 0.043),
+            item("Scratch", top: 0.789, height: 0.032),
+            item("Lost Mine", top: 0.877, height: 0.029),
+            item("only if you have 10 or more cards in", top: 0.910, height: 0.031),
+        ]
+        #expect(FrameInterpreter.nameCandidate(items, excluding: nil) == "Sableye")
+    }
+
+    /// Text above the card in the photo must not become the card's name.
+    @Test func somethingElseOnTheDeskIsNotTheCardName() {
+        let items = [
+            item("Triumph", top: 0.02, height: 0.012),
+            item("caps lock", top: 0.05, height: 0.010),
+            item("Sableye", top: 0.278, height: 0.043),
+            item("Scratch", top: 0.789, height: 0.032),
+        ]
+        #expect(FrameInterpreter.nameCandidate(items, excluding: nil) == "Sableye")
+    }
+
     @Test func nameComesFromTheHPLineWhenVisionMergesThem() {
         let items = [
             item("Basic", top: 0.02, height: 0.02),

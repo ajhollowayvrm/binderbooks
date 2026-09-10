@@ -132,6 +132,35 @@ to need a spinner, something is wrong — investigate rather than adding the spi
 
 ### Recognition
 
+**Manual mode logs what the last second of frames agreed on.** Added
+2026-09-10. A shutter tap does not read one frame; it reads the window.
+`ObservationAccumulator` keeps about 1.2 seconds of readings and takes the value
+most frames agree on, with the most recent breaking a tie. The collector number
+only has to land in one frame, the name and the number need not arrive in the
+same frame, and a single stray reading loses the vote.
+
+That replaced a still photo, which read the card better and cost too much. The
+history is worth keeping, because both failures it fixed are now regression
+tests:
+
+- The live frame read the attack name `Scratch` instead of `Sableye`, which
+  matched a Japanese Scramble Switch.
+- The live frame read a set total of `195` off a card printed `196`, which
+  matched a Mawile V in another set.
+
+The name rule (tallest line, not topmost) and the matcher's name-only bar fixed
+the wrong-card half. The accumulator fixes the missed-read half without a still.
+
+**`capturePhoto()` ends the scanner**, which is why the still is now only a
+fallback for a shutter tap that read nothing at all. It parks the preview on the
+frame it took and leaves the session in a state `stopScanning()` and
+`startScanning()` cannot recover; the controller keeps reporting `isScanning`
+while nothing moves. Only a fresh `DataScannerViewController` brings the camera
+back, so `ScanSessionView` bumps the view's `id` — and now only when a still was
+actually taken. If manual mode ever needs a still on every tap, run an
+`AVCaptureSession` with `AVCapturePhotoOutput` instead and keep VisionKit for
+automatic: more code, and it owns the session so a photo cannot kill it.
+
 `DataScannerViewController` (VisionKit) for live text. Declare recognition languages
 explicitly: **`en` and `ja`**.
 
@@ -172,6 +201,32 @@ key across the whole catalog — no set symbol, no set selection.
      one clear winner         -> .likely
      several                  -> .uncertain, attach candidates for the chip
 ```
+
+**A name on its own must be a strong match.** When no number is read at all,
+the name is the entire decision, and a loose match becomes a wrong card. Dice
+similarity must clear **0.75**, not the 0.5 used when a number agrees. Below
+that, assign nothing and show the candidates.
+
+This came off a real failure on 2026-09-10. A Sableye was held with a finger
+over `070/196`, so no number was read; the name picker fell through to the
+attack name `Scratch`; and `scratch` against `scramble switch` scores 0.53. The
+card was logged twice as a Japanese trainer from Start Deck 100.
+
+**The catalog says which line is the name.** Added 2026-09-10, on AJ's
+suggestion: the catalog holds every card name there is, so membership settles
+what no rule about position or size can. The interpreter stops choosing. It
+offers up to four lines — a line carrying the HP first, then the tallest, then
+the highest — and the matcher takes the first that `product.cleanName` actually
+holds. `Sableye` is a card and `Scratch` is not, so the attack loses however
+large it is printed and wherever it sits.
+
+`isACardName` is one indexed lookup per line against `idx_product_clean`. When
+no line names a real card, the matcher falls back to the closest fuzzy match,
+because OCR misreads a name about as often as it reads the wrong line.
+
+This replaced `isPlausibleName` as the thing that matters. That blocklist is
+still there to drop obvious furniture — `BASIC`, `Stage 1`, the copyright line
+— but it never had to be complete, and now it does not have to be right either.
 
 **The name can veto the number.** Many sets share a printed total, so a misread
 denominator lands on a real card with the wrong name. Three rules:

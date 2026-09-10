@@ -34,6 +34,15 @@ struct ScannerView: UIViewControllerRepresentable {
     var onObservation: (ScanObservation) -> Void
     /// Manual mode, shutter tapped, nothing readable in view.
     var onNothingToCapture: () -> Void = {}
+    /// The shutter is working. A still and a careful read take a moment, and a
+    /// shutter that looks dead gets tapped again.
+    var onCaptureBegan: () -> Void = {}
+    /// True when a still was taken, so the caller must rebuild the scanner.
+    var onCaptureEnded: (Bool) -> Void = { _ in }
+    /// Manual mode, a card was logged from its name alone. The number is the
+    /// strongest key the scanner has, and a name on its own often cannot say
+    /// which printing of a card he is holding.
+    var onCapturedWithoutNumber: () -> Void = {}
 
     static var isSupported: Bool {
         DataScannerViewController.isSupported && DataScannerViewController.isAvailable
@@ -62,8 +71,19 @@ struct ScannerView: UIViewControllerRepresentable {
         context.coordinator.mode = mode
         if captureCount != context.coordinator.handledCaptureCount {
             context.coordinator.handledCaptureCount = captureCount
-            if !context.coordinator.captureNow() {
-                onNothingToCapture()
+            let coordinator = context.coordinator
+            let nothing = onNothingToCapture
+            let withoutNumber = onCapturedWithoutNumber
+            let ended = onCaptureEnded
+            onCaptureBegan()
+            Task { @MainActor in
+                let (outcome, usedStill) = await coordinator.captureNow()
+                ended(usedStill)
+                switch outcome {
+                case .nothing: nothing()
+                case .withoutNumber: withoutNumber()
+                case .complete: break
+                }
             }
         }
         if isActive, !scanner.isScanning {
@@ -81,6 +101,7 @@ struct ScannerView: UIViewControllerRepresentable {
         Coordinator(onObservation: onObservation)
     }
 
+    @MainActor
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {
         var onObservation: (ScanObservation) -> Void
         weak var scanner: DataScannerViewController?
@@ -91,14 +112,72 @@ struct ScannerView: UIViewControllerRepresentable {
         /// Barcodes already turned into a slab. Cleared when the item leaves.
         private var consumedBarcodes: Set<UUID> = []
         private var gate = DuplicateGate()
-        /// What the last frame read. Manual mode captures this on demand.
+        /// What the last frame read. The fallback when nothing accumulated.
         private var latest: ScanObservation = ScanObservation()
+        /// What the last second of frames agreed on. This is what the shutter
+        /// logs, because one frame is not a reliable read of small print.
+        private var accumulator = ObservationAccumulator()
 
-        /// Manual mode: log the card in view. False when no number was read.
-        func captureNow() -> Bool {
-            guard latest.number != nil || latest.name != nil else { return false }
-            onObservation(latest)
-            return true
+        enum CaptureOutcome {
+            /// Nothing readable was in view.
+            case nothing
+            /// Logged, but from the name alone.
+            case withoutNumber
+            case complete
+        }
+
+        /// Manual mode: log what the last second of frames agreed on.
+        ///
+        /// This used to photograph the card. A still read it better, but
+        /// `capturePhoto()` kills the preview and only a fresh controller
+        /// brings it back, so every capture cost a camera warm-up. Merging
+        /// frames gets the same resilience for nothing: the number only has to
+        /// land in one frame of the window, and one stray reading is outvoted.
+        func captureNow() async -> (outcome: CaptureOutcome, usedStill: Bool) {
+            var observation = accumulator.merged()
+            if observation.isEmpty { observation = latest }
+
+            // The one case worth a still: the frames agreed on nothing at all.
+            var usedStill = false
+            if observation.isEmpty, let still = await stillObservation() {
+                observation = still
+                usedStill = true
+            }
+
+            guard observation.number != nil || observation.name != nil || observation.certNumber != nil else {
+                return (.nothing, usedStill)
+            }
+            onObservation(observation)
+            // The card is logged. Start the next one from a clean slate rather
+            // than letting this one's readings vote on it.
+            accumulator.reset()
+            let outcome: CaptureOutcome = observation.number == nil && observation.certNumber == nil ? .withoutNumber : .complete
+            return (outcome, usedStill)
+        }
+
+        /// Nil when there is no photo to read, or nothing readable on it.
+        private func stillObservation() async -> ScanObservation? {
+            guard let scanner else { return nil }
+            do {
+                let photo = try await scanner.capturePhoto()
+                guard let cg = photo.cgImage else { return nil }
+                var observation = FrameInterpreter.interpret(try await StillFrameReader.read(cg)).observation
+
+                // The collector number is the smallest print on the card, and
+                // the downscale that makes the read fast is what loses it. It
+                // is the strongest key the scanner has, so when it is missing
+                // the full-resolution photo is worth one more pass.
+                if observation.number == nil {
+                    let full = FrameInterpreter.interpret(try await StillFrameReader.read(cg, longestSide: nil)).observation
+                    if full.number != nil {
+                        observation.number = full.number
+                        if observation.name == nil { observation.name = full.name }
+                    }
+                }
+                return observation.isEmpty ? nil : observation
+            } catch {
+                return nil
+            }
         }
 
         init(onObservation: @escaping (ScanObservation) -> Void) {
@@ -141,6 +220,7 @@ struct ScannerView: UIViewControllerRepresentable {
 
             let (observation, _) = FrameInterpreter.interpret(texts)
             latest = observation
+            accumulator.add(observation)
             switch mode {
             case .automatic:
                 if gate.shouldAccept(observation.number) {

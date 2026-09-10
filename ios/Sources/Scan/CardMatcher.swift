@@ -28,6 +28,15 @@ struct CardMatcher: Sendable {
     let database: CatalogDatabase
 
     static let nameAgreement = 0.5
+    /// The bar a name must clear when it is the **only** signal.
+    ///
+    /// With no number, a loose name match is the whole decision, and a loose
+    /// match is how an attack name became a card. "Scratch" against
+    /// "Scramble Switch" scores 0.53 and cleared `nameAgreement`, so a Sableye
+    /// was logged twice as a Japanese trainer. Below this bar the matcher
+    /// assigns nothing and the chip asks. docs/03: a wrong card that looks
+    /// confident is worse than a card marked unknown.
+    static let nameOnlyAgreement = 0.75
     static let clearWinnerGap = 0.25
     static let recentBias = 0.3
     /// Added when the number and the name pick the same card.
@@ -43,21 +52,13 @@ struct CardMatcher: Sendable {
 
     static func match(_ db: Database, observation: ScanObservation, bias: [Int], defaultPrinting: String?) throws -> MatchResult {
         let parsed = CollectorNumber.parse(observation.number)
-        let cleanedName = observation.name.map(NameCleaner.clean).flatMap { $0.isEmpty ? nil : $0 }
-
         let numberHits = try numberCandidates(db, parsed: parsed)
-        let numberBest = cleanedName.map { name in
-            numberHits.map { Similarity.dice(name, $0.cleanName) }.max() ?? 0
-        }
 
-        // Run the name search when the number gave nothing, and also when
-        // several cards share the printed total and none of them is the name he
-        // read. Many sets share a total, so an ambiguous number plus a
-        // disagreeing name is how "Cyndaquil" came back as "Combusken".
-        var nameHits: [SearchHit] = []
-        if let name = observation.name, numberHits.isEmpty || (numberBest ?? 0) < nameAgreement {
-            nameHits = try nameCandidates(db, name: name)
-        }
+        // Which line on the card is its name? The frame cannot tell, so every
+        // plausible line is tried and the catalog decides: an attack name is
+        // not a card name, and the catalog holds every card name there is.
+        let (chosenName, nameHits) = try readName(db, observation: observation, numberHits: numberHits)
+        let cleanedName = chosenName.map(NameCleaner.clean).flatMap { $0.isEmpty ? nil : $0 }
 
         let numberIds = Set(numberHits.map(\.productId))
         let nameIds = Set(nameHits.map(\.productId))
@@ -90,6 +91,35 @@ struct CardMatcher: Sendable {
 
         let ordered = scored.map(\.hit)
         let top = scored[0]
+
+        // A weak name must never beat the number.
+        //
+        // Scoring ranks by name similarity, so a junk reading can outrank the
+        // right card: "scratch" scores 0.53 against "scramble switch" and 0.00
+        // against "sableye", which is how a Sableye held over its own number
+        // came back as a Japanese trainer. docs/03: a name the catalog does not
+        // hold cannot overrule the number, because glare and attack text
+        // produce readings like that and the number is still right.
+        if cleanedName != nil, !top.fromNumber, top.similarity < nameOnlyAgreement {
+            // The number's cards lead the chip. He is far likelier to want one
+            // of those than the card a misread name dragged in.
+            let byNumber = scored.filter(\.fromNumber)
+            let chip = (byNumber + scored.filter { !$0.fromNumber }).map(\.hit)
+            // Assign nothing. Neither signal can be trusted: the name is junk,
+            // and a number with no name to corroborate it is one misread digit
+            // away from a real card in another set. 070/196 is a Sableye in
+            // Lost Origin and 070/195 is a Mawile V in Silver Tempest, so
+            // "exactly one card carries this number" is not the safety it looks
+            // like. docs/03: a wrong card that looks confident is worse than a
+            // card marked unknown.
+            return MatchResult(
+                productId: nil,
+                confidence: .uncertain,
+                candidates: Array(chip.prefix(candidateCap)),
+                printing: defaultPrinting ?? "",
+                printingGuessed: false
+            )
+        }
 
         // Nothing he read agrees with anything on offer. Assign no product and
         // let the chip ask. A wrong card that looks confident is worse than a
@@ -145,6 +175,54 @@ struct CardMatcher: Sendable {
         )
     }
 
+    /// The line that reads best as a card name, and what it found.
+    ///
+    /// Each candidate is scored by how well the catalog's answer matches the
+    /// line itself. "Sableye" finds a card called Sableye and scores 1.0.
+    /// "Scratch" finds a Scramble Switch and scores 0.53, so it loses to any
+    /// line that names a real card. A line agreeing with the number wins
+    /// outright, because that is two signals pointing the same way.
+    static func readName(_ db: Database, observation: ScanObservation, numberHits: [SearchHit]) throws -> (String?, [SearchHit]) {
+        let lines = observation.nameCandidates.isEmpty
+            ? [observation.name].compactMap { $0 }
+            : observation.nameCandidates
+        guard !lines.isEmpty else { return (nil, []) }
+
+        // The catalog holds every card name there is, so membership settles it
+        // outright: "Sableye" is a card and "Scratch" is not. The lines arrive
+        // best-first, so the first real card name wins.
+        for line in lines {
+            let cleaned = NameCleaner.clean(line)
+            guard !cleaned.isEmpty, try isACardName(db, cleaned) else { continue }
+            if numberHits.contains(where: { $0.cleanName == cleaned }) {
+                // The line names one of the number's cards. Two signals agree.
+                return (line, [])
+            }
+            return (line, try nameCandidates(db, name: line))
+        }
+
+        // Nothing he read is a card name. Fall back to the closest fuzzy match,
+        // because OCR misreads a name as often as it reads the wrong line.
+        var best: (line: String, hits: [SearchHit], score: Double)?
+        for line in lines {
+            let cleaned = NameCleaner.clean(line)
+            guard !cleaned.isEmpty else { continue }
+
+            // A line that names one of the number's cards settles it.
+            if let agreeing = numberHits.map({ Similarity.dice(cleaned, $0.cleanName) }).max(), agreeing >= nameAgreement {
+                return (line, [])
+            }
+
+            let hits = try nameCandidates(db, name: line)
+            let score = hits.map { Similarity.dice(cleaned, $0.cleanName) }.max() ?? 0
+            if best == nil || score > best!.score {
+                best = (line, hits, score)
+            }
+        }
+        guard let best else { return (lines.first, []) }
+        return (best.line, best.hits)
+    }
+
     private struct Candidate {
         var hit: SearchHit
         var score: Double
@@ -177,6 +255,16 @@ struct CardMatcher: Sendable {
         }
         guard !ids.isEmpty else { return [] }
         return try CatalogSearch.fetchHits(db, ids: ids, filter: SearchFilter())
+    }
+
+    /// True when the catalog holds a single card by exactly this name.
+    /// Backed by `idx_product_clean`, so it is one indexed lookup per line.
+    static func isACardName(_ db: Database, _ cleanName: String) throws -> Bool {
+        try Bool.fetchOne(
+            db,
+            sql: "SELECT EXISTS (SELECT 1 FROM product WHERE cleanName = ? AND isSealed = 0)",
+            arguments: [cleanName]
+        ) ?? false
     }
 
     private static func nameCandidates(_ db: Database, name: String) throws -> [SearchHit] {

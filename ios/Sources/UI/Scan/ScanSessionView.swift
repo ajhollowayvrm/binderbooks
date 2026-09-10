@@ -15,6 +15,12 @@ struct ScanSessionView: View {
     @State private var showDiscard = false
     @State private var simulatedText = ""
     @State private var captureCount = 0
+    @State private var capturing = false
+    /// Bumped after every still. Changing the id rebuilds the scanner, which
+    /// is the only thing that unfreezes the preview after `capturePhoto()`.
+    @State private var scannerGeneration = 0
+    @State private var numberHint = false
+    @State private var numberHintTask: Task<Void, Never>?
     @State private var nothingToCapture = false
     @AppStorage("scanMode") private var scanModeRaw = ScanMode.automatic.rawValue
 
@@ -110,11 +116,21 @@ struct ScanSessionView: View {
                     mode: scanMode,
                     captureCount: captureCount,
                     onObservation: { observation in model.handle(observation) },
-                    onNothingToCapture: { nothingToCapture = true }
+                    onNothingToCapture: { nothingToCapture = true },
+                    onCaptureBegan: { capturing = true },
+                    onCaptureEnded: { usedStill in
+                        capturing = false
+                        // Only a still kills the preview, and a still is now
+                        // the rare fallback rather than every capture.
+                        if usedStill { scannerGeneration += 1 }
+                    },
+                    onCapturedWithoutNumber: { showNumberHint() }
                 )
+                .id(scannerGeneration)
                 if scanMode == .manual {
                     shutter
                 }
+                numberHintBanner
             } else {
                 simulatorViewfinder(model)
             }
@@ -150,6 +166,34 @@ struct ScanSessionView: View {
         .clipped()
     }
 
+    /// The card logged from its name alone. Say so and move on: docs/03 says
+    /// the loop never blocks, so this is a banner and not an alert.
+    @ViewBuilder private var numberHintBanner: some View {
+        if numberHint {
+            VStack {
+                Label("Read the name only. Show the number for the right set.", systemImage: "number")
+                    .font(.footnote)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(.top, 8)
+                Spacer()
+            }
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .allowsHitTesting(false)
+        }
+    }
+
+    private func showNumberHint() {
+        numberHintTask?.cancel()
+        withAnimation(.snappy) { numberHint = true }
+        numberHintTask = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            withAnimation(.snappy) { numberHint = false }
+        }
+    }
+
     /// Manual mode's shutter. Sits above the count bar, centered.
     private var shutter: some View {
         VStack {
@@ -160,14 +204,21 @@ struct ScanSessionView: View {
                 ZStack {
                     Circle().fill(.white).frame(width: 72, height: 72)
                     Circle().stroke(.white, lineWidth: 4).frame(width: 84, height: 84)
-                    Image(systemName: "camera.viewfinder")
-                        .font(.title2)
-                        .foregroundStyle(.black)
+                    if capturing {
+                        ProgressView().tint(.black)
+                    } else {
+                        Image(systemName: "camera.viewfinder")
+                            .font(.title2)
+                            .foregroundStyle(.black)
+                    }
                 }
                 .shadow(radius: 6)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Scan the card in view")
+            // A second tap while the first is still reading photographs the
+            // card twice and logs it twice.
+            .disabled(capturing)
+            .accessibilityLabel(capturing ? "Reading the card" : "Scan the card in view")
             .padding(.bottom, 84)
         }
         .frame(maxWidth: .infinity)

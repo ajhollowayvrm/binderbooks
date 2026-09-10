@@ -4,7 +4,15 @@ import Foundation
 /// What one look at a card yielded: the strings that matter, nothing else.
 struct ScanObservation: Equatable, Sendable {
     var number: String?
+    /// The best guess at the card's name, and the first of `nameCandidates`.
     var name: String?
+    /// Every line on the card that could be its name, best first.
+    ///
+    /// The frame cannot tell a card name from an attack name by looking: both
+    /// are short, both are set large, and a blocklist of the words attacks use
+    /// never ends. The catalog can tell them apart, because it holds every card
+    /// name there is, so the matcher gets the shortlist and decides.
+    var nameCandidates: [String] = []
     /// From a slab label barcode. Set alone; slabs are read by barcode, not OCR.
     var certNumber: String?
     var grader: String?
@@ -51,6 +59,11 @@ enum FrameInterpreter {
         return nil
     }
 
+    /// How many lines the matcher is asked to consider. Four covers a card
+    /// whose name was missed, its attacks, and an ability, without turning one
+    /// match into a dozen searches.
+    static let nameCandidateLimit = 4
+
     static func interpret(_ items: [RecognizedText]) -> (observation: ScanObservation, numberItemID: UUID?) {
         var observation = ScanObservation()
         var numberID: UUID?
@@ -61,7 +74,8 @@ enum FrameInterpreter {
             numberID = items[found.index].id
         }
 
-        observation.name = nameCandidate(items, excluding: numberID)
+        observation.nameCandidates = nameCandidates(items, excluding: numberID)
+        observation.name = observation.nameCandidates.first
         return (observation, numberID)
     }
 
@@ -70,10 +84,25 @@ enum FrameInterpreter {
     /// and keep the rest.
     private static let hpLine = #/^(?<name>.+?)\s*(?:HP\s*\d{2,3}|\d{2,3}\s*HP)\s*$/#.ignoresCase()
 
-    /// The card's name. A line that carries the HP wins outright. Otherwise
-    /// the topmost plausible line, since attacks sit below the art and read
-    /// at the same size as the name.
+    /// How close to the tallest line a line must be to count as name-sized.
+    static let nameHeightTolerance = 0.85
+
+    /// The card's name. A line that carries the HP wins outright. Otherwise the
+    /// **tallest** plausible line, and the topmost of those that tie.
+    ///
+    /// Topmost alone was wrong. A still holds the whole scene — his desk, a
+    /// keyboard, a cable — so "highest in the frame" is not "highest on the
+    /// card", and when the name was missed the attack name won instead. On a
+    /// Pokémon card the name is set larger than the attacks: on the Sableye
+    /// that failed, "Sableye" measured 0.043 of the frame and "Scratch" 0.032.
     static func nameCandidate(_ items: [RecognizedText], excluding numberID: UUID?) -> String? {
+        nameCandidates(items, excluding: numberID).first
+    }
+
+    /// Every line that could be the name, best first: a line carrying the HP
+    /// leads, then the tallest, then the highest. The matcher checks them
+    /// against the catalog and takes the one that is a real card.
+    static func nameCandidates(_ items: [RecognizedText], excluding numberID: UUID?) -> [String] {
         var withHP: [(String, CGFloat)] = []
         var plain: [RecognizedText] = []
         for item in items where item.id != numberID {
@@ -85,16 +114,29 @@ enum FrameInterpreter {
             }
             if isPlausibleName(text) { plain.append(item) }
         }
-        if let best = withHP.min(by: { $0.1 < $1.1 }) {
-            return best.0
+        var ordered: [String] = []
+        // A line carrying the HP is the card's name and nothing else is.
+        for (name, _) in withHP.sorted(by: { $0.1 < $1.1 }) where !ordered.contains(name) {
+            ordered.append(name)
         }
-        guard let top = plain.min(by: { $0.top < $1.top }) else { return nil }
-        let text = top.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        // "Leafeon V 200": the HP without its label. Drop the trailing number.
-        if let m = text.wholeMatch(of: trailingNumber) {
-            return String(m.name)
+        // Then by height, tallest first, and by position within a tie. The name
+        // is set larger than the attacks, but not on every card, so this orders
+        // the shortlist rather than settling it.
+        let tallest = plain.map(\.height).max() ?? 0
+        let byLikelihood = plain.sorted { left, right in
+            let leftSized = left.height >= tallest * nameHeightTolerance
+            let rightSized = right.height >= tallest * nameHeightTolerance
+            if leftSized != rightSized { return leftSized }
+            if leftSized { return left.top < right.top }
+            return left.height > right.height
         }
-        return text
+        for item in byLikelihood {
+            let text = item.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            // "Leafeon V 200": the HP without its label. Drop the trailing number.
+            let name = text.wholeMatch(of: trailingNumber).map { String($0.name) } ?? text
+            if !ordered.contains(name) { ordered.append(name) }
+        }
+        return Array(ordered.prefix(nameCandidateLimit))
     }
 
     private static let trailingNumber = #/^(?<name>.+?)\s+\d{2,3}$/#
