@@ -14,6 +14,11 @@ struct ScanSessionView: View {
     @State private var showReview = false
     @State private var showDiscard = false
     @State private var simulatedText = ""
+    @State private var captureCount = 0
+    @State private var nothingToCapture = false
+    @AppStorage("scanMode") private var scanModeRaw = ScanMode.automatic.rawValue
+
+    private var scanMode: ScanMode { ScanMode(rawValue: scanModeRaw) ?? .automatic }
 
     var body: some View {
         NavigationStack {
@@ -28,7 +33,7 @@ struct ScanSessionView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { onClose() }
+                    Button("Close") { close() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
@@ -74,10 +79,18 @@ struct ScanSessionView: View {
 
     /// The viewfinder takes three quarters of the height. The squares run in
     /// one row along the bottom, newest first.
+    /// An empty session has nothing to resume. Delete it on the way out.
+    private func close() {
+        if let model, model.cards.isEmpty {
+            model.discard()
+        }
+        onClose()
+    }
+
     private func content(_ model: ScanSessionModel) -> some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
-                SessionDefaultsRow(model: model)
+                SessionDefaultsRow(model: model, scanModeRaw: $scanModeRaw)
                 Divider()
                 viewfinder(model)
                     .frame(height: geometry.size.height * 0.75)
@@ -92,8 +105,15 @@ struct ScanSessionView: View {
         ZStack(alignment: .bottom) {
             #if os(iOS)
             if ScannerView.isSupported {
-                ScannerView(isActive: correcting == nil && !showReview) { observation in
-                    model.handle(observation)
+                ScannerView(
+                    isActive: correcting == nil && !showReview,
+                    mode: scanMode,
+                    captureCount: captureCount,
+                    onObservation: { observation in model.handle(observation) },
+                    onNothingToCapture: { nothingToCapture = true }
+                )
+                if scanMode == .manual {
+                    shutter
                 }
             } else {
                 simulatorViewfinder(model)
@@ -128,6 +148,34 @@ struct ScanSessionView: View {
         }
         .frame(maxWidth: .infinity)
         .clipped()
+    }
+
+    /// Manual mode's shutter. Sits above the count bar, centered.
+    private var shutter: some View {
+        VStack {
+            Spacer()
+            Button {
+                captureCount += 1
+            } label: {
+                ZStack {
+                    Circle().fill(.white).frame(width: 72, height: 72)
+                    Circle().stroke(.white, lineWidth: 4).frame(width: 84, height: 84)
+                    Image(systemName: "camera.viewfinder")
+                        .font(.title2)
+                        .foregroundStyle(.black)
+                }
+                .shadow(radius: 6)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Scan the card in view")
+            .padding(.bottom, 84)
+        }
+        .frame(maxWidth: .infinity)
+        .alert("Nothing to scan", isPresented: $nothingToCapture) {
+            Button("OK") {}
+        } message: {
+            Text("No card name or number is in view. Move closer or hold still, then tap again.")
+        }
     }
 
     /// The simulator has no camera. Type what the camera would read, so the
@@ -222,15 +270,22 @@ struct ScanSessionView: View {
     }
 }
 
-/// Condition once per session, and an optional printing default for bulk runs.
+/// Scan mode, condition once per session, and an optional printing default.
 struct SessionDefaultsRow: View {
     let model: ScanSessionModel
+    @Binding var scanModeRaw: String
 
     private let printingDefaults = ["Normal", "Reverse Holofoil", "Holofoil"]
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                ForEach(ScanMode.allCases, id: \.self) { mode in
+                    Chip(title: mode.title, systemImage: mode == .automatic ? "bolt" : "hand.tap", isSelected: scanModeRaw == mode.rawValue) {
+                        scanModeRaw = mode.rawValue
+                    }
+                }
+                Divider().frame(height: 20)
                 ForEach(CardCondition.allCases, id: \.self) { condition in
                     Chip(title: condition.short, isSelected: model.session.defaultCondition == condition.rawValue) {
                         model.setDefaultCondition(condition.rawValue)

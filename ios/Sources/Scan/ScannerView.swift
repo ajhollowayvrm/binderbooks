@@ -9,9 +9,31 @@ import VisionKit
 /// and `DuplicateGate`: a card is accepted once per visit, and a visit ends
 /// only after its number has been out of the frame for a moment. "Same card
 /// again" covers deliberate duplicates.
+/// How the loop logs cards.
+enum ScanMode: String, CaseIterable {
+    /// Every card that passes through the frame logs on its own. For a stack
+    /// or a card slinger.
+    case automatic
+    /// Nothing logs until the shutter is tapped. For a binder page, where
+    /// nine cards sit in view at once.
+    case manual
+
+    var title: String {
+        switch self {
+        case .automatic: return "Auto"
+        case .manual: return "Manual"
+        }
+    }
+}
+
 struct ScannerView: UIViewControllerRepresentable {
     var isActive: Bool
+    var mode: ScanMode
+    /// Increment to capture the current frame in manual mode.
+    var captureCount: Int
     var onObservation: (ScanObservation) -> Void
+    /// Manual mode, shutter tapped, nothing readable in view.
+    var onNothingToCapture: () -> Void = {}
 
     static var isSupported: Bool {
         DataScannerViewController.isSupported && DataScannerViewController.isAvailable
@@ -37,6 +59,13 @@ struct ScannerView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ scanner: DataScannerViewController, context: Context) {
         context.coordinator.onObservation = onObservation
+        context.coordinator.mode = mode
+        if captureCount != context.coordinator.handledCaptureCount {
+            context.coordinator.handledCaptureCount = captureCount
+            if !context.coordinator.captureNow() {
+                onNothingToCapture()
+            }
+        }
         if isActive, !scanner.isScanning {
             try? scanner.startScanning()
         } else if !isActive, scanner.isScanning {
@@ -56,9 +85,21 @@ struct ScannerView: UIViewControllerRepresentable {
         var onObservation: (ScanObservation) -> Void
         weak var scanner: DataScannerViewController?
 
+        var mode: ScanMode = .automatic
+        var handledCaptureCount = 0
+
         /// Barcodes already turned into a slab. Cleared when the item leaves.
         private var consumedBarcodes: Set<UUID> = []
         private var gate = DuplicateGate()
+        /// What the last frame read. Manual mode captures this on demand.
+        private var latest: ScanObservation = ScanObservation()
+
+        /// Manual mode: log the card in view. False when no number was read.
+        func captureNow() -> Bool {
+            guard latest.number != nil || latest.name != nil else { return false }
+            onObservation(latest)
+            return true
+        }
 
         init(onObservation: @escaping (ScanObservation) -> Void) {
             self.onObservation = onObservation
@@ -99,8 +140,16 @@ struct ScannerView: UIViewControllerRepresentable {
             }
 
             let (observation, _) = FrameInterpreter.interpret(texts)
-            if gate.shouldAccept(observation.number) {
-                onObservation(observation)
+            latest = observation
+            switch mode {
+            case .automatic:
+                if gate.shouldAccept(observation.number) {
+                    onObservation(observation)
+                }
+            case .manual:
+                // Keep the gate's clock honest so a switch back to automatic
+                // does not re-log the card already in view.
+                _ = gate.shouldAccept(observation.number)
             }
         }
     }
