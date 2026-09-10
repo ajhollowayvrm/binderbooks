@@ -65,31 +65,50 @@ enum FrameInterpreter {
         return (observation, numberID)
     }
 
-    /// The tallest plausible name in the top part of the frame.
+    /// The name shares its line with the HP on a Pokémon card, and VisionKit
+    /// often returns that line as one item: "Articuno HP 110". Strip the HP
+    /// and keep the rest.
+    private static let hpLine = #/^(?<name>.+?)\s*(?:HP\s*\d{2,3}|\d{2,3}\s*HP)\s*$/#.ignoresCase()
+
+    /// The card's name. A line that carries the HP wins outright. Otherwise
+    /// the topmost plausible line, since attacks sit below the art and read
+    /// at the same size as the name.
     static func nameCandidate(_ items: [RecognizedText], excluding numberID: UUID?) -> String? {
-        let plausible = items.filter { item in
-            guard item.id != numberID else { return false }
+        var withHP: [(String, CGFloat)] = []
+        var plain: [RecognizedText] = []
+        for item in items where item.id != numberID {
             let text = item.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard text.count >= 3, text.count <= 32 else { return false }
-            let letters = text.filter(\.isLetter).count
-            guard letters >= 3, letters * 2 >= text.count else { return false }
-            let upper = text.uppercased()
-            if upper.contains("HP") && text.filter(\.isNumber).count >= 2 { return false }
-            if upper.hasPrefix("BASIC") || upper.hasPrefix("STAGE") || upper.hasPrefix("TRAINER") || upper.hasPrefix("ILLUS") { return false }
-            if upper.contains("POKÉMON") || upper.contains("POKEMON") { return false }
-            if upper.hasPrefix("©") || upper.contains("NINTENDO") || upper.contains("CREATURES") { return false }
-            return true
+            if let m = text.wholeMatch(of: hpLine) {
+                let name = String(m.name).trimmingCharacters(in: .whitespaces)
+                if isPlausibleName(name) { withHP.append((name, item.top)) }
+                continue
+            }
+            if isPlausibleName(text) { plain.append(item) }
         }
-        guard !plausible.isEmpty else { return nil }
-        // Height dominates; being higher on the card breaks ties.
-        let best = plausible.max { lhs, rhs in
-            score(lhs) < score(rhs)
+        if let best = withHP.min(by: { $0.1 < $1.1 }) {
+            return best.0
         }
-        return best?.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let top = plain.min(by: { $0.top < $1.top }) else { return nil }
+        let text = top.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "Leafeon V 200": the HP without its label. Drop the trailing number.
+        if let m = text.wholeMatch(of: trailingNumber) {
+            return String(m.name)
+        }
+        return text
     }
 
-    private static func score(_ item: RecognizedText) -> CGFloat {
-        item.height * (1.5 - min(max(item.top, 0), 1))
+    private static let trailingNumber = #/^(?<name>.+?)\s+\d{2,3}$/#
+
+    static func isPlausibleName(_ text: String) -> Bool {
+        guard text.count >= 3, text.count <= 32 else { return false }
+        let letters = text.filter(\.isLetter).count
+        guard letters >= 3, letters * 2 >= text.count else { return false }
+        let upper = text.uppercased()
+        if upper.hasPrefix("BASIC") || upper.hasPrefix("STAGE") || upper.hasPrefix("TRAINER") || upper.hasPrefix("ILLUS") { return false }
+        if upper.contains("POKÉMON") || upper.contains("POKEMON") { return false }
+        if upper.hasPrefix("©") || upper.contains("NINTENDO") || upper.contains("CREATURES") || upper.contains("GAME FREAK") { return false }
+        if upper.hasPrefix("ABILITY") || upper.hasPrefix("WEAKNESS") || upper.hasPrefix("RESISTANCE") || upper.hasPrefix("RETREAT") { return false }
+        return true
     }
 
     /// PSA and CGC labels carry the cert number in a barcode. Newer labels use

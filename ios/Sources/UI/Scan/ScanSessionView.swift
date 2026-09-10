@@ -72,13 +72,18 @@ struct ScanSessionView: View {
         }
     }
 
+    /// The viewfinder takes three quarters of the height. The squares run in
+    /// one row along the bottom, newest first.
     private func content(_ model: ScanSessionModel) -> some View {
-        VStack(spacing: 0) {
-            SessionDefaultsRow(model: model)
-            Divider()
-            viewfinder(model)
-            Divider()
-            squares(model)
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                SessionDefaultsRow(model: model)
+                Divider()
+                viewfinder(model)
+                    .frame(height: geometry.size.height * 0.75)
+                Divider()
+                squares(model)
+            }
         }
     }
 
@@ -122,7 +127,6 @@ struct ScanSessionView: View {
             .background(.thinMaterial)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 300)
         .clipped()
     }
 
@@ -192,20 +196,21 @@ struct ScanSessionView: View {
     }
 
     private func squares(_ model: ScanSessionModel) -> some View {
-        ScrollView {
+        ScrollView(.horizontal, showsIndicators: false) {
             if model.cards.isEmpty {
-                Text("Point the camera at a card. Each match appears here, newest first. Tap a square to correct it.")
+                Text("Point the camera at a card. Each match appears here, newest first. Tap one to correct it.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(24)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
             } else {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+                LazyHStack(alignment: .top, spacing: 8) {
                     ForEach(model.cards) { card in
                         Button {
                             correcting = card
                         } label: {
                             ScannedSquare(card: card, hit: model.hit(for: card), marketCents: model.marketCents(for: card))
+                                .frame(width: 88)
                         }
                         .buttonStyle(.plain)
                     }
@@ -213,6 +218,7 @@ struct ScanSessionView: View {
                 .padding(8)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 }
 

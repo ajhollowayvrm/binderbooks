@@ -5,10 +5,10 @@ import VisionKit
 
 /// VisionKit's live text and barcode scanner, wrapped for SwiftUI.
 ///
-/// The loop never blocks. Every frame's items go through `FrameInterpreter`;
-/// a card is accepted once per visit to the frame. The number item must leave
-/// the frame before the same card can be logged again, which is more reliable
-/// than a time-based cooldown. `onSameCardAgain` covers deliberate duplicates.
+/// The loop never blocks. Every frame's items go through `FrameInterpreter`
+/// and `DuplicateGate`: a card is accepted once per visit, and a visit ends
+/// only after its number has been out of the frame for a moment. "Same card
+/// again" covers deliberate duplicates.
 struct ScannerView: UIViewControllerRepresentable {
     var isActive: Bool
     var onObservation: (ScanObservation) -> Void
@@ -56,12 +56,9 @@ struct ScannerView: UIViewControllerRepresentable {
         var onObservation: (ScanObservation) -> Void
         weak var scanner: DataScannerViewController?
 
-        /// Number items already turned into a card. Cleared when the item leaves.
-        private var consumedNumberItems: Set<UUID> = []
         /// Barcodes already turned into a slab. Cleared when the item leaves.
         private var consumedBarcodes: Set<UUID> = []
-        /// The number text seen on the previous callback, so one flicker does not log a card.
-        private var lastNumber: (id: UUID, value: String)?
+        private var gate = DuplicateGate()
 
         init(onObservation: @escaping (ScanObservation) -> Void) {
             self.onObservation = onObservation
@@ -77,10 +74,9 @@ struct ScannerView: UIViewControllerRepresentable {
 
         func dataScanner(_ dataScanner: DataScannerViewController, didRemove removedItems: [RecognizedItem], allItems: [RecognizedItem]) {
             for item in removedItems {
-                consumedNumberItems.remove(item.id)
                 consumedBarcodes.remove(item.id)
-                if lastNumber?.id == item.id { lastNumber = nil }
             }
+            process(allItems, in: dataScanner)
         }
 
         private func process(_ items: [RecognizedItem], in scanner: DataScannerViewController) {
@@ -102,16 +98,9 @@ struct ScannerView: UIViewControllerRepresentable {
                 }
             }
 
-            let (observation, numberID) = FrameInterpreter.interpret(texts)
-            guard let numberID, let number = observation.number, !consumedNumberItems.contains(numberID) else { return }
-
-            // Require the same reading twice before logging. OCR flickers.
-            if let last = lastNumber, last.id == numberID, last.value == number {
-                consumedNumberItems.insert(numberID)
-                lastNumber = nil
+            let (observation, _) = FrameInterpreter.interpret(texts)
+            if gate.shouldAccept(observation.number) {
                 onObservation(observation)
-            } else {
-                lastNumber = (numberID, number)
             }
         }
     }

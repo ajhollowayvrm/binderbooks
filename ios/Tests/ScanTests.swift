@@ -43,12 +43,93 @@ import Testing
         #expect(FrameInterpreter.nameCandidate(items, excluding: nil) == "Charizard")
     }
 
+    @Test func nameComesFromTheHPLineWhenVisionMergesThem() {
+        let items = [
+            item("Basic", top: 0.02, height: 0.02),
+            item("Articuno HP 110", top: 0.05, height: 0.05),
+            item("Frigid Fluttering", top: 0.55, height: 0.05),
+            item("Ice Blast 90", top: 0.65, height: 0.05),
+            item("161/159", top: 0.93, height: 0.02),
+        ]
+        #expect(FrameInterpreter.interpret(items).observation.name == "Articuno")
+        #expect(FrameInterpreter.nameCandidate([item("Zapdos 110 HP", top: 0.1, height: 0.05)], excluding: nil) == "Zapdos")
+    }
+
+    @Test func topmostLineWinsOverAttacksAndLosesItsBareHP() {
+        let items = [
+            item("Leafeon V 200", top: 0.06, height: 0.05),
+            item("Greening Cells", top: 0.5, height: 0.04),
+            item("Leaf Blade 90", top: 0.7, height: 0.05),
+            item("166/203", top: 0.94, height: 0.02),
+        ]
+        #expect(FrameInterpreter.interpret(items).observation.name == "Leafeon V")
+    }
+
     @Test func certFromBarcodes() {
         #expect(FrameInterpreter.cert(fromBarcode: "https://www.psacard.com/cert/12345678")?.cert == "12345678")
         #expect(FrameInterpreter.cert(fromBarcode: "https://www.psacard.com/cert/12345678")?.grader == "psa")
         #expect(FrameInterpreter.cert(fromBarcode: "https://www.cgccards.com/certlookup/4321000-001/")?.cert == "4321000")
         #expect(FrameInterpreter.cert(fromBarcode: "87654321")?.cert == "87654321")
         #expect(FrameInterpreter.cert(fromBarcode: "abc") == nil)
+    }
+}
+
+@Suite struct DuplicateGateTests {
+    /// A gate plus a clock, so each step reads as "at t, this number, expect".
+    private struct Run {
+        var gate = DuplicateGate(absence: 1.5)
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        mutating func see(_ number: String?, at seconds: Double) -> Bool {
+            gate.shouldAccept(number, at: t0.addingTimeInterval(seconds))
+        }
+    }
+
+    @Test func acceptsOncePerVisitAfterARepeatedReading() {
+        var run = Run()
+        let first = run.see(nil, at: 0)
+        let second = run.see("114/084", at: 0)
+        let third = run.see("114/084", at: 0.1)
+        #expect(!first)
+        #expect(!second)
+        #expect(third)
+        // Held still for a while: the ids may churn, the text does not.
+        var later = false
+        for i in 2...40 { later = later || run.see("114/084", at: Double(i) * 0.1) }
+        #expect(!later)
+    }
+
+    @Test func aNewVisitStartsAfterTheNumberWasGone() {
+        var run = Run()
+        _ = run.see("4/102", at: 0)
+        let accepted = run.see("4/102", at: 0.1)
+        let gone = run.see(nil, at: 1.0)
+        let back = run.see("4/102", at: 2.2)
+        let backAgain = run.see("4/102", at: 2.3)
+        #expect(accepted)
+        #expect(!gone)
+        #expect(!back)
+        #expect(backAgain)
+    }
+
+    @Test func aShortGapDoesNotStartANewVisit() {
+        var run = Run()
+        _ = run.see("4/102", at: 0)
+        let accepted = run.see("4/102", at: 0.1)
+        let gap = run.see(nil, at: 0.5)
+        let back = run.see("4/102", at: 0.8)
+        let backAgain = run.see("4/102", at: 0.9)
+        #expect(accepted)
+        #expect(!gap && !back && !backAgain)
+    }
+
+    @Test func differentCardsInterleave() {
+        var run = Run()
+        _ = run.see("1/102", at: 0)
+        let one = run.see("1/102", at: 0.1)
+        _ = run.see("2/102", at: 0.2)
+        let two = run.see("2/102", at: 0.3)
+        let oneAgain = run.see("1/102", at: 0.4)
+        #expect(one && two && !oneAgain)
     }
 }
 

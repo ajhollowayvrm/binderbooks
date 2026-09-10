@@ -121,8 +121,10 @@ struct CardCorrectionView: View {
             }
             .task {
                 search.database = { [weak catalog] in catalog?.database }
-                if search.text.isEmpty, let ocr = card.ocrName {
-                    search.text = ocr
+                // The number is exact and lists every product that carries it, which
+                // is the useful starting point. The name is the fallback.
+                if search.text.isEmpty, let seed = card.ocrNumber ?? card.ocrName {
+                    search.text = seed
                 }
             }
         }

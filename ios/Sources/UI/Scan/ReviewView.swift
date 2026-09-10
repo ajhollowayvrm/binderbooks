@@ -119,6 +119,13 @@ struct ReviewView: View {
                         .onTapGesture {
                             if !editMode.isEditing { correcting = card }
                         }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                model.delete([card])
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                         .tag(card.id)
                 }
             }
