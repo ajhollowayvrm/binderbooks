@@ -5,8 +5,8 @@ import SwiftUI
 /// real. Filters are chips. Graded cards render as slabs.
 struct InventoryView: View {
     @Environment(CatalogController.self) private var catalog
+    @Environment(InventoryModel.self) private var model
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var cards: [OwnedCard]
-    @State private var model = InventoryModel()
     @State private var allSets: [SetSummary] = []
     @State private var showSetPicker = false
 
@@ -27,7 +27,7 @@ struct InventoryView: View {
                 }
             } else {
                 List(rows) { row in
-                    NavigationLink(value: row.card.id) {
+                    NavigationLink(value: AppRoute.ownedCard(row.card.id)) {
                         OwnedCardRow(row: row)
                     }
                 }
@@ -36,11 +36,6 @@ struct InventoryView: View {
         }
         .navigationTitle("Inventory")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(for: UUID.self) { id in
-            if let card = cards.first(where: { $0.id == id }) {
-                OwnedCardDetailView(card: card, model: model)
-            }
-        }
         .sheet(isPresented: $showSetPicker) {
             SetPickerSheet(sets: model.sets(in: cards, from: allSets), selected: model.filter.groupId) { groupId in
                 model.filter.groupId = groupId
@@ -48,7 +43,10 @@ struct InventoryView: View {
         }
         .task(id: catalog.database?.path) {
             model.database = { [weak catalog] in catalog?.database }
-            model.invalidate()
+            if model.catalogPath != catalog.database?.path {
+                model.invalidate()
+                model.catalogPath = catalog.database?.path
+            }
             await model.load(for: cards)
             if let db = catalog.database, allSets.isEmpty {
                 allSets = (try? await CatalogSearch(database: db).sets()) ?? []

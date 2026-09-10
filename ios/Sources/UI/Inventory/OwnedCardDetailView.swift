@@ -4,12 +4,39 @@ import SwiftUI
 /// One owned card: catalog data, the basis breakdown, the source purchase, and
 /// the edits that need no other model.
 struct OwnedCardDetailView: View {
-    let card: OwnedCard
-    let model: InventoryModel
+    @Query private var cards: [OwnedCard]
 
+    @Environment(InventoryModel.self) private var model
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @State private var showDelete = false
+
+    /// The card comes from the store by id, so the view does not depend on
+    /// the inventory list staying alive behind it.
+    init(cardID: UUID) {
+        _cards = Query(filter: #Predicate<OwnedCard> { $0.id == cardID })
+    }
+
+    var body: some View {
+        if let card = cards.first {
+            OwnedCardDetailBody(card: card, model: model, showDelete: $showDelete) {
+                modelContext.delete(card)
+                try? modelContext.save()
+                dismiss()
+            }
+        } else {
+            ContentUnavailableView("Card not found", systemImage: "questionmark.square", description: Text("It may have been deleted."))
+        }
+    }
+}
+
+private struct OwnedCardDetailBody: View {
+    let card: OwnedCard
+    let model: InventoryModel
+    @Binding var showDelete: Bool
+    var onDelete: () -> Void
+
+    @Environment(\.modelContext) private var modelContext
 
     private var hit: SearchHit? { model.hits[card.productId] }
     private var printings: [String] { model.prices[card.productId]?.map(\.subTypeName) ?? [] }
@@ -27,11 +54,10 @@ struct OwnedCardDetailView: View {
         .navigationTitle(hit?.name ?? "Card")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("Delete this card from inventory?", isPresented: $showDelete, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                modelContext.delete(card)
-                try? modelContext.save()
-                dismiss()
-            }
+            Button("Delete", role: .destructive, action: onDelete)
+        }
+        .task(id: card.productId) {
+            await model.load(for: [card])
         }
     }
 

@@ -20,9 +20,7 @@ struct SettingsView: View {
     var body: some View {
         List {
             Section("Catalog") {
-                NavigationLink {
-                    CatalogStatusView()
-                } label: {
+                NavigationLink(value: AppRoute.catalogStatus) {
                     Label("Catalog status and updates", systemImage: "externaldrive")
                 }
             }

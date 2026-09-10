@@ -52,6 +52,8 @@ final class InventoryModel {
     private(set) var isLoading = false
 
     var database: @MainActor () -> CatalogDatabase? = { nil }
+    /// The catalog the caches were built from. A swap invalidates them.
+    var catalogPath: String?
 
     /// Committed cards only, newest first. The caller passes the store's cards.
     func rows(from cards: [OwnedCard]) -> [InventoryRow] {

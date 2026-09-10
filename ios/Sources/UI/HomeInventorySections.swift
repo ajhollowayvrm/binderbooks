@@ -23,9 +23,7 @@ struct HomeInventorySections: View {
     var body: some View {
         if inventoryCount > 0 {
             Section {
-                NavigationLink {
-                    InventoryView()
-                } label: {
+                NavigationLink(value: AppRoute.inventory) {
                     HStack {
                         Image(systemName: "tray.full")
                         Text("Inventory")

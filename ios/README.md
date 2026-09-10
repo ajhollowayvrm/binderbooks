@@ -133,7 +133,7 @@ The simulator cannot type or tap for a script, so debug builds read these on lau
 | `CT_SIMULATE_SCANS` | Feeds `Name number` entries separated by `;` through the matcher. |
 | `CT_OPEN_REVIEW=1` | Opens review after the simulated scans settle. |
 | `CT_AUTO_COMMIT="Vendor\|cents"` | Commits the session to a new purchase and closes the scanner. |
-| `CT_OPEN_INVENTORY=1` | Pushes the inventory view. |
+| `CT_OPEN_INVENTORY=1` | Pushes the inventory view. Add `CT_OPEN_CARD=1` to push the newest card's detail too. |
 
 Prefix each with `SIMCTL_CHILD_` on `xcrun simctl launch`.
 

@@ -11,12 +11,13 @@ struct RootView: View {
 
     @State private var search = SearchModel(context: .browsing)
     @State private var recents = RecentlyViewed()
+    @State private var inventory = InventoryModel()
     @State private var activeSession: ScanSession?
-    @State private var pushInventory = false
+    @State private var path = NavigationPath()
 
     var body: some View {
         @Bindable var search = search
-        NavigationStack {
+        NavigationStack(path: $path) {
             VStack(spacing: 0) {
                 SearchHeader(query: $search.text, enabled: catalog.isReady, openSessionCount: openSessions.first?.cards.count) {
                     openScanner()
@@ -27,17 +28,13 @@ struct RootView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    NavigationLink {
-                        InventoryView()
-                    } label: {
+                    NavigationLink(value: AppRoute.inventory) {
                         Label("Inventory", systemImage: "tray.full")
                     }
                     .disabled(!catalog.isReady)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        SettingsView()
-                    } label: {
+                    NavigationLink(value: AppRoute.settings) {
                         Label("Settings", systemImage: "gearshape")
                     }
                 }
@@ -45,11 +42,17 @@ struct RootView: View {
             .navigationDestination(for: SearchHit.self) { hit in
                 ProductDetailView(productId: hit.productId)
             }
-            .navigationDestination(isPresented: $pushInventory) {
-                InventoryView()
+            .navigationDestination(for: AppRoute.self) { route in
+                switch route {
+                case .inventory: InventoryView()
+                case .settings: SettingsView()
+                case .catalogStatus: CatalogStatusView()
+                case .ownedCard(let id): OwnedCardDetailView(cardID: id)
+                }
             }
         }
         .environment(recents)
+        .environment(inventory)
         .fullScreenCover(item: $activeSession) { session in
             ScanSessionView(session: session) {
                 activeSession = nil
@@ -92,7 +95,16 @@ struct RootView: View {
         if env["CT_OPEN_INVENTORY"] == "1" {
             Task {
                 while !catalog.isReady { try? await Task.sleep(for: .milliseconds(200)) }
-                pushInventory = true
+                path.append(AppRoute.inventory)
+                // `CT_OPEN_CARD=1` also pushes the newest committed card's detail.
+                if env["CT_OPEN_CARD"] == "1" {
+                    var descriptor = FetchDescriptor<OwnedCard>(sortBy: [SortDescriptor(\.scannedAt, order: .reverse)])
+                    descriptor.fetchLimit = 1
+                    if let card = try? modelContext.fetch(descriptor).first {
+                        try? await Task.sleep(for: .milliseconds(300))
+                        path.append(AppRoute.ownedCard(card.id))
+                    }
+                }
             }
         }
         if env["CT_OPEN_SCANNER"] == "1" {
