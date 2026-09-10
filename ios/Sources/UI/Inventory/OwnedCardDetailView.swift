@@ -37,6 +37,8 @@ private struct OwnedCardDetailBody: View {
     var onDelete: () -> Void
 
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var allCards: [OwnedCard]
+    @State private var tagTarget: TagSheetTarget?
 
     private var hit: SearchHit? { model.hits[card.productId] }
     private var printings: [String] { model.prices[card.productId]?.map(\.subTypeName) ?? [] }
@@ -44,6 +46,7 @@ private struct OwnedCardDetailBody: View {
     var body: some View {
         List {
             identity
+            tags
             basis
             source
             edits
@@ -55,6 +58,11 @@ private struct OwnedCardDetailBody: View {
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("Delete this card from inventory?", isPresented: $showDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive, action: onDelete)
+        }
+        .sheet(item: $tagTarget) { target in
+            TagSheet(target: target, uses: model.tagUses(in: allCards), allCards: allCards.filter(\.isCommitted)) {
+                model.invalidateHaystacks()
+            }
         }
         .task(id: card.productId) {
             await model.load(for: [card])
@@ -151,15 +159,39 @@ private struct OwnedCardDetailBody: View {
         }
     }
 
+    /// Free-form labels. They replaced the status picker, so the reserved
+    /// labels ("sold", "at grader", "graded", "listed", "lost") live here too.
+    private var tags: some View {
+        Section("Tags") {
+            if card.tags.isEmpty {
+                Text("No labels.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack {
+                        ForEach(card.tags, id: \.self) { tag in
+                            Chip(title: tag, systemImage: "xmark", isSelected: true) {
+                                CardTagEditor(context: modelContext).remove(tag, from: [card])
+                                model.invalidateHaystacks()
+                            }
+                        }
+                    }
+                }
+            }
+            Button {
+                tagTarget = TagSheetTarget(cards: [card])
+            } label: {
+                Label("Add tag…", systemImage: "tag")
+            }
+        }
+    }
+
     private var edits: some View {
         Section("Edit") {
             if printings.count > 1 {
                 chipRow("Printing", printings, selected: card.printing) { card.printing = $0; save() }
             }
             chipRow("Condition", CardCondition.allCases.map(\.rawValue), selected: card.condition) { card.condition = $0; save() }
-            chipRow("Status", [CardStatus.owned, .listed, .atGrader, .gradedReturned, .lost].map(\.rawValue), selected: card.statusRaw, titles: statusTitle) {
-                card.statusRaw = $0; save()
-            }
             Toggle("Personal collection (not inventory)", isOn: Binding(get: { card.isPersonalCollection }, set: { card.isPersonalCollection = $0; save() }))
             Toggle("Bulk (identity only, no basis)", isOn: Binding(get: { card.isBulk }, set: { card.isBulk = $0; save() }))
             if card.matchConfidence == .uncertain {
@@ -178,18 +210,6 @@ private struct OwnedCardDetailBody: View {
                     }
                 }
             }
-        }
-    }
-
-    private func statusTitle(_ raw: String) -> String {
-        switch CardStatus(rawValue: raw) {
-        case .owned: return "Owned"
-        case .atGrader: return "At grader"
-        case .gradedReturned: return "Graded"
-        case .listed: return "Listed"
-        case .sold: return "Sold"
-        case .lost: return "Lost"
-        case nil: return raw
         }
     }
 

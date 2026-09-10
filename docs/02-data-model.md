@@ -172,7 +172,12 @@ can't be known before purchase is which sets a given box will contain.
     var quantity: Int               // >1 only for undifferentiated bulk
 
     var acquiredAt: Date
+    /// Superseded by `tags`. Kept for one release, because a dropped field
+    /// cannot be read back and his backups still carry it.
     var statusRaw: String
+
+    /// Free-form labels he typed. Replaced the status picker.
+    var tags: [String]
 
     /// Allocated at intake. Not mutated afterward.
     var acquisitionBasisCents: Int
@@ -208,6 +213,22 @@ enum MatchConfidence: String, Codable {
     case uncertain   // several candidates, or a guessed printing
 }
 ```
+
+### Tags
+
+**Free-form labels, and they replaced `CardStatus`.** He types any label: "binder 3",
+"for sale", "PSA queue". A card holds several. `TagKey` folds case and inner space
+but never punctuation, because a label is his own text and `NameCleaner` would merge
+"PSA-queue" into "PSA queue". The suggestion list is derived from the cards on every
+read, never stored, so a deleted card drops out at once.
+
+The reserved labels `sold`, `listed`, `at grader`, `graded`, and `lost` carry what
+the status field carried. The later sale and grading flows write those labels.
+`StatusTagBackfill` copies each card's old status into its label once.
+
+**A tag is a note, not a dimension.** Nothing aggregates money by tag. A "market
+value by tag" tile would cross decision 23 in `00-brief.md`, which forbids a
+reporting layer.
 
 `acquisitionBasisCents` and `gradingBasisCents` are separate and neither overwrites
 the other, so a card's raw cost and its slab cost stay legible forever.

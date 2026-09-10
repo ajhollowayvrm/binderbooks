@@ -31,11 +31,11 @@ struct OwnedCardRow: View {
                     if !row.card.printing.isEmpty { Text(row.card.printing) }
                     Text(CardCondition(rawValue: row.card.condition)?.short ?? row.card.condition)
                     if row.card.quantity > 1 { Text("×\(row.card.quantity)") }
-                    if row.card.status != .owned { Text(statusLabel) }
                     if row.card.isPersonalCollection { Text("PC") }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                TagBadgeRow(tags: row.card.tags)
             }
 
             Spacer(minLength: 8)
@@ -63,17 +63,6 @@ struct OwnedCardRow: View {
             }
         }
         .padding(.vertical, 2)
-    }
-
-    private var statusLabel: String {
-        switch row.card.status {
-        case .owned: return ""
-        case .atGrader: return "At grader"
-        case .gradedReturned: return "Graded"
-        case .listed: return "Listed"
-        case .sold: return "Sold"
-        case .lost: return "Lost"
-        }
     }
 }
 

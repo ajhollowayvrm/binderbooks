@@ -32,6 +32,7 @@ private func seed(_ context: ModelContext) throws {
     slab.acquisitionBasisCents = 4_100
     slab.certNumber = "12345678"
     slab.graderRaw = "psa"
+    slab.tags = ["PSA queue", "binder 3"]
     slab.sourceItem = line1
     slab.scanSession = session
     context.insert(slab)
@@ -43,6 +44,7 @@ private func seed(_ context: ModelContext) throws {
     pull.candidateProductIds = [2, 7]
     pull.ocrName = "Charizard"
     pull.ocrNumber = "4/102"
+    pull.tags = ["for sale"]
     pull.sourceItem = line2
     pull.scanSession = session
     context.insert(pull)
@@ -130,6 +132,25 @@ private func seed(_ context: ModelContext) throws {
         }
     }
 
+    /// The one test that guards every backup he already has. A non-optional
+    /// `tags` field in the DTO would throw `keyNotFound` on all of them.
+    @Test @MainActor func importsAVersionOneFileWithNoTagsKey() throws {
+        let json = """
+        {"format":"cardtracker-collection","version":1,"exportedAt":"2026-01-01T00:00:00Z",
+         "purchases":[],"purchaseItems":[],"sessions":[],
+         "cards":[{"id":"00000000-0000-0000-0000-0000000000AA","productId":7,"printing":"Normal",
+           "condition":"Near Mint","language":"en","quantity":1,"acquiredAt":800000000,
+           "statusRaw":"owned","acquisitionBasisCents":100,"gradingBasisCents":0,
+           "basisIsAllocated":false,"isBulk":false,"isPersonalCollection":false,
+           "matchConfidenceRaw":"manual","candidateProductIds":[],"scannedAt":800000000}]}
+        """
+        let file = try CollectionExport.decode(Data(json.utf8))
+        #expect(file.cards.first?.tags == nil)
+        _ = try CollectionExport.apply(file, to: target.mainContext, mode: .merge)
+        let card = try #require(try target.mainContext.fetch(FetchDescriptor<OwnedCard>()).first)
+        #expect(card.tags == [])
+    }
+
     @Test func exportIsDeterministic() throws {
         let file = CollectionExport.File(exportedAt: "2026-09-10T05:00:00Z", purchases: [], purchaseItems: [], cards: [], sessions: [])
         #expect(try CollectionExport.encode(file) == CollectionExport.encode(file))
@@ -155,9 +176,9 @@ private func seed(_ context: ModelContext) throws {
         model.setTestRows(
             hits: [1: hit(1, group: 100), 2: hit(2, group: 101), 3: hit(3, group: 101)],
             prices: [
-                1: [ProductPrice(subTypeName: "Holofoil", marketCents: 8_103, lowCents: nil, midCents: nil, highCents: nil, directLowCents: nil, asOf: "2026-09-10")],
-                2: [ProductPrice(subTypeName: "Normal", marketCents: 197, lowCents: nil, midCents: nil, highCents: nil, directLowCents: nil, asOf: "2026-09-10")],
-                3: [ProductPrice(subTypeName: "Normal", marketCents: 5, lowCents: nil, midCents: nil, highCents: nil, directLowCents: nil, asOf: "2026-09-10")],
+                1: [ProductPrice(subTypeName: "Holofoil", marketCents: 8_103, asOf: "2026-09-10")],
+                2: [ProductPrice(subTypeName: "Normal", marketCents: 197, asOf: "2026-09-10")],
+                3: [ProductPrice(subTypeName: "Normal", marketCents: 5, asOf: "2026-09-10")],
             ]
         )
         let cards = try container.mainContext.fetch(FetchDescriptor<OwnedCard>())

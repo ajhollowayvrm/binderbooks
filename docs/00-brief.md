@@ -106,8 +106,11 @@ reason attached.
    surrounding context adjusts weights. Buy flow boosts sealed, intake boosts singles.
    The user never picks a mode.
 7. **Persistent search field at the top of the app**, with a camera button beside it,
-   Collectr-style. Not a search tab. With an empty query the results area shows
-   recent buys, unripped sealed, cards at grading, and anything flagged from a scan.
+   Collectr-style. Not a search tab. With an empty query the area under the field is
+   the inventory page, so the app opens on his cards. One query answers with both
+   halves at once: his collection first, the catalog under it. Amended after the
+   first phone sessions; the earlier wording put inventory behind a push and filled
+   the empty state with a dashboard.
 
 ### Scanning
 

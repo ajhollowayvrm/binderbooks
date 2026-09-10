@@ -171,7 +171,7 @@ inventory                   ->  OwnedCard
                                   productId          <- productId (may be null)
                                   acquisitionBasisCents <- cost
                                   basisIsAllocated   <- costAuto
-                                  status             <- status (see #6)
+                                  tags               <- status, as a reserved label (see #6)
                                   gradingBasisCents  <- gradingCost + gradingShip
                                   gradedComps        <- gradeEst
 

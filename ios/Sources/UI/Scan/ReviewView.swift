@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 /// End-of-session review. Defaults to the cards that need a look. This editor
@@ -15,7 +16,11 @@ struct ReviewView: View {
     @State private var showDiscard = false
     @State private var reassignMissed = 0
     @State private var setChoices: [SetSummary] = []
+    @State private var tagTarget: TagSheetTarget?
     @Environment(CatalogController.self) private var catalog
+    /// Every card in the store, so the tag suggestions match the inventory and
+    /// a rename reaches cards outside this session.
+    @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var allCards: [OwnedCard]
 
     private enum BulkAction: Identifiable {
         case condition, printing, set, delete
@@ -51,6 +56,7 @@ struct ReviewView: View {
                     Button("Condition") { action = .condition }.disabled(selection.isEmpty)
                     Button("Printing") { action = .printing }.disabled(selection.isEmpty)
                     Button("Set") { action = .set }.disabled(selection.isEmpty)
+                    Button("Tag") { tagTarget = TagSheetTarget(cards: selectedCards) }.disabled(selection.isEmpty)
                     Menu("More") {
                         Button("Mark bulk") { model.setBulk(true, for: selectedCards) }
                         Button("Unmark bulk") { model.setBulk(false, for: selectedCards) }
@@ -73,6 +79,9 @@ struct ReviewView: View {
         }
         .sheet(item: $action) { action in
             bulkSheet(action)
+        }
+        .sheet(item: $tagTarget) { target in
+            TagSheet(target: target, uses: CardTagIndex.uses(in: allCards), allCards: allCards)
         }
         .sheet(isPresented: $showCommit) {
             CommitSheet(model: model) {

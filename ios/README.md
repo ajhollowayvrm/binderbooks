@@ -30,7 +30,7 @@ iOS 26.0. Every simulator on the Mac and the phone run iOS 26. The data model in
 | `Sources/Scan/` | Step 4: the VisionKit scanner, the frame interpreter, the matcher, the printing rules, and the session model. |
 | `Sources/Inventory/` | Step 5: the inventory model, filters, and summary. |
 | `Sources/Search/` | Step 3: the query builder, the ranker, the engine, the debounced model, and recently viewed. |
-| `Sources/UI/` | The shell, the results list, the filter chips, the set picker sheet, the product detail, the first-run download screen, and the catalog status screen. |
+| `Sources/UI/` | The shell, the content switch, the two-section result list, the large-art grids, the filter chips, the tag sheets, the set picker sheet, the product detail, the first-run download screen, and the catalog status screen. |
 | `Tests/` | Swift Testing suites. No network. |
 
 ## The catalog on the device
@@ -49,7 +49,12 @@ iOS 26.0. Every simulator on the Mac and the phone run iOS 26. The data model in
 
 ## Search
 
-One engine, `CatalogSearch`, answers every query. The caller passes a
+One field answers with two sections: "In your collection" first, then "Catalog".
+The collection pass is a string scan over his own cards in memory
+(`OwnedCardMatcher`), so it answers on every keystroke with no debounce. The catalog
+keeps the 150 ms debounce, so it lands second.
+
+One engine, `CatalogSearch`, answers every catalog query. The caller passes a
 `SearchContext`; the user never picks a mode.
 
 - Path A runs first: every token becomes a quoted prefix phrase on `product_fts`,
@@ -102,11 +107,35 @@ same run.
 
 ## Inventory
 
+**The inventory page is the app's landing screen.** The persistent search field sits
+above it, and `ShellContentView` swaps the page for the result list as soon as he
+types. Nothing pushes the inventory any more.
+
 `InventoryView` lists committed cards newest first with market value from the
-catalog, the basis, and the difference. Filters are chips: set, status, uncertain,
-slabs, hide bulk, personal. Graded cards render as a small slab with the grader and
+catalog, the basis, and the difference. Filters are two chips: tags and set. Tags
+replaced the status chips, and he narrows by label more than by anything else.
+The confidence, slab, bulk, and personal filters stay in `InventoryFilter` but
+have no chip; the row markers still show confidence and bulk.
+
+The money sits behind the **Metrics** button, not above the cards. The sheet
+reports what the current chips and query left on the page, so its figures always
+match the cards behind it. Graded cards render as a small slab with the grader and
 cert number on the label. The detail screen shows the basis breakdown, the source
 purchase, and the edits that need no other model.
+
+Layout is one global preference in `cardLayout`, and grid is the default. One toggle
+beside the chips rules the inventory page, the collection section, and the catalog
+section. A grid cell cannot hold the basis or the gain; read those in list layout,
+in the summary tiles, or on the card detail.
+
+**Tags** are free-form labels: "binder 3", "for sale", "PSA queue". `TagKey` folds
+case and inner space but never punctuation, because a label is his own text. **A long press on a card starts selection**, with that card ticked; the Tag menu in
+the bottom bar then holds the five labels he uses most, plus "Tag…" for the full
+sheet. Metrics sits on the left of the navigation bar and Select on the right. A tag also
+matches in the search field. The reserved labels `sold`, `listed`, `at grader`,
+`graded`, and `lost` replaced `CardStatus`; `StatusTagBackfill` copies each card's
+old status into its label once, and `OwnedCard.statusRaw` stays in the store and in
+the export for one release, because a dropped field cannot be read back.
 
 A card whose basis the allocator wrote shows "alloc." instead of a gain or a loss,
 and the summary's unrealized figure covers priced cards only. That follows docs/04:
@@ -133,7 +162,12 @@ The simulator cannot type or tap for a script, so debug builds read these on lau
 | `CT_SIMULATE_SCANS` | Feeds `Name number` entries separated by `;` through the matcher. |
 | `CT_OPEN_REVIEW=1` | Opens review after the simulated scans settle. |
 | `CT_AUTO_COMMIT="Vendor\|cents"` | Commits the session to a new purchase and closes the scanner. |
-| `CT_OPEN_INVENTORY=1` | Pushes the inventory view. Add `CT_OPEN_CARD=1` to push the newest card's detail too. |
+| `CT_SEARCH_LAYOUT` | `list` or `grid`. Grid is the default, so this mostly forces `list`. |
+| `CT_OPEN_CARD=1` | Pushes the newest card's detail. |
+| `CT_OPEN_SETTINGS=1` | Pushes Settings, which holds export. |
+| `CT_OPEN_METRICS=1` | Opens the inventory Metrics sheet. |
+| `CT_SELECT_ALL=1` | Enters selection with every row ticked. |
+| `CT_OPEN_INVENTORY=1` | Deprecated. Inventory is the landing screen, so this only clears the query and pops to the root. |
 
 Prefix each with `SIMCTL_CHILD_` on `xcrun simctl launch`.
 

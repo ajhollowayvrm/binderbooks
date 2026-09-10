@@ -128,6 +128,7 @@ final class ScanSessionModel {
         copy.ocrNumber = last.ocrNumber
         copy.candidateProductIds = last.candidateProductIds
         copy.isBulk = last.isBulk
+        copy.tags = last.tags
         copy.scanSession = session
         context.insert(copy)
         save()

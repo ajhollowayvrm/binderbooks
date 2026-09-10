@@ -26,7 +26,8 @@ later sections.
 
 ### The field
 
-**Persistent, at the top of the app, above the tab content.** Not a search tab.
+**Persistent, at the top of the app, above the content.** Not a search tab. There are
+no tabs. The field shows on the root; a pushed screen covers it.
 
 `.searchable()` gets native behavior cheaply but hides on scroll, which is wrong when
 search is the primary action rather than a filter over a list. If it should be
@@ -37,10 +38,15 @@ A **camera button sits beside the field**, Collectr-style. Not camera-first: he 
 "legendary warriors" while standing in a store, and a viewfinder pointed at a box it
 can't read is the wrong default.
 
-**Empty state is the home screen.** With no query, the results area shows recent
-purchases, unripped sealed sitting in inventory, and cards flagged uncertain from
-recent scans. All the things that would otherwise justify a dashboard, in the space
-the results will occupy anyway.
+**Empty state is the inventory page.** With no query, the area under the field shows
+his owned cards, with the summary tiles, the filter chips, and a "Recently viewed"
+section at the end. Inventory is the landing screen and is never pushed. Flagged
+cards are reachable from the "Uncertain" chip, so the home does not repeat them.
+
+**A query fills the same area with one list of two sections.** "In your collection"
+first, then "Catalog". One field, no scope control. The collection section matches in
+memory over the owned cards, so it answers with no debounce; the catalog section
+keeps the 150 ms debounce and lands second.
 
 ### The query
 
@@ -60,14 +66,59 @@ In priority order:
 
 1. Exact `number` match, when the query parses as one
 2. Exact `cleanName` match
-3. FTS5 `bm25()`, weighting `name` above `setName`
-4. **Context boost** — the caller passes a context, and the same index is reranked:
+3. **Context boost** — the caller passes a context, and the same index is reranked:
    - `.buying` → boost `isSealed = 1`
    - `.intake` / `.scanning` → boost `isSealed = 0`
    - `.browsing` → neutral
-5. Recency — newer `cardSet.publishedOn` breaks ties, since new sets dominate his volume
+4. **Market value, descending** — the top printing's market price
+5. FTS5 `bm25()`, weighting `name` above `setName`
+6. Recency — newer `cardSet.publishedOn` breaks ties, since new sets dominate his volume
 
 Context is **never a mode the user picks**. Where he already is supplies it.
+
+Value outranks `bm25` because he reads a result list by price. Nine Charizards
+match "charizard", and the $3,000 one must lead. The three keys above value stay
+above it, because a query that names one product must return that product first:
+type `004/102` and you get that card, not the most expensive card that matched.
+A product with no market price sorts last.
+
+Browsing a set with an empty query uses the same order.
+
+### Price
+
+**Market price only.** TCGplayer's low, mid, high, and direct-low columns stay in
+the catalog file and never reach the screen. He values a card at market, so a
+second number beside it is noise.
+
+A product with several printings shows its **top** printing's market price, and
+the printing count under it. The row must show the number the list sorted by.
+
+### Layouts
+
+Two, and the choice persists in `cardLayout`. **Grid is the default.** One key rules
+three surfaces: the inventory page, the collection section, and the catalog section.
+One toggle sits beside the chips.
+
+- **Grid** — three large arts per row, market price under each, then the set name
+  and the number. The default, because the art identifies a card faster than the
+  name does.
+- **List** — the dense row. Thumbnail, name, set, number, price. An owned row also
+  carries the basis and the gain, which a grid cell cannot hold. Read profit in list
+  layout, in the summary tiles, or on the card detail.
+
+### Searching his own cards
+
+`OwnedCardMatcher` answers the collection section. The store holds no card name
+(`02`), so a name match reads the `SearchHit` that `InventoryModel` caches per
+`productId`. One cleaned haystack per card covers the name, the set name, the
+number, the set code, the rarity, the printing, the condition code, the scanner's
+name and number, the cert number, the grader, and the tags. Two extra rules: a
+parsed collector number, and a partial cert number, because he reads the last
+digits off a slab label.
+
+**No fuzzy score here.** Typo tolerance belongs to the catalog trigram path. He
+knows what is in his own collection, and a fuzzy match would put cards he did not
+ask for above the cards he did.
 
 ### Performance
 

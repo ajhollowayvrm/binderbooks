@@ -79,29 +79,20 @@ struct ProductDetailView: View {
                 .listRowSeparator(.hidden)
             }
 
-            Section("Market") {
+            Section("Market price") {
                 if detail.prices.isEmpty {
                     Text("No TCGplayer price yet.")
                         .foregroundStyle(.secondary)
                 } else {
+                    // Market price only. The low, mid, and high columns are
+                    // noise for a collection he values at market.
                     ForEach(detail.prices) { price in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(price.subTypeName)
-                                Spacer()
-                                Text(price.marketCents?.asCurrency ?? "—")
-                                    .font(.body.monospacedDigit().weight(.semibold))
-                            }
-                            HStack(spacing: 12) {
-                                priceCell("Low", price.lowCents)
-                                priceCell("Mid", price.midCents)
-                                priceCell("High", price.highCents)
-                                if let direct = price.directLowCents {
-                                    priceCell("Direct", direct)
-                                }
-                            }
+                        HStack {
+                            Text(price.subTypeName)
+                            Spacer()
+                            Text(price.marketCents?.asCurrency ?? "—")
+                                .font(.body.monospacedDigit().weight(.semibold))
                         }
-                        .padding(.vertical, 2)
                     }
                     if let asOf = detail.prices.first?.asOf {
                         Text("Prices as of \(asOf).")
@@ -130,15 +121,5 @@ struct ProductDetailView: View {
             }
         }
         .listStyle(.insetGrouped)
-    }
-
-    private func priceCell(_ label: String, _ cents: Int?) -> some View {
-        HStack(spacing: 3) {
-            Text(label)
-                .foregroundStyle(.secondary)
-            Text(cents?.asCurrency ?? "—")
-                .monospacedDigit()
-        }
-        .font(.caption)
     }
 }

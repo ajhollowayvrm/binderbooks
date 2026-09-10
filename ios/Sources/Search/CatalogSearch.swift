@@ -99,7 +99,9 @@ struct CatalogSearch: Sendable {
     func browse(_ filter: SearchFilter) async throws -> [SearchHit] {
         try await database.asyncRead { db in
             var sql = Self.hitSelect + " WHERE 1 = 1" + Self.filterClause(filter)
-            sql += " ORDER BY p.isSealed, p.numberNum, p.name LIMIT ?"
+            // Value first, like every other result list. A product with no
+            // price sorts last.
+            sql += " ORDER BY maxMarket IS NULL, maxMarket DESC, p.name LIMIT ?"
             return try Self.hits(db, sql: sql, arguments: Self.filterArguments(filter) + [Self.browseLimit])
         }
     }
@@ -145,12 +147,8 @@ struct CatalogSearch: Sendable {
         return try await database.asyncRead { db in
             let placeholders = ids.map { String($0) }.joined(separator: ",")
             var out: [Int: [ProductPrice]] = [:]
-            for row in try Row.fetchAll(db, sql: "SELECT productId, subTypeName, marketPriceCents, lowPriceCents, midPriceCents, highPriceCents, directLowPriceCents, asOf FROM price WHERE productId IN (\(placeholders)) ORDER BY subTypeName") {
-                let price = ProductPrice(
-                    subTypeName: row["subTypeName"], marketCents: row["marketPriceCents"], lowCents: row["lowPriceCents"],
-                    midCents: row["midPriceCents"], highCents: row["highPriceCents"], directLowCents: row["directLowPriceCents"],
-                    asOf: row["asOf"]
-                )
+            for row in try Row.fetchAll(db, sql: "SELECT productId, subTypeName, marketPriceCents, asOf FROM price WHERE productId IN (\(placeholders)) ORDER BY subTypeName") {
+                let price = ProductPrice(subTypeName: row["subTypeName"], marketCents: row["marketPriceCents"], asOf: row["asOf"])
                 out[row["productId"], default: []].append(price)
             }
             return out
@@ -167,14 +165,10 @@ struct CatalogSearch: Sendable {
             )
             let prices = try Row.fetchAll(
                 db,
-                sql: "SELECT subTypeName, marketPriceCents, lowPriceCents, midPriceCents, highPriceCents, directLowPriceCents, asOf FROM price WHERE productId = ? ORDER BY subTypeName",
+                sql: "SELECT subTypeName, marketPriceCents, asOf FROM price WHERE productId = ? ORDER BY subTypeName",
                 arguments: [productId]
             ).map {
-                ProductPrice(
-                    subTypeName: $0["subTypeName"], marketCents: $0["marketPriceCents"], lowCents: $0["lowPriceCents"],
-                    midCents: $0["midPriceCents"], highCents: $0["highPriceCents"], directLowCents: $0["directLowPriceCents"],
-                    asOf: $0["asOf"]
-                )
+                ProductPrice(subTypeName: $0["subTypeName"], marketCents: $0["marketPriceCents"], asOf: $0["asOf"])
             }
             return ProductDetail(
                 hit: hit,

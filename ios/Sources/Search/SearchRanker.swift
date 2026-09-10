@@ -1,7 +1,12 @@
 import Foundation
 
 /// Orders candidates. Pure, so the tests can pin the priority order from
-/// docs/03: exact number, exact name, bm25, context boost, recency.
+/// docs/03: exact number, exact name, context, market value, bm25, recency.
+///
+/// Market value sits above bm25 on purpose. AJ reads a result list by price,
+/// so the expensive printing must lead. Exact number, exact name, and the
+/// context boost still outrank value, because a query that names one product
+/// must return that product first.
 enum SearchRanker {
     struct Candidate: Sendable {
         var hit: SearchHit
@@ -18,46 +23,81 @@ enum SearchRanker {
     static let contextBoost = 50.0
     static let trigramPenalty = 20.0
 
-    static func score(_ candidate: Candidate, request: SearchRequest) -> Double {
-        let hit = candidate.hit
-        var score = 0.0
+    /// The sort keys of one candidate, most significant first. A larger key
+    /// sorts earlier.
+    struct SortKey: Comparable, Sendable {
+        /// Exact number, exact name, and the context boost.
+        var boost: Double
+        /// The top market price over the product's printings, in cents. A
+        /// product with no price is -1, so it sorts last.
+        var valueCents: Int
+        /// bm25, negated, with the trigram penalty applied.
+        var relevance: Double
+        /// Newer sets break ties.
+        var recency: Double
+        /// The last tiebreak. Negated, because a larger key sorts earlier and
+        /// the lower productId must come first.
+        var negatedProductId: Int
 
-        if let fts = candidate.ftsRank {
-            score += -fts
-        } else if let tri = candidate.trigramRank {
-            score += -tri - trigramPenalty
+        static func < (lhs: SortKey, rhs: SortKey) -> Bool {
+            if lhs.boost != rhs.boost { return lhs.boost < rhs.boost }
+            if lhs.valueCents != rhs.valueCents { return lhs.valueCents < rhs.valueCents }
+            if lhs.relevance != rhs.relevance { return lhs.relevance < rhs.relevance }
+            if lhs.recency != rhs.recency { return lhs.recency < rhs.recency }
+            return lhs.negatedProductId < rhs.negatedProductId
         }
+    }
+
+    static func sortKey(_ candidate: Candidate, request: SearchRequest) -> SortKey {
+        let hit = candidate.hit
+        var boost = 0.0
 
         let query = request.trimmed
         let queryNumber = CollectorNumber.parse(query)
         if candidate.numberLookup || matchesNumber(hit, query: query, parsed: queryNumber) {
-            score += exactNumberBoost
+            boost += exactNumberBoost
         }
 
         if !query.isEmpty, hit.cleanName == NameCleaner.clean(query) {
-            score += exactNameBoost
+            boost += exactNameBoost
         }
 
         switch request.context {
         case .buying where hit.isSealed:
-            score += contextBoost
+            boost += contextBoost
         case .intake where !hit.isSealed, .scanning where !hit.isSealed:
-            score += contextBoost
+            boost += contextBoost
         default:
             break
         }
 
-        score += recency(hit.publishedOn)
-        return score
+        var relevance = 0.0
+        if let fts = candidate.ftsRank {
+            relevance = -fts
+        } else if let tri = candidate.trigramRank {
+            relevance = -tri - trigramPenalty
+        }
+
+        return SortKey(
+            boost: boost,
+            valueCents: value(hit),
+            relevance: relevance,
+            recency: recency(hit.publishedOn),
+            negatedProductId: -hit.productId
+        )
+    }
+
+    /// The price the list orders by: the product's top printing, the same
+    /// number the row shows. A card with a $9,000 first edition is a $9,000
+    /// card.
+    static func value(_ hit: SearchHit) -> Int {
+        hit.topMarketCents ?? -1
     }
 
     static func rank(_ candidates: [Candidate], request: SearchRequest) -> [SearchHit] {
         candidates
-            .map { ($0.hit, score($0, request: request)) }
-            .sorted { lhs, rhs in
-                if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
-                return lhs.0.productId < rhs.0.productId
-            }
+            .map { ($0.hit, sortKey($0, request: request)) }
+            .sorted { $0.1 > $1.1 }
             .map(\.0)
     }
 

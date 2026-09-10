@@ -64,14 +64,19 @@ struct SearchHit: Identifiable, Hashable, Sendable {
 
     var id: Int { productId }
 
-    /// "$3.21" for one printing, "from $0.05" when printings differ.
-    var priceLabel: String? {
-        guard let min = minMarketCents else { return nil }
-        if let max = maxMarketCents, max != min {
-            return "from \(min.asCurrency)"
-        }
-        return min.asCurrency
+    /// The catalog stores the 200 px thumbnail. TCGplayer serves larger widths
+    /// under the same path. The grid and the detail header use this one.
+    var largeImageURL: URL? {
+        imageUrl.flatMap { URL(string: $0.replacingOccurrences(of: "_200w", with: "_400w")) }
     }
+
+    /// The market price of the product's top printing. The list orders by this
+    /// number, so the row must show this number. `printingCount` on the row
+    /// says the other printings are cheaper.
+    var topMarketCents: Int? { maxMarketCents ?? minMarketCents }
+
+    /// "$3.21". Nil when TCGplayer has no market price for the product.
+    var priceLabel: String? { topMarketCents?.asCurrency }
 }
 
 struct SetSummary: Identifiable, Hashable, Sendable {
@@ -104,13 +109,12 @@ struct CategorySummary: Identifiable, Hashable, Sendable {
     }
 }
 
+/// One printing's price. The market price is the only number the app keeps.
+/// TCGplayer's low, mid, high, and direct-low columns stay in the catalog and
+/// out of the app, because AJ values a card at market.
 struct ProductPrice: Identifiable, Hashable, Sendable {
     var subTypeName: String
     var marketCents: Int?
-    var lowCents: Int?
-    var midCents: Int?
-    var highCents: Int?
-    var directLowCents: Int?
     var asOf: String
 
     var id: String { subTypeName }
@@ -129,9 +133,5 @@ struct ProductDetail: Sendable {
         URL(string: "https://www.tcgplayer.com/product/\(hit.productId)")!
     }
 
-    /// The catalog stores the 200 px thumbnail. TCGplayer serves larger widths
-    /// under the same path.
-    var largeImageURL: URL? {
-        hit.imageUrl.flatMap { URL(string: $0.replacingOccurrences(of: "_200w", with: "_400w")) }
-    }
+    var largeImageURL: URL? { hit.largeImageURL }
 }

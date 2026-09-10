@@ -2,7 +2,12 @@ import SwiftData
 import SwiftUI
 
 /// The app shell: a persistent search field with a camera button, above the
-/// content. Not a search tab.
+/// content. Not a search tab, and no tabs at all.
+///
+/// The content has two states, and `ShellContentView` owns the switch: the
+/// inventory page with an empty query, and the two-section result list with a
+/// query. Both `navigationDestination` registrations stay here, at the stack
+/// root, so a content swap can never break a pushed screen.
 struct RootView: View {
     @Environment(CatalogController.self) private var catalog
     @Environment(\.modelContext) private var modelContext
@@ -27,12 +32,6 @@ struct RootView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    NavigationLink(value: AppRoute.inventory) {
-                        Label("Inventory", systemImage: "tray.full")
-                    }
-                    .disabled(!catalog.isReady)
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink(value: AppRoute.settings) {
                         Label("Settings", systemImage: "gearshape")
@@ -44,7 +43,6 @@ struct RootView: View {
             }
             .navigationDestination(for: AppRoute.self) { route in
                 switch route {
-                case .inventory: InventoryView()
                 case .settings: SettingsView()
                 case .catalogStatus: CatalogStatusView()
                 case .ownedCard(let id): OwnedCardDetailView(cardID: id)
@@ -59,16 +57,16 @@ struct RootView: View {
             }
             .environment(catalog)
         }
-        .onAppear(perform: applyDebugQuery)
+        .onAppear {
+            // Tags replaced the status picker. This copies each card's old
+            // status into its reserved label, once.
+            StatusTagBackfill.run(modelContext)
+            applyDebugQuery()
+        }
     }
 
-    @ViewBuilder
     private var content: some View {
-        if catalog.isReady {
-            SearchResultsView(model: search, onResumeSession: openScanner)
-        } else {
-            CatalogSetupView()
-        }
+        ShellContentView(search: search)
     }
 
     /// Resume the open session if there is one. Otherwise start a new one.
@@ -83,8 +81,12 @@ struct RootView: View {
         }
     }
 
-    /// `SIMCTL_CHILD_CT_SEARCH_QUERY="legendary warriors"` on `simctl launch`
-    /// pre-fills the field; `SIMCTL_CHILD_CT_OPEN_SCANNER=1` opens the scanner.
+    /// The screenshot hooks, because simctl cannot type or tap.
+    /// `CT_SEARCH_QUERY="legendary warriors"` pre-fills the field.
+    /// `CT_SEARCH_LAYOUT=list` switches every card list to the dense row.
+    /// `CT_OPEN_CARD=1` pushes the newest card. `CT_OPEN_SETTINGS=1` pushes
+    /// Settings. `CT_OPEN_SCANNER=1` opens the scanner. `CT_OPEN_INVENTORY=1`
+    /// is deprecated and only returns to the landing screen.
     /// Screenshots and manual timing runs need them because simctl cannot type.
     private func applyDebugQuery() {
         #if DEBUG
@@ -92,19 +94,33 @@ struct RootView: View {
         if let query = env["CT_SEARCH_QUERY"], search.text.isEmpty {
             search.text = query
         }
+        // Grid is the default now, so this mostly forces `list`. simctl cannot
+        // tap the toggle.
+        if let layout = env["CT_SEARCH_LAYOUT"], CardLayout(rawValue: layout) != nil {
+            UserDefaults.standard.set(layout, forKey: cardLayoutKey)
+        }
+        // Deprecated. The inventory is the landing screen, so this only asserts
+        // that state. Every existing screenshot command keeps working.
         if env["CT_OPEN_INVENTORY"] == "1" {
+            search.text = ""
+            path = NavigationPath()
+        }
+        if env["CT_OPEN_CARD"] == "1" {
             Task {
                 while !catalog.isReady { try? await Task.sleep(for: .milliseconds(200)) }
-                path.append(AppRoute.inventory)
-                // `CT_OPEN_CARD=1` also pushes the newest committed card's detail.
-                if env["CT_OPEN_CARD"] == "1" {
-                    var descriptor = FetchDescriptor<OwnedCard>(sortBy: [SortDescriptor(\.scannedAt, order: .reverse)])
-                    descriptor.fetchLimit = 1
-                    if let card = try? modelContext.fetch(descriptor).first {
-                        try? await Task.sleep(for: .milliseconds(300))
-                        path.append(AppRoute.ownedCard(card.id))
-                    }
+                var descriptor = FetchDescriptor<OwnedCard>(sortBy: [SortDescriptor(\.scannedAt, order: .reverse)])
+                descriptor.fetchLimit = 1
+                if let card = try? modelContext.fetch(descriptor).first {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    path.append(AppRoute.ownedCard(card.id))
                 }
+            }
+        }
+        // The toolbar button is the only route to Settings and to export.
+        if env["CT_OPEN_SETTINGS"] == "1" {
+            Task {
+                while !catalog.isReady { try? await Task.sleep(for: .milliseconds(200)) }
+                path.append(AppRoute.settings)
             }
         }
         if env["CT_OPEN_SCANNER"] == "1" {

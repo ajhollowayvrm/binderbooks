@@ -1,118 +1,329 @@
 import SwiftData
 import SwiftUI
 
-/// Owned cards with market value, basis, and the difference where the basis is
-/// real. Filters are chips. Graded cards render as slabs.
+/// The app's landing screen. Owned cards with market value, basis, and the
+/// difference where the basis is real. Filters are chips. Graded cards render
+/// as slabs. The persistent search field sits above this view and passes its
+/// text down as `query`.
 struct InventoryView: View {
+    var query: String = ""
+
     @Environment(CatalogController.self) private var catalog
     @Environment(InventoryModel.self) private var model
+    @Environment(RecentlyViewed.self) private var recents
+    @Environment(\.modelContext) private var modelContext
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var cards: [OwnedCard]
     @State private var allSets: [SetSummary] = []
     @State private var showSetPicker = false
+    @State private var showTagFilter = false
+    @State private var showMetrics = false
+    @State private var tagTarget: TagSheetTarget?
+    @State private var isSelecting = false
+    @State private var selection: Set<UUID> = []
+    @State private var recentHits: [SearchHit] = []
+    @AppStorage(cardLayoutKey) private var layout: CardLayout = .grid
 
-    private var rows: [InventoryRow] { model.rows(from: cards) }
+    private var rows: [InventoryRow] { model.rows(from: cards, query: query) }
+    private var tagUses: [TagUse] { model.tagUses(in: cards) }
+    private var committed: [OwnedCard] { cards.filter(\.isCommitted) }
+
+    /// Filters through the live rows, so an id left stale by a delete or a
+    /// filter change resolves to nothing instead of crashing.
+    private func selectedCards(_ rows: [InventoryRow]) -> [OwnedCard] {
+        rows.map(\.card).filter { selection.contains($0.id) }
+    }
 
     var body: some View {
         let rows = rows
         let summary = model.summary(of: rows)
         VStack(spacing: 0) {
-            summaryHeader(summary)
-            filterRow
+            if !catalog.isReady {
+                catalogBanner
+            }
+            HStack(spacing: 0) {
+                filterRow
+                CardLayoutButton(layout: $layout)
+            }
             Divider()
-            if rows.isEmpty {
-                ContentUnavailableView {
-                    Label(model.filter.isActive ? "No cards match" : "No inventory yet", systemImage: "tray")
-                } description: {
-                    Text(model.filter.isActive ? "Clear a filter." : "Commit a scan session and the cards land here.")
+            list(rows)
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Metrics") { showMetrics = true }
+                    .disabled(rows.isEmpty)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(isSelecting ? "Done" : "Select") {
+                    isSelecting.toggle()
+                    if !isSelecting { selection = [] }
                 }
-            } else {
-                List(rows) { row in
-                    NavigationLink(value: AppRoute.ownedCard(row.card.id)) {
-                        OwnedCardRow(row: row)
+                .disabled(rows.isEmpty && !isSelecting)
+            }
+            ToolbarItemGroup(placement: .bottomBar) {
+                if isSelecting {
+                    // A menu, not a sheet, because the long press that starts
+                    // selection replaced the row's tag menu. The labels he uses
+                    // most stay one tap away, for one card or for thirty.
+                    Menu("Tag") {
+                        ForEach(tagUses.prefix(5)) { use in
+                            Button {
+                                CardTagEditor(context: modelContext).toggle(use.label, on: selectedCards(rows))
+                                model.invalidateHaystacks()
+                            } label: {
+                                Label(use.label, systemImage: mark(for: use, in: rows))
+                            }
+                        }
+                        if !tagUses.isEmpty { Divider() }
+                        Button {
+                            tagTarget = TagSheetTarget(cards: selectedCards(rows))
+                        } label: {
+                            Label("Tag…", systemImage: "tag")
+                        }
                     }
+                    .disabled(selection.isEmpty)
+                    Spacer()
+                    Text("\(selection.count) selected")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        // The bottom bar squeezes the middle item first, and
+                        // "3 se…" is not a count.
+                        .fixedSize()
+                    Spacer()
+                    Button("Select all") { selection = Set(rows.map(\.card.id)) }
+                        .disabled(selection.count == rows.count)
                 }
-                .listStyle(.plain)
             }
         }
-        .navigationTitle("Inventory")
-        .navigationBarTitleDisplayMode(.inline)
+        .sensoryFeedback(.selection, trigger: isSelecting)
         .sheet(isPresented: $showSetPicker) {
             SetPickerSheet(sets: model.sets(in: cards, from: allSets), selected: model.filter.groupId) { groupId in
                 model.filter.groupId = groupId
             }
         }
-        .task(id: catalog.database?.path) {
-            model.database = { [weak catalog] in catalog?.database }
-            if model.catalogPath != catalog.database?.path {
-                model.invalidate()
-                model.catalogPath = catalog.database?.path
+        .sheet(isPresented: $showTagFilter) {
+            TagFilterSheet(uses: tagUses, selected: Binding(get: { model.filter.tagKeys }, set: { model.filter.tagKeys = $0 }))
+        }
+        .sheet(isPresented: $showMetrics) {
+            InventoryMetricsSheet(summary: summary, rowCount: rows.count)
+        }
+        .sheet(item: $tagTarget) { target in
+            TagSheet(target: target, uses: tagUses, allCards: committed) {
+                model.invalidateHaystacks()
             }
-            await model.load(for: cards)
+        }
+        // `ShellContentView` owns the hit and price caches, because a query
+        // needs them even when this page never appeared.
+        .task(id: catalog.database?.path) {
             if let db = catalog.database, allSets.isEmpty {
                 allSets = (try? await CatalogSearch(database: db).sets()) ?? []
             }
         }
-        .task(id: cards.count) {
-            await model.load(for: cards)
+        .task(id: recents.productIds) {
+            await loadRecents()
+        }
+        .onAppear {
+            #if DEBUG
+            // `CT_OPEN_METRICS=1` opens the sheet, because simctl cannot tap
+            // the button.
+            let env = ProcessInfo.processInfo.environment
+            if env["CT_OPEN_METRICS"] == "1" { showMetrics = true }
+            // `CT_SELECT_ALL=1` enters selection with every row ticked, because
+            // simctl cannot long press.
+            if env["CT_SELECT_ALL"] == "1" {
+                isSelecting = true
+                selection = Set(rows.map(\.card.id))
+            }
+            #endif
         }
     }
 
-    private func summaryHeader(_ s: InventorySummary) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 16) {
-            stat("Cards", "\(s.cardCount)")
-            stat("Market", s.marketCents.asCurrency)
-            stat("Basis", s.basisCents.asCurrency)
-            if s.pricedBasisCents > 0 || s.pricedMarketCents > 0 {
-                stat(
-                    "Unrealized",
-                    (s.unrealizedCents >= 0 ? "+" : "−") + abs(s.unrealizedCents).asCurrency,
-                    color: s.unrealizedCents >= 0 ? .green : .red
-                )
+    // MARK: - The list
+
+    @ViewBuilder
+    private func list(_ rows: [InventoryRow]) -> some View {
+        switch layout {
+        case .list:
+            List {
+                if rows.isEmpty {
+                    emptyState
+                        .listRowSeparator(.hidden)
+                } else {
+                    ForEach(rows) { row in
+                        cardRow(row)
+                    }
+                }
+                recentlyViewedRows
             }
+            .listStyle(.plain)
+            .scrollDismissesKeyboard(.immediately)
+        case .grid:
+            // A grid cannot live in a `List`: a `NavigationLink` inside a list
+            // row draws a chevron on every cell.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if rows.isEmpty {
+                        emptyState
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 40)
+                    } else {
+                        OwnedCardGrid(
+                            rows: rows,
+                            isSelecting: isSelecting,
+                            selection: selection,
+                            onToggle: toggleSelection,
+                            onLongPress: { id in
+                                guard !isSelecting else { return }
+                                isSelecting = true
+                                selection = [id]
+                            }
+                        )
+                            .padding(.horizontal, 12)
+                            .padding(.top, 12)
+                    }
+                    recentlyViewedGrid
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollDismissesKeyboard(.immediately)
+        }
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label(isFiltered ? "No cards match" : "No inventory yet", systemImage: "tray")
+        } description: {
+            Text(isFiltered ? "Clear a filter." : "Commit a scan session and the cards land here.")
+        }
+    }
+
+    @ViewBuilder
+    private func cardRow(_ row: InventoryRow) -> some View {
+        if isSelecting {
+            Button {
+                toggleSelection(row.card.id)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: selection.contains(row.card.id) ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selection.contains(row.card.id) ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                    OwnedCardRow(row: row)
+                }
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: AppRoute.ownedCard(row.card.id)) {
+                OwnedCardRow(row: row)
+            }
+            // A simultaneous gesture, so the long press cannot swallow the tap
+            // that pushes the card.
+            .simultaneousGesture(longPress(row.card.id))
+        }
+    }
+
+    /// Selection starts on a long press, with that card already ticked.
+    private func longPress(_ id: UUID) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+            guard !isSelecting else { return }
+            isSelecting = true
+            selection = [id]
+        }
+    }
+
+    /// All, some, or none of the selected cards carry the label.
+    private func mark(for use: TagUse, in rows: [InventoryRow]) -> String {
+        let cards = selectedCards(rows)
+        let held = cards.filter { CardTagIndex.has(use.label, on: $0) }.count
+        if held == 0 { return "tag" }
+        if held == cards.count { return "checkmark" }
+        return "minus"
+    }
+
+    /// Catalog products he opened, newest first. Hidden while a chip or the
+    /// search field narrows the page, because it is not part of that answer.
+    private var showRecents: Bool { !recentHits.isEmpty && !isFiltered && !isSelecting }
+
+    @ViewBuilder
+    private var recentlyViewedRows: some View {
+        if showRecents {
+            Section {
+                ForEach(recentHits) { hit in
+                    NavigationLink(value: hit) {
+                        ProductRow(hit: hit)
+                    }
+                }
+            } header: {
+                recentsHeader.textCase(nil)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var recentlyViewedGrid: some View {
+        if showRecents {
+            CardSectionHeader(title: "Recently viewed", trailing: AnyView(
+                Button("Clear") { recents.clear() }.font(.caption)
+            ))
+            ProductCardGrid(hits: recentHits)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+        }
+    }
+
+    private var recentsHeader: some View {
+        HStack {
+            Text("Recently viewed")
             Spacer()
+            Button("Clear") { recents.clear() }
+                .font(.caption)
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .overlay(alignment: .bottomLeading) {
-            if s.allocatedCount > 0 {
-                Text("Unrealized covers priced cards only. \(s.allocatedCount) carry an allocated basis.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal)
-                    .offset(y: 6)
+    }
+
+    private var isFiltered: Bool { model.filter.isActive || !query.isEmpty }
+
+    private func toggleSelection(_ id: UUID) {
+        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+    }
+
+    private func loadRecents() async {
+        guard let db = catalog.database else {
+            recentHits = []
+            return
+        }
+        recentHits = (try? await CatalogSearch(database: db).hits(ids: recents.productIds)) ?? []
+    }
+
+    // MARK: - Header
+
+    private var catalogBanner: some View {
+        NavigationLink(value: AppRoute.catalogStatus) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                Text("Catalog not installed. Prices and names are hidden.")
+                    .font(.footnote)
+                Spacer()
+                Text("Details")
+                    .font(.footnote.weight(.semibold))
             }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.yellow.opacity(0.18))
         }
-        .padding(.bottom, s.allocatedCount > 0 ? 10 : 0)
+        .buttonStyle(.plain)
     }
 
-    private func stat(_ label: String, _ value: String, color: Color = .primary) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-            Text(value).font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(color)
-        }
-    }
-
+    /// Two chips, and that is deliberate. Tags carry what the status chips
+    /// carried, and he narrows by label far more than by anything else.
     private var filterRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                Chip(title: tagChipTitle, systemImage: "tag", isSelected: !model.filter.tagKeys.isEmpty) {
+                    showTagFilter = true
+                }
                 if let set = allSets.first(where: { $0.groupId == model.filter.groupId }) {
                     Chip(title: set.name, systemImage: "xmark", isSelected: true) { model.filter.groupId = nil }
                 } else {
                     Chip(title: "Set", systemImage: "square.stack", isSelected: false) { showSetPicker = true }
                 }
-                Divider().frame(height: 20)
-                ForEach([CardStatus.owned, .listed, .atGrader, .gradedReturned, .lost], id: \.self) { status in
-                    Chip(title: statusTitle(status), isSelected: model.filter.statuses.contains(status)) {
-                        toggle(&model.filter.statuses, status)
-                    }
-                }
-                Divider().frame(height: 20)
-                Chip(title: "Uncertain", systemImage: "questionmark", isSelected: model.filter.confidences.contains(.uncertain)) {
-                    toggle(&model.filter.confidences, .uncertain)
-                }
-                Chip(title: "Slabs", isSelected: model.filter.slabsOnly) { model.filter.slabsOnly.toggle() }
-                Chip(title: "Hide bulk", isSelected: model.filter.hideBulk) { model.filter.hideBulk.toggle() }
-                Chip(title: "Personal", isSelected: model.filter.personalOnly) { model.filter.personalOnly.toggle() }
                 if model.filter.isActive {
                     Button("Clear") { model.filter = InventoryFilter() }
                         .font(.subheadline)
@@ -123,18 +334,10 @@ struct InventoryView: View {
         }
     }
 
-    private func toggle<T: Hashable>(_ set: inout Set<T>, _ value: T) {
-        if set.contains(value) { set.remove(value) } else { set.insert(value) }
-    }
-
-    private func statusTitle(_ status: CardStatus) -> String {
-        switch status {
-        case .owned: return "Owned"
-        case .atGrader: return "At grader"
-        case .gradedReturned: return "Graded"
-        case .listed: return "Listed"
-        case .sold: return "Sold"
-        case .lost: return "Lost"
-        }
+    private var tagChipTitle: String {
+        let keys = model.filter.tagKeys
+        if keys.isEmpty { return "Tags" }
+        if keys.count == 1, let use = tagUses.first(where: { keys.contains($0.id) }) { return use.label }
+        return "\(keys.count) tags"
     }
 }

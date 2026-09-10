@@ -79,13 +79,16 @@ import Testing
 }
 
 @Suite struct RankerTests {
-    private func hit(_ id: Int, name: String, number: String? = nil, sealed: Bool = false, published: String? = nil) -> SearchHit {
+    private func hit(
+        _ id: Int, name: String, number: String? = nil, sealed: Bool = false,
+        published: String? = nil, market: Int? = nil
+    ) -> SearchHit {
         let parsed = CollectorNumber.parse(number)
         return SearchHit(
             productId: id, groupId: 0, categoryId: 3, name: name, cleanName: NameCleaner.clean(name), setName: "",
             number: number, numberNum: parsed.numberNum, setTotal: parsed.setTotal, setCode: parsed.setCode,
             rarity: nil, isSealed: sealed, printingCount: 1, imageUrl: nil, publishedOn: published,
-            minMarketCents: nil, maxMarketCents: nil
+            minMarketCents: market, maxMarketCents: market
         )
     }
 
@@ -112,6 +115,30 @@ import Testing
         let new = SearchRanker.Candidate(hit: hit(2, name: "Pikachu", published: "2026-09-01T00:00:00"), ftsRank: -3)
         let request = SearchRequest(text: "pika", context: .browsing, filter: SearchFilter())
         #expect(SearchRanker.rank([old, new], request: request).first?.productId == 2)
+    }
+
+    @Test func valueOutranksBm25() {
+        let cheapButRelevant = SearchRanker.Candidate(hit: hit(1, name: "Pikachu", market: 100), ftsRank: -1)
+        let expensive = SearchRanker.Candidate(hit: hit(2, name: "Pikachu VMAX", market: 90_000), ftsRank: -50)
+        let request = SearchRequest(text: "pika", context: .browsing, filter: SearchFilter())
+        #expect(SearchRanker.rank([cheapButRelevant, expensive], request: request).map(\.productId) == [2, 1])
+    }
+
+    @Test func pricelessHitsSortLast() {
+        let priced = SearchRanker.Candidate(hit: hit(1, name: "Pikachu", market: 5), ftsRank: -50)
+        let noPrice = SearchRanker.Candidate(hit: hit(2, name: "Pikachu V", market: nil), ftsRank: -1)
+        let request = SearchRequest(text: "pika", context: .browsing, filter: SearchFilter())
+        #expect(SearchRanker.rank([noPrice, priced], request: request).map(\.productId) == [1, 2])
+    }
+
+    @Test func exactMatchesStillOutrankValue() {
+        let exact = SearchRanker.Candidate(hit: hit(1, name: "Pikachu", number: "025/165", market: 100), ftsRank: -1)
+        let expensive = SearchRanker.Candidate(hit: hit(2, name: "Pikachu VMAX", number: "044/185", market: 90_000), ftsRank: -1)
+        let byNumber = SearchRequest(text: "025/165", context: .browsing, filter: SearchFilter())
+        #expect(SearchRanker.rank([expensive, exact], request: byNumber).first?.productId == 1)
+        let byName = SearchRequest(text: "pikachu", context: .browsing, filter: SearchFilter())
+        #expect(SearchRanker.rank([expensive, exact], request: byName).first?.productId == 1)
+
     }
 
     @Test func trigramOnlyHitsRankBelowFtsHits() {
@@ -173,12 +200,18 @@ import Testing
         #expect(try Fixture.search("char", filter: japan).isEmpty)
     }
 
+    @Test func resultsComeBackByValueDescending() throws {
+        // Charizard tops $9,000 on its first edition printing, Charizard ex is
+        // $45, Charmander is $0.40.
+        #expect(try Fixture.search("char").map(\.productId) == [2, 1, 3])
+    }
+
     @Test func rowsCarryPriceAndSetData() throws {
         let hit = try #require(try Fixture.search("charizard").first)
         #expect(hit.setName == "Base Set")
         #expect(hit.minMarketCents == 30_000)
         #expect(hit.maxMarketCents == 900_000)
-        #expect(hit.priceLabel == "from $300.00")
+        #expect(hit.priceLabel == "$9,000.00")
         #expect(hit.printingCount == 2)
     }
 
@@ -200,7 +233,7 @@ import Testing
 }
 
 @Suite struct BrowseAndFacetTests {
-    @Test func browsingASetListsItByNumber() async throws {
+    @Test func browsingASetListsItByValue() async throws {
         let queue = try Fixture.make()
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).sqlite").path
         try queue.backup(to: DatabaseQueue(path: path))
@@ -209,7 +242,8 @@ import Testing
 
         var filter = SearchFilter(); filter.groupId = 100
         let hits = try await search.search(SearchRequest(text: "", context: .browsing, filter: filter))
-        #expect(hits.map(\.productId) == [3, 1, 9, 6])
+        // Charizard ex $45, Pidgeot ex $8, the booster pack $4.50, Charmander $0.40.
+        #expect(hits.map(\.productId) == [1, 9, 6, 3])
 
         let sets = try await search.sets()
         #expect(sets.first?.name == "M6: Storm Emeralda")

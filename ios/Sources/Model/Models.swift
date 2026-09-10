@@ -191,6 +191,11 @@ final class OwnedCard {
     var candidateProductIds: [Int] = []
     var scannedAt: Date = Date()
 
+    /// Free-form labels he typed: "binder 3", "for sale", "PSA queue". Tags
+    /// replace the old status picker; `CardStatus` values live here now as
+    /// reserved labels. Stored as typed, compared by `TagKey`, sorted by key.
+    var tags: [String] = []
+
     init(productId: Int, printing: String, condition: String, confidence: MatchConfidence) {
         self.id = UUID()
         self.productId = productId

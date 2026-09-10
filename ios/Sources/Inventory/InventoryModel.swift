@@ -18,15 +18,19 @@ struct InventoryRow: Identifiable {
 }
 
 struct InventoryFilter: Equatable {
-    var statuses: Set<CardStatus> = []
     var confidences: Set<MatchConfidence> = []
     var groupId: Int?
     var slabsOnly = false
     var hideBulk = false
     var personalOnly = false
+    /// `TagKey` values, not display forms. A card matches when it holds any of
+    /// them, which is what "binder 3" plus "for sale" means to him.
+    var tagKeys: Set<String> = []
 
+    /// True when a chip is on. The typed query is not part of this, because the
+    /// search header owns the query and the Clear button must not wipe it.
     var isActive: Bool {
-        !statuses.isEmpty || !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly
+        !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly || !tagKeys.isEmpty
     }
 }
 
@@ -56,11 +60,24 @@ final class InventoryModel {
     var catalogPath: String?
 
     /// Committed cards only, newest first. The caller passes the store's cards.
-    func rows(from cards: [OwnedCard]) -> [InventoryRow] {
-        cards
-            .filter { $0.isCommitted && matches($0) }
+    ///
+    /// `query` is the text from the one search field. The order stays
+    /// acquisition-first even with a query, because he reads his own inventory
+    /// in that order everywhere else.
+    /// `applyFilter` is false for the collection section of a search, so the
+    /// chips on the inventory page never narrow a search result in silence.
+    func rows(from cards: [OwnedCard], query: String = "", applyFilter: Bool = true) -> [InventoryRow] {
+        let parsed = OwnedCardQuery(query)
+        return cards
+            .filter { $0.isCommitted && (!applyFilter || matches($0)) && matchesQuery($0, parsed) }
             .sorted { $0.acquiredAt == $1.acquiredAt ? $0.scannedAt > $1.scannedAt : $0.acquiredAt > $1.acquiredAt }
             .map { InventoryRow(card: $0, hit: hits[$0.productId], marketCents: marketCents(for: $0)) }
+    }
+
+    /// Labels in use, most used first. Derived on every read, so a deleted card
+    /// drops out of the suggestions at once.
+    func tagUses(in cards: [OwnedCard]) -> [TagUse] {
+        CardTagIndex.uses(in: cards.filter(\.isCommitted))
     }
 
     func summary(of rows: [InventoryRow]) -> InventorySummary {
@@ -107,22 +124,48 @@ final class InventoryModel {
         if !missingPrices.isEmpty, let rows = try? await search.prices(for: missingPrices) {
             for id in missingPrices { prices[id] = rows[id] ?? [] }
         }
+        // The new hits change what a card can match on.
+        haystacks = [:]
+    }
+
+    /// Call after a tag edit, so the next query sees the new label.
+    func invalidateHaystacks() {
+        haystacks = [:]
     }
 
     /// Tests inject catalog rows without a database.
     func setTestRows(hits: [Int: SearchHit], prices: [Int: [ProductPrice]]) {
         self.hits = hits
         self.prices = prices
+        haystacks = [:]
     }
 
     /// Drop cached rows after a catalog swap, so prices refresh.
     func invalidate() {
         hits = [:]
         prices = [:]
+        haystacks = [:]
+    }
+
+    /// One cleaned string per card, built once. The match pass runs on every
+    /// keystroke with no debounce, so it must not rebuild these.
+    private var haystacks: [UUID: String] = [:]
+
+    private func matchesQuery(_ card: OwnedCard, _ query: OwnedCardQuery) -> Bool {
+        if query.isEmpty { return true }
+        let hit = hits[card.productId]
+        let haystack: String
+        if let cached = haystacks[card.id] {
+            haystack = cached
+        } else {
+            haystack = OwnedCardMatcher.haystack(card: card, hit: hit)
+            haystacks[card.id] = haystack
+        }
+        return OwnedCardMatcher.matches(haystack: haystack, card: card, hit: hit, query: query)
     }
 
     private func matches(_ card: OwnedCard) -> Bool {
-        if !filter.statuses.isEmpty, !filter.statuses.contains(card.status) { return false }
+        if !filter.tagKeys.isEmpty, filter.tagKeys.isDisjoint(with: Set(card.tags.map(TagKey.of))) { return false }
         if !filter.confidences.isEmpty, !filter.confidences.contains(card.matchConfidence) { return false }
         if let groupId = filter.groupId, hits[card.productId]?.groupId != groupId { return false }
         if filter.slabsOnly, card.certNumber == nil { return false }

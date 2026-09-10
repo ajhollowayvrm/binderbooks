@@ -10,7 +10,10 @@ import SwiftData
 /// sorted by id so two exports of the same store are byte-identical.
 enum CollectionExport {
     static let format = "cardtracker-collection"
-    static let version = 1
+    /// Version 2 added `OwnedCardDTO.tags`. The gate is `file.version <= version`,
+    /// so a version 1 file still imports. The bump stops an older build from
+    /// importing a tagged file and dropping every label in silence.
+    static let version = 2
 
     struct File: Codable, Equatable {
         var format: String = CollectionExport.format
@@ -75,6 +78,10 @@ enum CollectionExport {
         var ocrNumber: String?
         var candidateProductIds: [Int]
         var scannedAt: Date
+        /// Optional on purpose. The synthesised decoder calls `decode` for a
+        /// non-optional property and throws `keyNotFound`, so a non-optional
+        /// field would make every file written before tags unimportable.
+        var tags: [String]?
     }
 
     struct ScanSessionDTO: Codable, Equatable {
@@ -147,7 +154,7 @@ enum CollectionExport {
                     basisIsAllocated: $0.basisIsAllocated, isBulk: $0.isBulk, isPersonalCollection: $0.isPersonalCollection,
                     sourceItemId: $0.sourceItem?.id, scanSessionId: $0.scanSession?.id, matchConfidenceRaw: $0.matchConfidenceRaw,
                     certNumber: $0.certNumber, graderRaw: $0.graderRaw, ocrName: $0.ocrName, ocrNumber: $0.ocrNumber,
-                    candidateProductIds: $0.candidateProductIds, scannedAt: $0.scannedAt
+                    candidateProductIds: $0.candidateProductIds, scannedAt: $0.scannedAt, tags: $0.tags
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString },
             sessions: sessions.map {
@@ -293,6 +300,7 @@ enum CollectionExport {
             card.ocrNumber = dto.ocrNumber
             card.candidateProductIds = dto.candidateProductIds
             card.scannedAt = dto.scannedAt
+            card.tags = dto.tags ?? []
             report.cards += 1
         }
 
