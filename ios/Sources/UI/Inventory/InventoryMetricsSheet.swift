@@ -37,9 +37,9 @@ struct InventoryMetricsSheet: View {
                         row("Priced basis", summary.pricedBasisCents.asCurrency)
                     } footer: {
                         if summary.allocatedCount > 0 {
-                            Text("Unrealized covers priced cards only. \(summary.allocatedCount) carry an allocated basis, which is an artifact of a split purchase and never a gain or a loss.")
+                            Text("Unrealized covers every card that has both a cost and a market price. \(summary.allocatedCount) of those costs were split out of a purchase rather than paid for one card.")
                         } else {
-                            Text("Unrealized covers cards with a real, unallocated basis.")
+                            Text("Unrealized covers every card that has both a cost and a market price.")
                         }
                     }
                 }

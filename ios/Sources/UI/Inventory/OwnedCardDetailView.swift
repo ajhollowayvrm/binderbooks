@@ -125,8 +125,13 @@ private struct OwnedCardDetailBody: View {
                         .monospacedDigit()
                         .foregroundStyle(diff >= 0 ? .green : .red)
                 }
-            } else if card.basisIsAllocated {
-                Text("This basis was split across the purchase, so it is not a real cost for this card. Read the result at the purchase level.")
+                if card.basisIsAllocated {
+                    Text("This cost was split out of the purchase. The pack result is still the truer read, but this is the figure to compare a sale against.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if card.totalBasisCents == 0 {
+                Text("No cost on this card yet. Set one from the review screen, or attach it to a purchase.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

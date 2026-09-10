@@ -137,9 +137,9 @@ matches in the search field. The reserved labels `sold`, `listed`, `at grader`,
 old status into its label once, and `OwnedCard.statusRaw` stays in the store and in
 the export for one release, because a dropped field cannot be read back.
 
-A card whose basis the allocator wrote shows "alloc." instead of a gain or a loss,
-and the summary's unrealized figure covers priced cards only. That follows docs/04:
-a rip pull's per-card basis is an artifact.
+Every card with a cost and a market price shows the difference, including a cost
+split out of a purchase. The Metrics sheet reports how many of those costs were
+derived rather than paid for one card. See the 2026-09-10 amendment in docs/04.
 
 ## Pricing at review
 
@@ -149,9 +149,10 @@ those cards. `OwnedCard.basisIsManual` then marks the basis as his:
 - The purchase total at commit covers everything. What he priced comes out
   first, and the remainder splits over the cards he did not price. Typing more
   than the total leaves the split at zero and rewrites nothing.
-- A split over several cards is still a derived figure for any one card, so it
-  stays `basisIsAllocated` and never renders as a gain or a loss. A total set on
-  one card is that card's real cost and does show a gain.
+- A split over several cards stays `basisIsAllocated`, which reports that the
+  cost was derived. It no longer hides the gain: every card with a cost and a
+  market price shows the difference, because that is the figure he compares a
+  sale against.
 
 ## Export and import
 

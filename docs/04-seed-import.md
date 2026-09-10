@@ -106,12 +106,19 @@ Split behavior by acquisition type:
 - **Purchased singles and slabs** — real per-card basis. AJ paid a specific price for
   a specific card. The Whatnot slab rows in this file (`costAuto: false`) show this
   working correctly: Groudon at $41 against $81.03 market, Chansey at $16 against $27.
-- **Rip pulls** — allocate for tax purposes, but **report at the rip level**. Mark
-  per-card figures as allocated, not as truth. Never show an allocated basis next to a
-  market value as though the difference were a real gain or loss.
+- **Rip pulls** — allocate for tax purposes, and **report at the rip level too**.
+  Mark per-card figures as allocated, so he can see which costs were derived.
 
-`OwnedCard` needs a `basisIsAllocated: Bool`. The inventory view must not render a
-red loss number for a card whose basis is an artifact.
+`OwnedCard` needs a `basisIsAllocated: Bool`.
+
+**Amended 2026-09-10.** The rule used to end "never show an allocated basis next to a
+market value as though the difference were a real gain or loss", and the inventory
+hid the figure. AJ overruled it: "I just want to be able to calculate the cost of
+each card based on the price of the item bought and then use that a gain or loss
+reference when I sell the card." So the difference now shows on every card that has
+both a cost and a market price. `basisIsAllocated` still marks a derived cost, and
+the card detail still says the pack result is the truer read, but the app no longer
+withholds the number he sells against.
 
 The `costAuto` flag in this file is exactly that signal, already present: `true` means
 BinderBooks computed it, `false` means AJ entered a real price. Map it directly.

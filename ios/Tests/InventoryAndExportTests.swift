@@ -170,7 +170,10 @@ private func seed(_ context: ModelContext) throws {
         SearchHit(productId: id, groupId: group, categoryId: 3, name: "P\(id)", cleanName: "p\(id)", setName: "Set \(group)", isSealed: false, printingCount: 1)
     }
 
-    @Test @MainActor func summaryKeepsAllocatedBasisOutOfUnrealized() throws {
+    /// A cost split out of a purchase is still the figure he sells against, so
+    /// it counts towards unrealized. `allocatedCount` reports how many were
+    /// split; it no longer removes them (his call, 2026-09-10).
+    @Test @MainActor func unrealizedCoversEveryCardWithACostAndAPrice() throws {
         try seed(container.mainContext)
         let model = InventoryModel()
         model.setTestRows(
@@ -189,15 +192,20 @@ private func seed(_ context: ModelContext) throws {
         #expect(summary.cardCount == 6)
         #expect(summary.marketCents == 8_103 + 197 + 5 * 4)
         #expect(summary.basisCents == 4_100 + 1_600)
-        #expect(summary.pricedBasisCents == 4_100)
-        #expect(summary.pricedMarketCents == 8_103)
-        #expect(summary.unrealizedCents == 4_003)
+        // The slab cost $41 and the pull's split cost was $16. Both count.
+        #expect(summary.pricedBasisCents == 4_100 + 1_600)
+        #expect(summary.pricedMarketCents == 8_103 + 197)
+        #expect(summary.unrealizedCents == 8_103 + 197 - 4_100 - 1_600)
+        // Still reported, so he can see which costs were derived.
         #expect(summary.allocatedCount == 1)
 
         let pull = try #require(rows.first { $0.card.productId == 2 })
-        #expect(pull.unrealizedCents == nil)
+        #expect(pull.unrealizedCents == 197 - 1_600)
         let slab = try #require(rows.first { $0.card.productId == 1 })
         #expect(slab.unrealizedCents == 4_003)
+        // A bulk card carries no cost of its own, so it has no gain to read.
+        let bulk = try #require(rows.first { $0.card.productId == 3 })
+        #expect(bulk.unrealizedCents == nil)
     }
 
     @Test @MainActor func filtersNarrow() throws {

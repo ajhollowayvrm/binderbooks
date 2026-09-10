@@ -227,7 +227,8 @@ cards and sets `basisIsManual`.
 The purchase total then covers everything else. What he priced leaves the total
 first, and the remainder splits over the rest. A split over several cards stays
 `basisIsAllocated`, because a per-card figure derived from a lot price is the
-artifact `04` warns about. A total set on a single card is a real cost.
+artifact `04` describes. A split cost still shows a gain, because that is the figure
+he sells against; the flag reports how the cost was reached, and hides nothing.
 
 ### Tags
 
@@ -350,9 +351,10 @@ sealed items.
 
 Rip performance = `sum(market value of pulls) − sealedItem.allocatedCostCents`.
 
-Read rip performance at the **pack** level, not per card. Under equal split the hit
-shows a large gain and any tracked filler shows small losses; that's an artifact of
-the method, not a signal.
+Read rip performance at the **pack** level as well as per card. Under equal split the
+hit shows a large gain and any tracked filler shows small losses; that is an artifact
+of the method. The per-card figure still shows, because it is what he compares a sale
+against (see the amendment in `04`).
 
 ### Grading
 

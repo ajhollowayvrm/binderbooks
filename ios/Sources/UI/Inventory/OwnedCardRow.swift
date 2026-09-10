@@ -47,18 +47,20 @@ struct OwnedCardRow: View {
                     Text("bulk")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                } else if row.card.basisIsAllocated {
-                    Text("\(row.card.totalBasisCents.asCurrency) alloc.")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
                 } else if let diff = row.unrealizedCents {
+                    // The gain against what the card cost, split basis or not.
+                    // This is the number he reads before he sells.
                     Text((diff >= 0 ? "+" : "−") + abs(diff).asCurrency)
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(diff >= 0 ? .green : .red)
-                } else {
-                    Text("basis \(row.card.totalBasisCents.asCurrency)")
+                } else if row.card.totalBasisCents > 0 {
+                    Text("cost \(row.card.totalBasisCents.asCurrency)")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
+                } else {
+                    Text("no cost")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
             }
         }

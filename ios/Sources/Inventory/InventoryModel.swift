@@ -9,10 +9,16 @@ struct InventoryRow: Identifiable {
 
     var id: UUID { card.id }
 
-    /// Market minus basis, only when the basis is real. An allocated basis is
-    /// an artifact and never renders as a gain or a loss (docs/04).
+    /// Market minus what the card cost. A basis split out of a pack or a lot
+    /// counts: he prices a card from what the item cost, and reads the
+    /// difference when he sells it. `basisIsAllocated` still says the figure
+    /// was derived, but it no longer hides it (his call, 2026-09-10; it
+    /// overrides the `docs/04` rule).
+    ///
+    /// Nil when there is no market price or no cost, because market minus
+    /// nothing is not a gain.
     var unrealizedCents: Int? {
-        guard !card.basisIsAllocated, !card.isBulk, let market = marketCents else { return nil }
+        guard !card.isBulk, card.totalBasisCents > 0, let market = marketCents else { return nil }
         return market - card.totalBasisCents
     }
 }
@@ -38,9 +44,12 @@ struct InventorySummary: Equatable {
     var cardCount = 0
     var marketCents = 0
     var basisCents = 0
-    /// Market and basis over cards with a real, unallocated basis.
+    /// Market and basis over the cards that carry both, so the difference is a
+    /// comparison of like with like.
     var pricedMarketCents = 0
     var pricedBasisCents = 0
+    /// How many of those costs were split out of a purchase rather than paid
+    /// for one card. Reported, not deducted.
     var allocatedCount = 0
 
     var unrealizedCents: Int { pricedMarketCents - pricedBasisCents }
@@ -87,9 +96,8 @@ final class InventoryModel {
             let market = (row.marketCents ?? 0) * max(1, row.card.quantity)
             s.marketCents += market
             s.basisCents += row.card.totalBasisCents
-            if row.card.basisIsAllocated {
-                s.allocatedCount += 1
-            } else if !row.card.isBulk, row.marketCents != nil {
+            if row.card.basisIsAllocated { s.allocatedCount += 1 }
+            if !row.card.isBulk, row.marketCents != nil, row.card.totalBasisCents > 0 {
                 s.pricedMarketCents += market
                 s.pricedBasisCents += row.card.totalBasisCents
             }
