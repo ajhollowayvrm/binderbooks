@@ -3,6 +3,9 @@ import SwiftUI
 
 /// Attach the session to a purchase. Pick a recent one, or create one inline:
 /// vendor, date, total, note. That is the whole form.
+///
+/// A session started from a purchase arrives with that purchase already chosen,
+/// because he opened the pack from it and there is nothing left to ask.
 struct CommitSheet: View {
     let model: ScanSessionModel
     var onDone: () -> Void
@@ -104,6 +107,9 @@ struct CommitSheet: View {
             }
             .navigationTitle("Commit")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                if existing == nil { existing = model.session.purchase }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

@@ -17,7 +17,7 @@ struct RootView: View {
     @State private var search = SearchModel(context: .browsing)
     @State private var recents = RecentlyViewed()
     @State private var inventory = InventoryModel()
-    @State private var activeSession: ScanSession?
+    @State private var launcher = ScannerLauncher()
     @State private var path = NavigationPath()
 
     var body: some View {
@@ -32,6 +32,13 @@ struct RootView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // The inventory owns the leading slot with Metrics, so the
+                // ledger sits beside Settings.
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink(value: AppRoute.ledger) {
+                        Label("Ledger", systemImage: "list.bullet.rectangle")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink(value: AppRoute.settings) {
                         Label("Settings", systemImage: "gearshape")
@@ -46,14 +53,23 @@ struct RootView: View {
                 case .settings: SettingsView()
                 case .catalogStatus: CatalogStatusView()
                 case .ownedCard(let id): OwnedCardDetailView(cardID: id)
+                case .ledger: LedgerView(filter: Self.debugLedgerFilter, adding: Self.debugLedgerAdding)
+                }
+            }
+            .navigationDestination(for: LedgerEntry.Kind.self) { kind in
+                switch kind {
+                case .purchase(let id): PurchaseDetailView(purchaseID: id)
+                case .grading(let id): GradingDetailView(submissionID: id)
+                case .sale(let id): SaleDetailView(saleID: id)
                 }
             }
         }
         .environment(recents)
         .environment(inventory)
-        .fullScreenCover(item: $activeSession) { session in
+        .environment(launcher)
+        .fullScreenCover(item: $launcher.session) { session in
             ScanSessionView(session: session) {
-                activeSession = nil
+                launcher.session = nil
             }
             .environment(catalog)
         }
@@ -69,15 +85,36 @@ struct RootView: View {
         ShellContentView(search: search)
     }
 
+    /// Screenshot state for the ledger. Always the default outside DEBUG.
+    static var debugLedgerFilter: LedgerFilter {
+        #if DEBUG
+        switch ProcessInfo.processInfo.environment["CT_OPEN_LEDGER"] {
+        case "in": return .moneyIn
+        case "out": return .moneyOut
+        default: return .all
+        }
+        #else
+        .all
+        #endif
+    }
+
+    static var debugLedgerAdding: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["CT_OPEN_LEDGER"] == "add"
+        #else
+        return false
+        #endif
+    }
+
     /// Resume the open session if there is one. Otherwise start a new one.
     private func openScanner() {
         if let open = openSessions.first {
-            activeSession = open
+            launcher.session = open
         } else {
             let session = ScanSession()
             modelContext.insert(session)
             try? modelContext.save()
-            activeSession = session
+            launcher.session = session
         }
     }
 
@@ -85,8 +122,13 @@ struct RootView: View {
     /// `CT_SEARCH_QUERY="legendary warriors"` pre-fills the field.
     /// `CT_SEARCH_LAYOUT=list` switches every card list to the dense row.
     /// `CT_OPEN_CARD=1` pushes the newest card. `CT_OPEN_SETTINGS=1` pushes
-    /// Settings. `CT_OPEN_SCANNER=1` opens the scanner. `CT_OPEN_INVENTORY=1`
-    /// is deprecated and only returns to the landing screen.
+    /// Settings. `CT_OPEN_SCANNER=1` opens the scanner. `CT_OPEN_LEDGER` takes
+    /// `1` for the ledger, `in` or `out` for one side of it, `add` for the add
+    /// sheet, `sale` for the newest order, or `purchase` for the newest
+    /// purchase. `CT_IMPORT_FILE=<path>` merges a collection file, so
+    /// a simulator can hold his real books without the file picker.
+    /// `CT_OPEN_INVENTORY=1` is deprecated and only returns to the landing
+    /// screen.
     /// Screenshots and manual timing runs need them because simctl cannot type.
     private func applyDebugQuery() {
         #if DEBUG
@@ -127,6 +169,29 @@ struct RootView: View {
             Task {
                 while !catalog.isReady { try? await Task.sleep(for: .milliseconds(200)) }
                 openScanner()
+            }
+        }
+        // Import without the file picker. Debug only, and it merges, so it can
+        // never delete anything.
+        if let path = env["CT_IMPORT_FILE"], let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+           let file = try? CollectionExport.decode(data) {
+            try? CollectionExport.apply(file, to: modelContext, mode: .merge)
+        }
+        if let ledger = env["CT_OPEN_LEDGER"] {
+            Task {
+                try? await Task.sleep(for: .milliseconds(400))
+                path.append(AppRoute.ledger)
+                switch ledger {
+                case "sale":
+                    var d = FetchDescriptor<Sale>(sortBy: [SortDescriptor(\.soldAt, order: .reverse)])
+                    d.fetchLimit = 1
+                    if let sale = try? modelContext.fetch(d).first { path.append(LedgerEntry.Kind.sale(sale.id)) }
+                case "purchase":
+                    var d = FetchDescriptor<Purchase>(sortBy: [SortDescriptor(\.date, order: .reverse)])
+                    d.fetchLimit = 1
+                    if let purchase = try? modelContext.fetch(d).first { path.append(LedgerEntry.Kind.purchase(purchase.id)) }
+                default: break
+                }
             }
         }
         #endif

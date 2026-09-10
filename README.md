@@ -12,7 +12,8 @@ pipeline, the data model, the Phase 1 build spec, and the seed import plan.
 |---|---|
 | `docs/` | The build brief and the design documents. |
 | `catalog/` | The daily catalog build. Python, standard library only. See `catalog/README.md`. |
-| `seed/binderbooks-export.json` | The BinderBooks ledger, 2026-04-20 to 2026-09-05. Imported in a later phase. |
+| `seed/` | The BinderBooks ledger for 2026-04-20 to 2026-09-05, the collection file converted from it, and the report of what did not convert. |
+| `scripts/` | `import_binderbooks.py` converts the ledger into a file the app imports. `ios-device.py` builds, signs and installs on the phone. |
 | `.github/workflows/build-catalog.yml` | Builds the catalog every day at 21:30 UTC and publishes it to the `catalog-latest` release. |
 | `ios/` | The SwiftUI app. The Xcode project is generated from `ios/project.yml`. See `ios/README.md`. |
 
@@ -21,3 +22,13 @@ pipeline, the data model, the Phase 1 build spec, and the seed import plan.
 Phase 1 is built: the catalog pipeline, the on-device download and swap, search,
 the scan session with review and commit, the inventory view, and JSON export and
 import. The live scanner has not run on a phone yet. See `ios/README.md`.
+
+The BinderBooks ledger is imported: 93 purchases, 8 grading submissions, 58 sealed
+lines, 279 of 285 cards, and 131 sales. See `docs/04-seed-import.md`.
+
+The **ledger screen** shows money in and money out in one list, by month, with a
+detail for each order, purchase and grading charge, and a plus button that
+records a purchase, an order, or a grading charge by hand. Ripping starts from a
+purchase and writes no rip record — see the amendment in `docs/02-data-model.md`.
+`GradingSubmission`, `GradingEntry`, `Sale` and `SaleLine` exist as models and
+travel in the export, but the grading and selling flows are not built.

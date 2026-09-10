@@ -7,4 +7,5 @@ enum AppRoute: Hashable {
     case settings
     case catalogStatus
     case ownedCard(UUID)
+    case ledger
 }
