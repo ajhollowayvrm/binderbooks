@@ -170,6 +170,39 @@ final class ScanSessionModel {
         save()
     }
 
+    /// Splits one total evenly over the given cards and marks the basis as his.
+    /// A split over several cards is still a derived figure for any one card, so
+    /// it stays flagged as allocated and never renders as a gain or a loss. A
+    /// total set on one card is that card's real cost.
+    func setBasis(totalCents: Int, for cards: [OwnedCard]) {
+        let tracked = cards.sorted { $0.scannedAt < $1.scannedAt }
+        guard !tracked.isEmpty else { return }
+        let shares = Allocation.splitEqually(totalCents, into: tracked.count)
+        for (card, share) in zip(tracked, shares) {
+            card.acquisitionBasisCents = share
+            card.basisIsManual = true
+            card.basisIsAllocated = tracked.count > 1
+        }
+        save()
+    }
+
+    /// Clears a price he set, so the purchase total covers the card again.
+    func clearBasis(for cards: [OwnedCard]) {
+        for card in cards {
+            card.acquisitionBasisCents = 0
+            card.basisIsManual = false
+            card.basisIsAllocated = false
+        }
+        save()
+    }
+
+    /// What he has priced himself. The commit sheet subtracts it from the total.
+    var manualBasisCents: Int {
+        cards.filter(\.basisIsManual).reduce(0) { $0 + $1.acquisitionBasisCents }
+    }
+
+    var pricedCardCount: Int { cards.filter(\.basisIsManual).count }
+
     func setBulk(_ isBulk: Bool, for cards: [OwnedCard]) {
         for card in cards { card.isBulk = isBulk }
         save()

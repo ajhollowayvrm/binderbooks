@@ -180,10 +180,40 @@ import Testing
         #expect(result.confidence == .certain)
     }
 
-    @Test func uniqueNumberWithDisagreeingNameIsLikely() throws {
+    /// A near-exact name that contradicts the number wins, and the result is
+    /// uncertain because two signals disagree. Reading "Umbreon" off a card
+    /// numbered 164/197 means one of the two is a misread, so the chip must ask
+    /// rather than assert.
+    @Test func nearExactNameBeatsAContradictingNumber() throws {
         let result = try match(ScanObservation(number: "164/197", name: "Umbreon"))
+        #expect(result.productId == 7)
+        #expect(result.confidence == .uncertain)
+        #expect(result.candidates.map(\.productId).contains(9))
+    }
+
+    /// A name the catalog does not hold cannot overrule the number. Glare and
+    /// attack text produce readings like this, and the number is still right.
+    @Test func unreadableNameKeepsTheNumberMatch() throws {
+        let result = try match(ScanObservation(number: "164/197", name: "Zzzzqq"))
         #expect(result.productId == 9)
         #expect(result.confidence == .likely)
+    }
+
+    /// His report: a Cyndaquil came back as Combusken. The total read off the
+    /// card matched exactly one other card, and the name said otherwise.
+    @Test func aMisreadTotalDoesNotReturnTheWrongCard() throws {
+        let result = try match(ScanObservation(number: "004/131", name: "Cyndaquil"))
+        #expect(result.productId == 11)
+        #expect(result.confidence == .uncertain)
+        // Combusken stays on the chip, because the number did point at it.
+        #expect(result.candidates.map(\.productId).contains(10))
+    }
+
+    /// The same number, read correctly off the Combusken, still resolves.
+    @Test func theNumberWinsWhenTheNameAgreesWithIt() throws {
+        let result = try match(ScanObservation(number: "004/131", name: "Combusken"))
+        #expect(result.productId == 10)
+        #expect(result.confidence == .certain)
     }
 
     @Test func guessedPrintingMarksUncertain() throws {
@@ -272,6 +302,127 @@ import Testing
         #expect(hit1.cards.first?.basisIsAllocated == true)
         #expect(bulk.cards.first?.acquisitionBasisCents == 0)
         #expect(purchase.items.reduce(0) { $0 + $1.allocatedCostCents } == 497)
+    }
+
+    /// A total he set at review comes out of the purchase total first, and the
+    /// rest splits over the cards he did not price. This is the test that
+    /// catches an allocator overwriting a price he typed.
+    @Test @MainActor func aPriceHeSetSurvivesTheAllocator() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        defer { withExtendedLifetime(container) {} }
+        let context = container.mainContext
+        let purchase = Purchase(vendor: "LGS", itemCostCents: 3_000)
+        context.insert(purchase)
+
+        var cards: [OwnedCard] = []
+        var items: [PurchaseItem] = []
+        for index in 0..<4 {
+            let item = PurchaseItem(productId: index + 1)
+            item.purchase = purchase
+            context.insert(item)
+            items.append(item)
+            let card = OwnedCard(productId: item.productId, printing: "Normal", condition: "Near Mint", confidence: .certain)
+            card.sourceItem = item
+            context.insert(card)
+            cards.append(card)
+        }
+        // He priced the first two at $10 each.
+        for card in cards.prefix(2) {
+            card.acquisitionBasisCents = 1_000
+            card.basisIsManual = true
+        }
+
+        Allocation.allocate(purchase)
+        Allocation.writeCardBases(purchase)
+
+        #expect(cards.map(\.acquisitionBasisCents) == [1_000, 1_000, 500, 500])
+        #expect(cards.map(\.basisIsManual) == [true, true, false, false])
+        #expect(items.map(\.allocatedCostCents) == [1_000, 1_000, 500, 500])
+        #expect(purchase.items.reduce(0) { $0 + $1.allocatedCostCents } == 3_000)
+    }
+
+    /// Typing more than the total must not rewrite anything he entered.
+    @Test @MainActor func pricesAboveTheTotalLeaveTheSplitAtZero() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        defer { withExtendedLifetime(container) {} }
+        let context = container.mainContext
+        let purchase = Purchase(vendor: "LGS", itemCostCents: 500)
+        context.insert(purchase)
+
+        let priced = PurchaseItem(productId: 1)
+        let rest = PurchaseItem(productId: 2)
+        var cards: [OwnedCard] = []
+        for item in [priced, rest] {
+            item.purchase = purchase
+            context.insert(item)
+            let card = OwnedCard(productId: item.productId, printing: "Normal", condition: "Near Mint", confidence: .certain)
+            card.sourceItem = item
+            context.insert(card)
+            cards.append(card)
+        }
+        cards[0].acquisitionBasisCents = 2_000
+        cards[0].basisIsManual = true
+
+        Allocation.allocate(purchase)
+        Allocation.writeCardBases(purchase)
+
+        #expect(cards[0].acquisitionBasisCents == 2_000)
+        #expect(cards[1].acquisitionBasisCents == 0)
+    }
+}
+
+@Suite @MainActor struct ReviewPricingTests {
+    private func session() throws -> (ModelContainer, ScanSessionModel, [OwnedCard]) {
+        let container = try CollectionStore.container(inMemory: true)
+        let context = container.mainContext
+        let session = ScanSession()
+        context.insert(session)
+        var cards: [OwnedCard] = []
+        for index in 0..<3 {
+            let card = OwnedCard(productId: index + 1, printing: "Normal", condition: "Near Mint", confidence: .certain)
+            card.scannedAt = Date(timeIntervalSinceReferenceDate: Double(index))
+            card.scanSession = session
+            context.insert(card)
+            cards.append(card)
+        }
+        try context.save()
+        let model = ScanSessionModel(session: session, context: context, catalog: CatalogController())
+        return (container, model, cards)
+    }
+
+    /// One total over three cards, split evenly and flagged as his.
+    @Test func aTotalSplitsEvenlyOverTheSelection() throws {
+        let (container, model, cards) = try session()
+        defer { withExtendedLifetime(container) {} }
+        model.setBasis(totalCents: 1_000, for: cards)
+        #expect(cards.map(\.acquisitionBasisCents) == [334, 333, 333])
+        #expect(cards.allSatisfy { $0.basisIsManual })
+        // A split figure is derived for any one card, so it must not render as
+        // a gain or a loss.
+        #expect(cards.allSatisfy { $0.basisIsAllocated })
+        #expect(model.manualBasisCents == 1_000)
+        #expect(model.pricedCardCount == 3)
+    }
+
+    /// A total on one card is that card's real cost, so the gain shows.
+    @Test func aTotalOnOneCardIsARealCost() throws {
+        let (container, model, cards) = try session()
+        defer { withExtendedLifetime(container) {} }
+        model.setBasis(totalCents: 2_500, for: [cards[1]])
+        #expect(cards[1].acquisitionBasisCents == 2_500)
+        #expect(cards[1].basisIsManual)
+        #expect(!cards[1].basisIsAllocated)
+    }
+
+    @Test func clearingAPriceHandsTheCardBackToTheTotal() throws {
+        let (container, model, cards) = try session()
+        defer { withExtendedLifetime(container) {} }
+        model.setBasis(totalCents: 900, for: cards)
+        model.clearBasis(for: [cards[0]])
+        #expect(cards[0].acquisitionBasisCents == 0)
+        #expect(!cards[0].basisIsManual)
+        #expect(!cards[0].basisIsAllocated)
+        #expect(model.pricedCardCount == 2)
     }
 }
 

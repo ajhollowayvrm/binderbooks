@@ -10,7 +10,7 @@ import SwiftData
 /// sorted by id so two exports of the same store are byte-identical.
 enum CollectionExport {
     static let format = "cardtracker-collection"
-    /// Version 2 added `OwnedCardDTO.tags`. The gate is `file.version <= version`,
+    /// Version 2 added `OwnedCardDTO.tags` and `basisIsManual`. The gate is `file.version <= version`,
     /// so a version 1 file still imports. The bump stops an older build from
     /// importing a tagged file and dropping every label in silence.
     static let version = 2
@@ -67,6 +67,9 @@ enum CollectionExport {
         var acquisitionBasisCents: Int
         var gradingBasisCents: Int
         var basisIsAllocated: Bool
+        /// Optional, like `tags`, so a file written before review pricing
+        /// still decodes.
+        var basisIsManual: Bool?
         var isBulk: Bool
         var isPersonalCollection: Bool
         var sourceItemId: UUID?
@@ -151,7 +154,8 @@ enum CollectionExport {
                     id: $0.id, productId: $0.productId, skuId: $0.skuId, printing: $0.printing, condition: $0.condition,
                     language: $0.language, quantity: $0.quantity, acquiredAt: $0.acquiredAt, statusRaw: $0.statusRaw,
                     acquisitionBasisCents: $0.acquisitionBasisCents, gradingBasisCents: $0.gradingBasisCents,
-                    basisIsAllocated: $0.basisIsAllocated, isBulk: $0.isBulk, isPersonalCollection: $0.isPersonalCollection,
+                    basisIsAllocated: $0.basisIsAllocated, basisIsManual: $0.basisIsManual,
+                    isBulk: $0.isBulk, isPersonalCollection: $0.isPersonalCollection,
                     sourceItemId: $0.sourceItem?.id, scanSessionId: $0.scanSession?.id, matchConfidenceRaw: $0.matchConfidenceRaw,
                     certNumber: $0.certNumber, graderRaw: $0.graderRaw, ocrName: $0.ocrName, ocrNumber: $0.ocrNumber,
                     candidateProductIds: $0.candidateProductIds, scannedAt: $0.scannedAt, tags: $0.tags
@@ -289,6 +293,7 @@ enum CollectionExport {
             card.acquisitionBasisCents = dto.acquisitionBasisCents
             card.gradingBasisCents = dto.gradingBasisCents
             card.basisIsAllocated = dto.basisIsAllocated
+            card.basisIsManual = dto.basisIsManual ?? false
             card.isBulk = dto.isBulk
             card.isPersonalCollection = dto.isPersonalCollection
             card.sourceItem = dto.sourceItemId.flatMap { items[$0] }

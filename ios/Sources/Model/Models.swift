@@ -141,6 +141,12 @@ final class PurchaseItem {
     var isBulkOnly: Bool {
         !cards.isEmpty && cards.allSatisfy(\.isBulk)
     }
+
+    /// True when he priced every card on this line himself. The line then takes
+    /// its own money out of the purchase total instead of a share of it.
+    var isManualOnly: Bool {
+        !cards.isEmpty && cards.allSatisfy(\.basisIsManual)
+    }
 }
 
 @Model
@@ -169,6 +175,9 @@ final class OwnedCard {
     /// True when the allocator wrote the basis. A rip pull's per-card basis is
     /// an artifact. Never show it next to a market value as a gain or loss.
     var basisIsAllocated: Bool = false
+    /// True when he priced the card himself, at review. A purchase total never
+    /// overwrites it, and it comes out of the total before the split.
+    var basisIsManual: Bool = false
 
     /// Not individually accounted. Excluded from allocation denominators.
     var isBulk: Bool = false

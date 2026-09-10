@@ -34,10 +34,21 @@ struct SearchFilter: Equatable, Sendable {
     var isActive: Bool { kind != .all || !categoryIds.isEmpty || groupId != nil }
 }
 
+/// What the result order optimises for.
+enum SearchRanking: Equatable, Sendable {
+    /// Market value first, under the exact-match tiers. What a person reading a
+    /// result list wants.
+    case byValue
+    /// Text relevance first. What a machine matching an OCR name needs: the
+    /// closest name must survive the candidate cap, however cheap the card is.
+    case byRelevance
+}
+
 struct SearchRequest: Equatable, Sendable {
     var text: String
     var context: SearchContext
     var filter: SearchFilter
+    var ranking: SearchRanking = .byValue
 
     var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
 }

@@ -183,8 +183,15 @@ import Testing
     }
 
     @Test func buyingBoostsTheSealedProduct() throws {
-        #expect(try Fixture.search("legendary warriors", context: .buying).first?.productId == 4)
-        #expect(try Fixture.search("legendary warriors", context: .intake).first?.productId == 5)
+        // Compare the pair, not the first row. The trigram fallback pulls in
+        // unrelated cards on a two-word query, and the context boost is a
+        // statement about these two products only.
+        func rank(_ context: SearchContext, _ id: Int) throws -> Int {
+            let ids = try Fixture.search("legendary warriors", context: context).map(\.productId)
+            return try #require(ids.firstIndex(of: id))
+        }
+        #expect(try rank(.buying, 4) < rank(.buying, 5))
+        #expect(try rank(.intake, 5) < rank(.intake, 4))
     }
 
     @Test func kindFilterNarrows() throws {

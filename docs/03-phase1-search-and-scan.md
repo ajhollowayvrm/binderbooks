@@ -173,6 +173,24 @@ key across the whole catalog — no set symbol, no set selection.
      several                  -> .uncertain, attach candidates for the chip
 ```
 
+**The name can veto the number.** Many sets share a printed total, so a misread
+denominator lands on a real card with the wrong name. Three rules:
+
+1. When the number's candidates all disagree with the name, run the name search
+   too and merge both sets. A card both signals pick gets a bonus.
+2. When a near-exact name contradicts the number, the name wins and the result
+   is `.uncertain`. Two disagreeing signals must ask, not assert.
+3. When several cards share the total and none matches the name, assign no
+   product at all. A wrong card that looks confident is worse than an unknown.
+
+A name the catalog does not hold cannot overrule the number: glare and attack
+text produce readings like that, and the number is still right.
+
+The matcher's name search ranks by **relevance, not market value**. The result
+list ranks by value for a person reading it, and the candidate cap would drop
+the true card in favour of dearer look-alikes. `SearchRequest.ranking` carries
+the difference.
+
 Note that secret rares exceed the printed total — `114/084` is valid and common. The
 denominator still identifies the set; don't reject numbers where `x > y`.
 

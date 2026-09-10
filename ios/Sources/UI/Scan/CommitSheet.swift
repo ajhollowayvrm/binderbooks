@@ -18,6 +18,26 @@ struct CommitSheet: View {
     @State private var existing: Purchase?
 
     private var totalCents: Int? { Money.cents(from: totalText) }
+
+    private var unpricedCount: Int {
+        model.cards.filter { !$0.basisIsManual && !$0.isBulk }.count
+    }
+
+    /// The total covers everything. What he priced comes out first, and the
+    /// rest splits over the cards he did not price.
+    private var splitNote: String {
+        let manual = model.manualBasisCents
+        guard let total = totalCents else {
+            return "\(manual.asCurrency) of this total is already set on \(model.pricedCardCount) cards."
+        }
+        if manual > total {
+            return "The prices you set come to \(manual.asCurrency), which is more than this total. Nothing you typed will change, and the rest splits nothing."
+        }
+        guard unpricedCount > 0 else {
+            return "The prices you set come to \(manual.asCurrency). Every card is priced, so nothing splits."
+        }
+        return "\(manual.asCurrency) is already set on \(model.pricedCardCount) cards. The remaining \((total - manual).asCurrency) splits over \(unpricedCount)."
+    }
     private var canCommit: Bool {
         existing != nil || (!vendor.trimmingCharacters(in: .whitespaces).isEmpty && totalCents != nil)
     }
@@ -28,10 +48,13 @@ struct CommitSheet: View {
                 Section {
                     LabeledContent("Cards", value: "\(model.cards.count)")
                     LabeledContent("Tracked", value: "\(model.cards.filter { !$0.isBulk }.count)")
+                    if model.pricedCardCount > 0 {
+                        LabeledContent("Priced at review", value: "\(model.pricedCardCount) · \(model.manualBasisCents.asCurrency)")
+                    }
                     LabeledContent("Market", value: model.sessionTotalCents.asCurrency)
                 }
 
-                Section("New purchase") {
+                Section {
                     TextField("Vendor, e.g. Walmart", text: $vendor)
                         .disabled(existing != nil)
                     DatePicker("Date", selection: $date, displayedComponents: .date)
@@ -49,6 +72,10 @@ struct CommitSheet: View {
                     }
                     TextField("Note", text: $note, axis: .vertical)
                         .disabled(existing != nil)
+                } header: {
+                    Text("New purchase")
+                } footer: {
+                    if model.pricedCardCount > 0 { Text(splitNote) }
                 }
 
                 if !purchases.isEmpty {

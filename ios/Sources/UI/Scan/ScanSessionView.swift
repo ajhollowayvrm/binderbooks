@@ -216,11 +216,22 @@ struct ScanSessionView: View {
     /// `SIMCTL_CHILD_CT_SIMULATE_SCANS="Mega Zeraora ex 114/084;Charizard 4/102"`
     private func applyDebugScans(_ model: ScanSessionModel) {
         #if DEBUG
-        guard let raw = ProcessInfo.processInfo.environment["CT_SIMULATE_SCANS"], model.cards.isEmpty else { return }
-        for entry in raw.split(separator: ";") {
-            model.simulate(String(entry))
-        }
         let env = ProcessInfo.processInfo.environment
+        // Only the scans check for an open session. The other hooks must run on
+        // their own, or a session left open blocks every one of them.
+        if let raw = env["CT_SIMULATE_SCANS"], model.cards.isEmpty {
+            for entry in raw.split(separator: ";") {
+                model.simulate(String(entry))
+            }
+        }
+        // `CT_SET_COST=3000` prices the whole simulated session at $30.00, the
+        // way the Cost button does for a selection. simctl cannot tap.
+        if let cents = env["CT_SET_COST"].flatMap(Int.init) {
+            Task {
+                while model.inFlight > 0 { try? await Task.sleep(for: .milliseconds(100)) }
+                model.setBasis(totalCents: cents, for: model.cards)
+            }
+        }
         if env["CT_OPEN_REVIEW"] == "1" {
             Task {
                 while model.inFlight > 0 { try? await Task.sleep(for: .milliseconds(100)) }

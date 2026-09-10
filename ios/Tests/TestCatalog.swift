@@ -27,6 +27,11 @@ enum Fixture {
         Product(id: 7, groupId: 103, categoryId: 85, name: "Umbreon", number: "020/076", rarity: "Common", sealed: false, prices: [("Normal", 120)]),
         Product(id: 8, groupId: 104, categoryId: 63, name: "Pristimon", number: "BT26-052 C", rarity: "Common", sealed: false, prices: [("Normal", 15)]),
         Product(id: 9, groupId: 100, categoryId: 3, name: "Pidgeot ex", number: "164/197", rarity: "Ultra Rare", sealed: false, prices: [("Holofoil", 800)]),
+        // The Cyndaquil case. Combusken owns 004/131; the Cyndaquil he is
+        // holding is 004/162 in another set, so a misread total lands on
+        // Combusken and nothing else.
+        Product(id: 10, groupId: 105, categoryId: 3, name: "Combusken", number: "004/131", rarity: "Common", sealed: false, prices: [("Normal", 25)]),
+        Product(id: 11, groupId: 106, categoryId: 3, name: "Cyndaquil", number: "004/162", rarity: "Common", sealed: false, prices: [("Normal", 40)]),
     ]
 
     static func make() throws -> DatabaseQueue {
@@ -44,13 +49,18 @@ enum Fixture {
             CREATE VIRTUAL TABLE product_trigram USING fts5(name, number, content='', tokenize='trigram');
             INSERT INTO category VALUES (3, 'Pokemon', 'Pokemon'), (85, 'Pokemon Japan', 'Pokemon Japan'), (63, 'Digimon Card Game', 'Digimon Card Game');
             INSERT INTO cardSet VALUES
+                (105, 3, 'SV04: Paradox Rift', 'PAR', '2023-11-03T00:00:00'),
+                (106, 3, 'SV08: Surging Sparks', 'SSP', '2024-11-08T00:00:00'),
                 (100, 3, 'SV03: Obsidian Flames', 'OBF', '2023-08-11T00:00:00'),
                 (101, 3, 'Base Set', 'BS', '1999-01-09T00:00:00'),
                 (102, 3, 'SWSH: Sword & Shield Promo Cards', 'PR-SW', '2020-02-07T00:00:00'),
                 (103, 85, 'M6: Storm Emeralda', 'M6', '2026-08-01T00:00:00'),
                 (104, 63, 'Timeless Bonds', 'BT-26', '2026-07-01T00:00:00');
             """)
-            let setNames = [100: "SV03: Obsidian Flames", 101: "Base Set", 102: "SWSH: Sword & Shield Promo Cards", 103: "M6: Storm Emeralda", 104: "Timeless Bonds"]
+            let setNames = [
+            100: "SV03: Obsidian Flames", 101: "Base Set", 102: "SWSH: Sword & Shield Promo Cards",
+            103: "M6: Storm Emeralda", 104: "Timeless Bonds", 105: "SV04: Paradox Rift", 106: "SV08: Surging Sparks",
+        ]
             for p in products {
                 let parsed = CollectorNumber.parse(p.number)
                 try db.execute(

@@ -141,6 +141,18 @@ A card whose basis the allocator wrote shows "alloc." instead of a gain or a los
 and the summary's unrealized figure covers priced cards only. That follows docs/04:
 a rip pull's per-card basis is an artifact.
 
+## Pricing at review
+
+He sets a **total** for a selection, and the Cost button splits it evenly over
+those cards. `OwnedCard.basisIsManual` then marks the basis as his:
+
+- The purchase total at commit covers everything. What he priced comes out
+  first, and the remainder splits over the cards he did not price. Typing more
+  than the total leaves the split at zero and rewrites nothing.
+- A split over several cards is still a derived figure for any one card, so it
+  stays `basisIsAllocated` and never renders as a gain or a loss. A total set on
+  one card is that card's real cost and does show a gain.
+
 ## Export and import
 
 Settings prepares the export when the screen opens, so exporting is one tap into
@@ -162,6 +174,7 @@ The simulator cannot type or tap for a script, so debug builds read these on lau
 | `CT_SIMULATE_SCANS` | Feeds `Name number` entries separated by `;` through the matcher. |
 | `CT_OPEN_REVIEW=1` | Opens review after the simulated scans settle. |
 | `CT_AUTO_COMMIT="Vendor\|cents"` | Commits the session to a new purchase and closes the scanner. |
+| `CT_SET_COST=3000` | Prices the simulated session at that many cents, split evenly. |
 | `CT_SEARCH_LAYOUT` | `list` or `grid`. Grid is the default, so this mostly forces `list`. |
 | `CT_OPEN_CARD=1` | Pushes the newest card's detail. |
 | `CT_OPEN_SETTINGS=1` | Pushes Settings, which holds export. |

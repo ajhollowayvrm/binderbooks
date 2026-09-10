@@ -3,6 +3,9 @@ import Foundation
 /// Orders candidates. Pure, so the tests can pin the priority order from
 /// docs/03: exact number, exact name, context, market value, bm25, recency.
 ///
+/// `SearchRequest.ranking` drops the value tier for the scanner, which needs
+/// the closest name, not the dearest card.
+///
 /// Market value sits above bm25 on purpose. AJ reads a result list by price,
 /// so the expensive printing must lead. Exact number, exact name, and the
 /// context boost still outrank value, because a query that names one product
@@ -80,7 +83,9 @@ enum SearchRanker {
 
         return SortKey(
             boost: boost,
-            valueCents: value(hit),
+            // The scanner ranks by relevance instead. A $0.40 Cyndaquil must
+            // outrank a $90 card that only looks like one.
+            valueCents: request.ranking == .byValue ? value(hit) : 0,
             relevance: relevance,
             recency: recency(hit.publishedOn),
             negatedProductId: -hit.productId

@@ -23,7 +23,7 @@ struct ReviewView: View {
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var allCards: [OwnedCard]
 
     private enum BulkAction: Identifiable {
-        case condition, printing, set, delete
+        case condition, printing, set, cost, delete
         var id: Self { self }
     }
 
@@ -56,6 +56,7 @@ struct ReviewView: View {
                     Button("Condition") { action = .condition }.disabled(selection.isEmpty)
                     Button("Printing") { action = .printing }.disabled(selection.isEmpty)
                     Button("Set") { action = .set }.disabled(selection.isEmpty)
+                    Button("Cost") { action = .cost }.disabled(selection.isEmpty)
                     Button("Tag") { tagTarget = TagSheetTarget(cards: selectedCards) }.disabled(selection.isEmpty)
                     Menu("More") {
                         Button("Mark bulk") { model.setBulk(true, for: selectedCards) }
@@ -163,6 +164,17 @@ struct ReviewView: View {
                     reassignMissed = missed.count
                 }
             }
+        case .cost:
+            let cards = selectedCards
+            let priced = cards.filter(\.basisIsManual)
+            CostSheet(
+                cardCount: cards.count,
+                existingCents: priced.count == cards.count && !priced.isEmpty
+                    ? priced.reduce(0) { $0 + $1.acquisitionBasisCents }
+                    : nil,
+                onSet: { total in model.setBasis(totalCents: total, for: cards) },
+                onClear: { model.clearBasis(for: cards) }
+            )
         case .delete:
             ChoiceSheet(title: "Delete \(selection.count) cards?", options: ["Delete"], destructive: true) { _ in
                 model.delete(selectedCards)
@@ -206,8 +218,17 @@ private struct ReviewRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            Text(marketCents?.asCurrency ?? "—")
-                .font(.body.monospacedDigit())
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(marketCents?.asCurrency ?? "—")
+                    .font(.body.monospacedDigit())
+                // The cost he set. Without it he cannot see which cards a
+                // total has already covered.
+                if card.basisIsManual {
+                    Text("cost \(card.acquisitionBasisCents.asCurrency)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 }

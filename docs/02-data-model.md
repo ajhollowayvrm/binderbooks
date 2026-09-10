@@ -179,6 +179,10 @@ can't be known before purchase is which sets a given box will contain.
     /// Free-form labels he typed. Replaced the status picker.
     var tags: [String]
 
+    /// True when he priced the card himself at review. A purchase total never
+    /// overwrites it, and it leaves the total before the split.
+    var basisIsManual: Bool
+
     /// Allocated at intake. Not mutated afterward.
     var acquisitionBasisCents: Int
     /// Added when a grading submission returns. Zero for raw cards.
@@ -213,6 +217,17 @@ enum MatchConfidence: String, Codable {
     case uncertain   // several candidates, or a guessed printing
 }
 ```
+
+### Pricing at review
+
+He prices a batch by **total**, not per card: he knows what the lot cost. The
+Cost button on the review screen splits one total evenly over the selected
+cards and sets `basisIsManual`.
+
+The purchase total then covers everything else. What he priced leaves the total
+first, and the remainder splits over the rest. A split over several cards stays
+`basisIsAllocated`, because a per-card figure derived from a lot price is the
+artifact `04` warns about. A total set on a single card is a real cost.
 
 ### Tags
 

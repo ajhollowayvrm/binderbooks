@@ -17,15 +17,25 @@ enum Allocation {
     /// Why bulk is excluded: a $4.97 pack with 3 hits and 7 commons gives each
     /// hit about $1.66 instead of spreading $0.50 across ten cards, seven of
     /// which go to the LGS pile for a few dollars.
+    /// A card he priced at review keeps that price. Its money comes out of the
+    /// purchase total first, and what is left splits over the cards he did not
+    /// price. Typing more than the total leaves the split at zero rather than
+    /// rewriting anything he entered.
     static func allocate(_ purchase: Purchase) {
-        let billable = purchase.items.filter { !$0.isBulkOnly }
         for item in purchase.items where item.isBulkOnly {
             item.allocatedCostCents = 0
         }
+        let manual = purchase.items.filter { !$0.isBulkOnly && $0.isManualOnly }
+        for item in manual {
+            item.allocatedCostCents = item.cards.reduce(0) { $0 + $1.acquisitionBasisCents }
+        }
+        let billable = purchase.items.filter { !$0.isBulkOnly && !$0.isManualOnly }
         guard !billable.isEmpty else { return }
 
+        let manualTotal = manual.reduce(0) { $0 + $1.allocatedCostCents }
+        let remaining = max(0, purchase.landedCostCents - manualTotal)
         let unitCount = billable.reduce(0) { $0 + max(1, $1.quantity) }
-        let shares = splitEqually(purchase.landedCostCents, into: unitCount)
+        let shares = splitEqually(remaining, into: unitCount)
 
         var cursor = 0
         for item in billable {
@@ -40,8 +50,9 @@ enum Allocation {
     static func writeCardBases(_ purchase: Purchase) {
         for item in purchase.items {
             let cards = item.cards.sorted { $0.scannedAt < $1.scannedAt }
-            let tracked = cards.filter { !$0.isBulk }
-            for card in cards where card.isBulk {
+            // Never overwrite a price he typed.
+            let tracked = cards.filter { !$0.isBulk && !$0.basisIsManual }
+            for card in cards where card.isBulk && !card.basisIsManual {
                 card.acquisitionBasisCents = 0
                 card.basisIsAllocated = true
             }
