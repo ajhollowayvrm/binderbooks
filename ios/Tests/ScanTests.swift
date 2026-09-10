@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 import SwiftData
 import Testing
-@testable import CardTracker
+@testable import BinderBooks
 
 @Suite struct FrameInterpreterTests {
     private func item(_ text: String, top: CGFloat, height: CGFloat) -> RecognizedText {

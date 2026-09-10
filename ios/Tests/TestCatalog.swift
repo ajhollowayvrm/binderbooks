@@ -1,6 +1,6 @@
 import Foundation
 import GRDB
-@testable import CardTracker
+@testable import BinderBooks
 
 // MARK: - Fixture
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build, sign, install, and launch Card Tracker on a connected iPhone.
+"""Build, sign, install, and launch BinderBooks on a connected iPhone.
 
     python3 scripts/ios-device.py            # build Release, install, launch
     python3 scripts/ios-device.py --dry-run  # show the plan, change nothing
@@ -39,9 +39,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 IOS = ROOT / "ios"
-PROJECT = IOS / "CardTracker.xcodeproj"
-SCHEME = "CardTracker"
-BUNDLE_ID = "com.ajholloway.cardtracker"
+PROJECT = IOS / "BinderBooks.xcodeproj"
+SCHEME = "BinderBooks"
+BUNDLE_ID = "com.ajholloway.binderbooks"
 # Its own derived-data path. .gitignore matches ios/build* for this reason.
 DERIVED = IOS / "build-device"
 PROFILES = Path.home() / "Library/Developer/Xcode/UserData/Provisioning Profiles"
@@ -72,8 +72,7 @@ def xcode_account_warning() -> str | None:
 
     The Accounts pane reads `IDEProvisioningTeamByIdentifier`, which survives a
     sign-out, so the pane can show a team while xcodebuild has no account. The
-    credential list is `DVTDeveloperAccountManagerAppleIDLists`, and each entry
-    needs a keychain item. Read both.
+    credential list is `DVTDeveloperAccountManagerAppleIDLists`. Read that one.
     """
     with tempfile.NamedTemporaryFile(suffix=".plist", delete=False) as tmp:
         path = Path(tmp.name)
@@ -94,20 +93,9 @@ def xcode_account_warning() -> str | None:
             "  Open Xcode > Settings > Accounts, remove the stale entry if one is listed, and sign in\n"
             "  again. xcodebuild cannot answer the two-factor prompt; only the Xcode window can."
         )
-    for account in accounts:
-        account_id = account if isinstance(account, str) else str(account.get("identifier", ""))
-        if not account_id:
-            continue
-        has_token = subprocess.run(
-            ["security", "find-generic-password", "-s", "Xcode-Token", "-a", account_id],
-            capture_output=True,
-        ).returncode == 0
-        if has_token:
-            return None
-    return (
-        "Xcode lists an Apple ID but its keychain credential is missing or invalid.\n"
-        "  Open Xcode > Settings > Accounts, remove the account, and add it again."
-    )
+    # The token itself lives in a keychain the `security` tool does not list on
+    # Xcode 26, so a non-empty account list is the strongest check available.
+    return None
 
 
 def signing_identity() -> tuple[str, str]:
@@ -301,17 +289,29 @@ def main() -> int:
         return 0
     install(udid, app)
 
+    launched = False
     if not args.no_launch:
         step("launch")
-        run("xcrun", "devicectl", "device", "process", "launch", "--device", udid, BUNDLE_ID)
+        result = subprocess.run(
+            ["xcrun", "devicectl", "device", "process", "launch", "--device", udid, BUNDLE_ID],
+            capture_output=True, text=True,
+        )
+        launched = result.returncode == 0
+        if not launched:
+            if "Locked" in result.stderr or "unlocked" in result.stderr:
+                print("The phone is locked, so the app did not open. It is installed. Unlock the phone and tap BinderBooks.")
+            else:
+                print(result.stderr.strip(), file=sys.stderr)
+                print("The app is installed but did not launch. Open it by hand.", file=sys.stderr)
 
     exp = profile_expiry(app / "embedded.mobileprovision")
     step("done")
+    verb = "Installed and launched." if launched else "Installed."
     if exp:
         days = (exp - datetime.now(timezone.utc)).total_seconds() / 86400
-        print(f"Installed. The signature lasts until {exp:%a %b %d} ({days:.1f} days). Run this again before then.")
+        print(f"{verb} The signature lasts until {exp:%a %b %d} ({days:.1f} days). Run this again before then.")
     else:
-        print("Installed. A free signature lasts 7 days. Run this again when the app stops launching.")
+        print(f"{verb} A free signature lasts 7 days. Run this again when the app stops launching.")
     return 0
 
 

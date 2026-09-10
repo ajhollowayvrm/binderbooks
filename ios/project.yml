@@ -5,7 +5,7 @@
 #
 # See ios/README.md for the build and test commands.
 
-name: CardTracker
+name: BinderBooks
 
 options:
   bundleIdPrefix: com.ajholloway
@@ -30,7 +30,7 @@ settings:
     # project: Signing and Capabilities, automatic signing, the personal team.
 
 targets:
-  CardTracker:
+  BinderBooks:
     type: application
     platform: iOS
     sources:
@@ -43,14 +43,15 @@ targets:
       base:
         # Apple requires a globally unique bundle ID under free provisioning. It also
         # names the app container. Do not change it after the first install.
-        PRODUCT_BUNDLE_IDENTIFIER: com.ajholloway.cardtracker
-        PRODUCT_NAME: CardTracker
+        # Same id as the old web-shell BinderBooks: this app replaces it in place.
+        PRODUCT_BUNDLE_IDENTIFIER: com.ajholloway.binderbooks
+        PRODUCT_NAME: BinderBooks
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     info:
       path: Info.plist
       properties:
-        CFBundleDisplayName: Card Tracker
+        CFBundleDisplayName: BinderBooks
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
@@ -58,30 +59,30 @@ targets:
           - UIInterfaceOrientationPortrait
         # VisionKit's scanner arrives in step 4. iOS terminates an app that opens the
         # camera without this string, so it is here from the start.
-        NSCameraUsageDescription: Card Tracker reads the name and number on a card to identify it.
+        NSCameraUsageDescription: BinderBooks reads the name and number on a card to identify it.
         ITSAppUsesNonExemptEncryption: false
 
-  CardTrackerTests:
+  BinderBooksTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: Tests
     dependencies:
-      - target: CardTracker
+      - target: BinderBooks
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.ajholloway.cardtracker.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.ajholloway.binderbooks.tests
         GENERATE_INFOPLIST_FILE: true
 
 schemes:
-  CardTracker:
+  BinderBooks:
     build:
       targets:
-        CardTracker: all
-        CardTrackerTests: [test]
+        BinderBooks: all
+        BinderBooksTests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - CardTrackerTests
+        - BinderBooksTests

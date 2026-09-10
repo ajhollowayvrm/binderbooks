@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 import Testing
-@testable import CardTracker
+@testable import BinderBooks
 
 /// A store with one purchase, two lines, three cards, and a committed session.
 @MainActor

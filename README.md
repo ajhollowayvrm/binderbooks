@@ -1,7 +1,7 @@
-# Card Tracker
+# BinderBooks
 
-A single-user iOS app for a card reselling operation. It replaces BinderBooks, the
-web app that lived in this repository before the `Reset` commit.
+A single-user iOS app for a card reselling operation. It replaces the BinderBooks
+web app that lived in this repository before the `Reset` commit, and keeps the name.
 
 Read `docs/00-brief.md` first. The other documents in `docs/` are the catalog
 pipeline, the data model, the Phase 1 build spec, and the seed import plan.

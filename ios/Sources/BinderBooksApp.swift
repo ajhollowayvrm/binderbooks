@@ -2,7 +2,7 @@ import SwiftData
 import SwiftUI
 
 @main
-struct CardTrackerApp: App {
+struct BinderBooksApp: App {
     @State private var catalog = CatalogController()
     private let container: ModelContainer
 

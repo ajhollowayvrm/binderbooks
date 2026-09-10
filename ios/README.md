@@ -1,18 +1,19 @@
-# Card Tracker on iPhone
+# BinderBooks on iPhone
 
 SwiftUI, iOS 26. The Xcode project is generated from `project.yml` and never
-committed.
+committed. The bundle id is `com.ajholloway.binderbooks`, the same as the old web-shell app,
+so the install replaces it in place.
 
 ```sh
 brew install xcodegen
 cd ios
 xcodegen generate
-xcodebuild -project CardTracker.xcodeproj -scheme CardTracker \
+xcodebuild -project BinderBooks.xcodeproj -scheme BinderBooks \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
   -derivedDataPath build test
 ```
 
-Or open `CardTracker.xcodeproj` in Xcode and press Cmd-U.
+Or open `BinderBooks.xcodeproj` in Xcode and press Cmd-U.
 
 ## Deployment target
 
@@ -23,7 +24,7 @@ iOS 26.0. Every simulator on the Mac and the phone run iOS 26. The data model in
 
 | Path | Contents |
 |---|---|
-| `Sources/CardTrackerApp.swift` | The entry point. Starts the catalog controller. |
+| `Sources/BinderBooksApp.swift` | The entry point. Starts the catalog controller. |
 | `Sources/Catalog/` | Step 2: manifest, download, checksum, gunzip, sanity checks, atomic swap. |
 | `Sources/Model/` | The collection store: `Purchase`, `PurchaseItem`, `OwnedCard`, `ScanSession` in SwiftData, and the allocator. |
 | `Sources/Scan/` | Step 4: the VisionKit scanner, the frame interpreter, the matcher, the printing rules, and the session model. |

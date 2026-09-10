@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 import Testing
-@testable import CardTracker
+@testable import BinderBooks
 
 // MARK: - Pure parts
 

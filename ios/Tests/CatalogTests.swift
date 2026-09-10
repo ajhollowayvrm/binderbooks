@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 import Testing
-@testable import CardTracker
+@testable import BinderBooks
 
 // A gzip of 200 lines of "card tracker gunzip fixture line NNN". 7,400 bytes raw.
 private let gzipFixtureBase64 = """
