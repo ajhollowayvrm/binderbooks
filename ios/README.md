@@ -25,7 +25,8 @@ iOS 26.0. Every simulator on the Mac and the phone run iOS 26. The data model in
 |---|---|
 | `Sources/CardTrackerApp.swift` | The entry point. Starts the catalog controller. |
 | `Sources/Catalog/` | Step 2: manifest, download, checksum, gunzip, sanity checks, atomic swap. |
-| `Sources/UI/` | The shell: the persistent search field with the camera button, the first-run download screen, and the catalog status screen. |
+| `Sources/Search/` | Step 3: the query builder, the ranker, the engine, the debounced model, and recently viewed. |
+| `Sources/UI/` | The shell, the results list, the filter chips, the set picker sheet, the product detail, the first-run download screen, and the catalog status screen. |
 | `Tests/` | Swift Testing suites. No network. |
 
 ## The catalog on the device
@@ -41,6 +42,34 @@ iOS 26.0. Every simulator on the Mac and the phone run iOS 26. The data model in
   staged as `pending.sqlite` and swaps in when the session ends.
 - A manifest with a schema version above what the app reads is refused. The
   installed catalog stays.
+
+## Search
+
+One engine, `CatalogSearch`, answers every query. The caller passes a
+`SearchContext`; the user never picks a mode.
+
+- Path A runs first: every token becomes a quoted prefix phrase on `product_fts`,
+  ranked by `bm25` with `name` weighted above `setName`.
+- Path B runs when path A returns fewer than 5 hits and the text has 3 or more
+  characters: the query's trigrams, joined with `OR`, on `product_trigram`.
+- A direct number lookup runs when the text parses as a collector number. It uses
+  the same rules as the Python job, in `CollectorNumber`.
+- `SearchRanker` orders the merged candidates: exact number, exact clean name,
+  bm25, context boost, then set recency.
+- `SearchModel` debounces typing by 150 ms, cancels superseded queries, and runs
+  SQLite through GRDB's async read, off the main thread. Debug builds show the
+  query time under the results.
+
+Filters are chips, not pickers: kind (all, singles, sealed), category toggles, and
+one set chosen from a searchable sheet. An empty query with a set chosen browses
+that set in number order. An empty query with no filter shows recently viewed
+products.
+
+For a screenshot or a timing run, pre-fill the field:
+
+```sh
+SIMCTL_CHILD_CT_SEARCH_QUERY="legendary warriors" xcrun simctl launch booted com.ajholloway.cardtracker
+```
 
 ## Dependencies
 

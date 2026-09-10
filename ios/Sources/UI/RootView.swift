@@ -1,17 +1,18 @@
 import SwiftUI
 
 /// The app shell: a persistent search field with a camera button, above the
-/// content. Not a search tab. Search itself arrives in step 3 and the scanner in
-/// step 4. Until then the field is present but inert, so the layout is settled
-/// before either lands.
+/// content. Not a search tab. The scanner arrives in step 4, so the camera
+/// button is present but inert.
 struct RootView: View {
     @Environment(CatalogController.self) private var catalog
-    @State private var query = ""
+    @State private var search = SearchModel(context: .browsing)
+    @State private var recents = RecentlyViewed()
 
     var body: some View {
+        @Bindable var search = search
         NavigationStack {
             VStack(spacing: 0) {
-                SearchHeader(query: $query, enabled: catalog.isReady)
+                SearchHeader(query: $search.text, enabled: catalog.isReady)
                 Divider()
                 content
             }
@@ -26,21 +27,35 @@ struct RootView: View {
                 }
             }
         }
+        .environment(recents)
+        .onAppear(perform: applyDebugQuery)
     }
 
     @ViewBuilder
     private var content: some View {
         if catalog.isReady {
-            HomePlaceholder()
+            SearchResultsView(model: search)
         } else {
             CatalogSetupView()
         }
+    }
+
+    /// `SIMCTL_CHILD_CT_SEARCH_QUERY="legendary warriors"` on `simctl launch`
+    /// pre-fills the field. Screenshots and manual timing runs need it because
+    /// simctl cannot type.
+    private func applyDebugQuery() {
+        #if DEBUG
+        if let query = ProcessInfo.processInfo.environment["CT_SEARCH_QUERY"], search.text.isEmpty {
+            search.text = query
+        }
+        #endif
     }
 }
 
 struct SearchHeader: View {
     @Binding var query: String
     var enabled: Bool
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -50,7 +65,20 @@ struct SearchHeader: View {
                 TextField("Search cards and sealed", text: $query)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .focused($focused)
                     .disabled(!enabled)
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                        focused = true
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -69,21 +97,5 @@ struct SearchHeader: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
-    }
-}
-
-/// The empty-query home. Step 3 fills it with recent purchases, unripped sealed,
-/// and cards flagged from scans.
-private struct HomePlaceholder: View {
-    @Environment(CatalogController.self) private var catalog
-
-    var body: some View {
-        ContentUnavailableView {
-            Label("Catalog ready", systemImage: "checkmark.circle")
-        } description: {
-            if let meta = catalog.meta {
-                Text("\(meta.productCount.formatted()) products, built \(meta.sourceDate).")
-            }
-        }
     }
 }

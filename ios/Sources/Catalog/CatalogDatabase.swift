@@ -31,6 +31,12 @@ final class CatalogDatabase: Sendable {
         try queue.read(block)
     }
 
+    /// Runs off the caller's actor. Search uses this so the main thread never
+    /// waits on SQLite.
+    func asyncRead<T: Sendable>(_ block: @escaping @Sendable (Database) throws -> T) async throws -> T {
+        try await queue.read(block)
+    }
+
     /// Releases the file. Call before replacing the file on disk.
     func close() throws {
         try queue.close()

@@ -94,6 +94,12 @@ class SealedTests(unittest.TestCase):
         p = {"name": "Stellar Crown Booster Box", "extendedData": [{"name": "CardText", "value": "x"}]}
         self.assertTrue(bc.is_sealed(p, bc.extended(p)))
 
+    def test_rarity_without_number_is_a_single(self):
+        p = {"name": "Fire Energy", "extendedData": [{"name": "Rarity", "value": "Common"}]}
+        self.assertFalse(bc.is_sealed(p, bc.extended(p)))
+        p = {"name": "Charizard", "extendedData": [{"name": "Rarity", "value": "None"}]}
+        self.assertFalse(bc.is_sealed(p, bc.extended(p)))
+
     def test_code_card_is_not_sealed(self):
         p = {"name": "Code Card - Stellar Crown Booster Pack", "extendedData": []}
         self.assertFalse(bc.is_sealed(p, bc.extended(p)))

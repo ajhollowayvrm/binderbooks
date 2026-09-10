@@ -38,8 +38,10 @@ A full build makes about 1,750 requests and takes a few minutes.
   `sku` table from the design is not in the build. Add it when a source exists.
 - **Products have no sealed flag.** The category object names its sealed and single
   labels, but no product carries either label. The job marks a product as sealed
-  when its `extendedData` has no `Number` entry. Code cards also have no number.
-  The job keeps them unsealed, so a sealed boost never lifts a code card.
+  when its `extendedData` has neither a `Number` nor a `Rarity` entry. Basic
+  energies and unnumbered Japanese promos have a rarity and no number, and they are
+  singles. Code cards have neither key. The job keeps them unsealed, so a sealed
+  boost never lifts a code card.
 - **The card type key differs by category.** English Pokemon uses `Card Type`.
   Pokemon Japan, Digimon, and Union Arena use `CardType`. The job reads both.
 - **Prices carry no timestamp.** The job stamps every price row with the build date

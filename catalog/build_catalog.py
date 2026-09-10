@@ -182,15 +182,16 @@ def extended(product: dict[str, Any]) -> dict[str, str]:
 
 
 def is_sealed(product: dict[str, Any], ext: dict[str, str]) -> bool:
-    """A product with no collector number is a sealed product.
+    """A product with neither a collector number nor a rarity is sealed.
 
     TCGCSV does not say which products fall under the category's sealed label,
-    so the presence of a Number is the deterministic signal. Booster boxes,
-    packs, tins, ETBs, blisters, bundles, and cases all lack one. Code cards
-    also lack one but are not sealed product. They are neither, so they stay
-    unsealed and never match a number query.
+    so the extendedData keys are the deterministic signal. Booster boxes,
+    packs, tins, ETBs, blisters, bundles, and cases carry neither key. Basic
+    energies and unnumbered Japanese promos carry no Number but do carry a
+    Rarity, so they stay singles. Code cards carry neither key but are not
+    sealed product. They stay unsealed and never match a number query.
     """
-    if "Number" in ext:
+    if "Number" in ext or "Rarity" in ext:
         return False
     return not product.get("name", "").startswith("Code Card")
 
