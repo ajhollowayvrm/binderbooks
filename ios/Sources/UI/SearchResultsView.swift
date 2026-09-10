@@ -4,6 +4,7 @@ import SwiftUI
 /// filter it is the home screen.
 struct SearchResultsView: View {
     @Bindable var model: SearchModel
+    var onResumeSession: () -> Void = {}
 
     @Environment(CatalogController.self) private var catalog
     @Environment(RecentlyViewed.self) private var recents
@@ -81,18 +82,22 @@ struct SearchResultsView: View {
         .listRowSeparator(.hidden)
     }
 
-    /// The empty-query home. Step 5 adds recent purchases, unripped sealed,
-    /// cards at grading, and uncertain scans above this list.
-    @ViewBuilder
+    /// The empty-query home: the open scan session, cards flagged from recent
+    /// scans, and recently viewed products. Step 5 adds recent purchases,
+    /// unripped sealed, and cards at grading.
     private var home: some View {
-        if recentHits.isEmpty {
-            ContentUnavailableView {
-                Label("Search the catalog", systemImage: "magnifyingglass")
-            } description: {
-                Text("Type a card name, a set, or a collector number like 114/084. Products you open show up here.")
-            }
-        } else {
-            List {
+        List {
+            HomeInventorySections(onResumeSession: onResumeSession)
+            if recentHits.isEmpty {
+                Section {
+                    ContentUnavailableView {
+                        Label("Search the catalog", systemImage: "magnifyingglass")
+                    } description: {
+                        Text("Type a card name, a set, or a collector number like 114/084. Products you open show up here.")
+                    }
+                    .listRowSeparator(.hidden)
+                }
+            } else {
                 Section {
                     ForEach(recentHits) { hit in
                         NavigationLink(value: hit) {
@@ -109,8 +114,8 @@ struct SearchResultsView: View {
                     }
                 }
             }
-            .listStyle(.plain)
         }
+        .listStyle(.plain)
     }
 
     private func loadRecents() async {

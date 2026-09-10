@@ -139,6 +139,24 @@ struct CatalogSearch: Sendable {
         }
     }
 
+    /// Every price row for the given products, keyed by productId.
+    func prices(for ids: [Int]) async throws -> [Int: [ProductPrice]] {
+        guard !ids.isEmpty else { return [:] }
+        return try await database.asyncRead { db in
+            let placeholders = ids.map { String($0) }.joined(separator: ",")
+            var out: [Int: [ProductPrice]] = [:]
+            for row in try Row.fetchAll(db, sql: "SELECT productId, subTypeName, marketPriceCents, lowPriceCents, midPriceCents, highPriceCents, directLowPriceCents, asOf FROM price WHERE productId IN (\(placeholders)) ORDER BY subTypeName") {
+                let price = ProductPrice(
+                    subTypeName: row["subTypeName"], marketCents: row["marketPriceCents"], lowCents: row["lowPriceCents"],
+                    midCents: row["midPriceCents"], highCents: row["highPriceCents"], directLowCents: row["directLowPriceCents"],
+                    asOf: row["asOf"]
+                )
+                out[row["productId"], default: []].append(price)
+            }
+            return out
+        }
+    }
+
     func detail(productId: Int) async throws -> ProductDetail? {
         try await database.asyncRead { db in
             guard let hit = try Self.fetchHits(db, ids: [productId], filter: SearchFilter()).first else { return nil }
@@ -200,7 +218,7 @@ struct CatalogSearch: Sendable {
         return []
     }
 
-    private static func fetchHits(_ db: Database, ids: [Int], filter: SearchFilter) throws -> [SearchHit] {
+    static func fetchHits(_ db: Database, ids: [Int], filter: SearchFilter) throws -> [SearchHit] {
         let placeholders = ids.map { String($0) }.joined(separator: ",")
         let sql = hitSelect + " WHERE p.productId IN (\(placeholders))" + filterClause(filter)
         return try hits(db, sql: sql, arguments: filterArguments(filter))

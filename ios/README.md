@@ -25,6 +25,8 @@ iOS 26.0. Every simulator on the Mac and the phone run iOS 26. The data model in
 |---|---|
 | `Sources/CardTrackerApp.swift` | The entry point. Starts the catalog controller. |
 | `Sources/Catalog/` | Step 2: manifest, download, checksum, gunzip, sanity checks, atomic swap. |
+| `Sources/Model/` | The collection store: `Purchase`, `PurchaseItem`, `OwnedCard`, `ScanSession` in SwiftData, and the allocator. |
+| `Sources/Scan/` | Step 4: the VisionKit scanner, the frame interpreter, the matcher, the printing rules, and the session model. |
 | `Sources/Search/` | Step 3: the query builder, the ranker, the engine, the debounced model, and recently viewed. |
 | `Sources/UI/` | The shell, the results list, the filter chips, the set picker sheet, the product detail, the first-run download screen, and the catalog status screen. |
 | `Tests/` | Swift Testing suites. No network. |
@@ -70,6 +72,44 @@ For a screenshot or a timing run, pre-fill the field:
 ```sh
 SIMCTL_CHILD_CT_SEARCH_QUERY="legendary warriors" xcrun simctl launch booted com.ajholloway.cardtracker
 ```
+
+## Scan session
+
+`ScanSessionView` runs VisionKit's `DataScannerViewController` with live text in
+`en` and `ja` plus barcodes. Every frame's items go through `FrameInterpreter`: the
+collector number by shape, the name as the tallest string near the top. A card is
+accepted once per visit to the frame, after the same number reads twice. The
+number item must leave the frame before the card can log again. "Same card again"
+covers real duplicates. Slab barcodes yield the cert number and land unidentified.
+
+`CardMatcher` follows docs/03: candidates by set code or set total plus number,
+narrowed by the OCR name with a bigram Dice score, biased toward sets seen earlier
+in the session, then resolved to certain, likely, or uncertain. `PrintingRules`
+assigns the printing when the product has one, and otherwise applies a rarity
+table and marks the card uncertain unless the session has a printing default.
+
+Every match persists as an `OwnedCard` on the `ScanSession` the moment it lands.
+Review defaults to the cards that need a look, supports multi-select edits of
+condition, printing, set, and bulk, and commits the session to a purchase. Commit
+creates one `PurchaseItem` per card, runs the equal-split allocator across the
+non-bulk lines, and writes each card's basis with `basisIsAllocated` set. A card is
+inventory once its session commits.
+
+The simulator has no camera. Debug builds show a text field in the viewfinder that
+feeds the same path, and these launch variables drive it for screenshots:
+
+```sh
+SIMCTL_CHILD_CT_OPEN_SCANNER=1 \
+SIMCTL_CHILD_CT_SIMULATE_SCANS="Mega Zeraora ex 114/084;Charizard 4/102" \
+SIMCTL_CHILD_CT_OPEN_REVIEW=1 \
+xcrun simctl launch booted com.ajholloway.cardtracker
+```
+
+Known behavior worth knowing: a card that TCGplayer lists several times with the
+same name and number, such as a main-set print, a Prize Pack reprint, and a stamped
+copy in Miscellaneous, lands uncertain on the first sighting. TCGCSV's supplemental
+flag does not separate those groups. The session bias resolves later cards in the
+same run.
 
 ## Dependencies
 
