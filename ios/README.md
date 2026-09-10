@@ -131,7 +131,8 @@ in the summary tiles, or on the card detail.
 **Tags** are free-form labels: "binder 3", "for sale", "PSA queue". `TagKey` folds
 case and inner space but never punctuation, because a label is his own text. **A long press on a card starts selection**, with that card ticked; the Tag menu in
 the bottom bar then holds the five labels he uses most, plus "Tag…" for the full
-sheet. Metrics sits on the left of the navigation bar and Select on the right. A tag also
+sheet. Metrics sits on the left of the navigation bar. There is no Select button:
+Done appears on the right only while a selection is open. A tag also
 matches in the search field. The reserved labels `sold`, `listed`, `at grader`,
 `graded`, and `lost` replaced `CardStatus`; `StatusTagBackfill` copies each card's
 old status into its label once, and `OwnedCard.statusRaw` stays in the store and in

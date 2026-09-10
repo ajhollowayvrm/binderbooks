@@ -53,12 +53,16 @@ struct InventoryView: View {
                 Button("Metrics") { showMetrics = true }
                     .disabled(rows.isEmpty)
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(isSelecting ? "Done" : "Select") {
-                    isSelecting.toggle()
-                    if !isSelecting { selection = [] }
+            // Only while selecting. A long press on a card is how selection
+            // starts, so a permanent Select button is a second door to the
+            // same room.
+            if isSelecting {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        isSelecting = false
+                        selection = []
+                    }
                 }
-                .disabled(rows.isEmpty && !isSelecting)
             }
             ToolbarItemGroup(placement: .bottomBar) {
                 if isSelecting {
