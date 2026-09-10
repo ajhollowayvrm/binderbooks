@@ -1,0 +1,87 @@
+# XcodeGen spec. The .xcodeproj is generated from this file and never committed.
+#
+#   brew install xcodegen
+#   cd ios && xcodegen generate
+#
+# See ios/README.md for the build and test commands.
+
+name: CardTracker
+
+options:
+  bundleIdPrefix: com.ajholloway
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  xcodeVersion: "26.0"
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: 7.11.1
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    # iPhone only. A Mac target is optional and low priority. See docs/00-brief.md.
+    TARGETED_DEVICE_FAMILY: "1"
+    # No code signing settings here. The generated project behaves like a normal Xcode
+    # project: Signing and Capabilities, automatic signing, the personal team.
+
+targets:
+  CardTracker:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+    dependencies:
+      - package: GRDB
+        product: GRDB
+    settings:
+      base:
+        # Apple requires a globally unique bundle ID under free provisioning. It also
+        # names the app container. Do not change it after the first install.
+        PRODUCT_BUNDLE_IDENTIFIER: com.ajholloway.cardtracker
+        PRODUCT_NAME: CardTracker
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Card Tracker
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # VisionKit's scanner arrives in step 4. iOS terminates an app that opens the
+        # camera without this string, so it is here from the start.
+        NSCameraUsageDescription: Card Tracker reads the name and number on a card to identify it.
+        ITSAppUsesNonExemptEncryption: false
+
+  CardTrackerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: CardTracker
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ajholloway.cardtracker.tests
+        GENERATE_INFOPLIST_FILE: true
+
+schemes:
+  CardTracker:
+    build:
+      targets:
+        CardTracker: all
+        CardTrackerTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - CardTrackerTests

@@ -8,7 +8,8 @@ build/
 __pycache__/
 *.pyc
 
-# Xcode. The project is generated; derived data never belongs in the repo.
+# Xcode. `xcodegen generate` rebuilds the project; derived data never belongs in the repo.
+ios/CardTracker.xcodeproj
 ios/build*
 xcuserdata/
 *.xcuserstate
