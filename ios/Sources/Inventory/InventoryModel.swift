@@ -17,9 +17,19 @@ struct InventoryRow: Identifiable {
     ///
     /// Nil when there is no market price or no cost, because market minus
     /// nothing is not a gain.
+    ///
+    /// A graded card counts against what the slab is worth, not the raw
+    /// price: he paid the acquisition and the grading fee, and a PSA 10 is
+    /// not the card the catalog prices.
     var unrealizedCents: Int? {
-        guard !card.isBulk, card.totalBasisCents > 0, let market = marketCents else { return nil }
-        return market - card.totalBasisCents
+        guard !card.isBulk, card.totalBasisCents > 0, let value = gradedValueCents ?? marketCents else { return nil }
+        return value - card.totalBasisCents
+    }
+
+    /// What the slab is worth at the grade it came back at. Nil while the
+    /// grade is unknown, or when he has entered no figure for that grade.
+    var gradedValueCents: Int? {
+        GradedComps.value(grader: card.graderRaw, grade: card.gradeLabel, in: card.effectiveCompCents)
     }
 
     /// The grader the card is out at, from its "at PSA" / "at CGC" label.
@@ -33,9 +43,11 @@ struct InventoryRow: Identifiable {
         return GradedComps.range(for: grader, in: card.effectiveCompCents)
     }
 
-    /// The figure the row leads with. A card out at a grader leads with its
-    /// projection, because the raw market price is not what it will sell for.
+    /// The figure the row leads with. A known grade wins, then a projection
+    /// for a card still out, then the catalog's raw price. In every case the
+    /// row shows the number that answers "what is this worth now".
     var priceText: String {
+        if let value = gradedValueCents { return value.asCurrency }
         if let range = projectedRange { return GradedComps.rangeText(range) }
         return marketCents?.asCurrency ?? "—"
     }

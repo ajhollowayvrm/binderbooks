@@ -11,9 +11,18 @@ struct GradedCompsSection: View {
     @Environment(\.modelContext) private var modelContext
     @State private var fetcher = CompsFetcher()
     @State private var message: String?
+    @State private var showAllGrades = false
 
     static let psa = GradedComps.psaGrades
     static let cgc = GradedComps.cgcGrades
+
+    /// The grade it actually came back at. Once that is known the other
+    /// grades are a guess about a question already answered, so the ladder
+    /// folds away to the one row that is now true.
+    private var knownGrade: String? {
+        guard let grader = card.graderRaw, let grade = card.gradeLabel else { return nil }
+        return GradedComps.compKey(grader: grader, grade: grade)
+    }
 
     private var others: [String] {
         let known = Set(Self.psa + Self.cgc)
@@ -24,9 +33,19 @@ struct GradedCompsSection: View {
 
     var body: some View {
         Section {
-            ForEach(Self.psa, id: \.self) { CompRow(label: $0, card: card) }
-            ForEach(Self.cgc, id: \.self) { CompRow(label: $0, card: card) }
-            ForEach(others, id: \.self) { CompRow(label: $0, card: card) }
+            if let knownGrade, !showAllGrades {
+                CompRow(label: knownGrade, card: card)
+                Button("Show every grade") { showAllGrades = true }
+                    .font(.footnote)
+            } else {
+                ForEach(Self.psa, id: \.self) { CompRow(label: $0, card: card) }
+                ForEach(Self.cgc, id: \.self) { CompRow(label: $0, card: card) }
+                ForEach(others, id: \.self) { CompRow(label: $0, card: card) }
+                if knownGrade != nil {
+                    Button("Show only the grade it got") { showAllGrades = false }
+                        .font(.footnote)
+                }
+            }
             Button {
                 Task { await fetch() }
             } label: {
@@ -38,7 +57,7 @@ struct GradedCompsSection: View {
             }
             .disabled(fetcher.isRunning || !card.isIdentified)
         } header: {
-            Text("Graded values")
+            Text(knownGrade == nil ? "Graded values" : "Graded value")
         } footer: {
             Text(footer)
         }
@@ -50,7 +69,9 @@ struct GradedCompsSection: View {
     }
 
     private var footer: String {
-        var lines = ["What the card goes for at each grade. A grey figure is PPT's; type over it and yours wins. While the card is at PSA or CGC, its price shows as the range of these."]
+        var lines = knownGrade == nil
+            ? ["What the card goes for at each grade. A grey figure is PPT's; type over it and yours wins. While the card is at PSA or CGC, its price shows as the range of these."]
+            : ["This card came back \(knownGrade ?? ""), so this is what it is worth and the rest is history. A grey figure is PPT's; type over it and yours wins."]
         if let at = card.compsFetchedAt {
             lines.append("PPT last asked \(at.formatted(date: .abbreviated, time: .shortened)).")
         }
@@ -76,7 +97,20 @@ private struct CompRow: View {
     init(label: String, card: OwnedCard) {
         self.label = label
         self.card = card
-        _text = State(initialValue: card.gradedCompCents[label].map(Money.fieldText) ?? "")
+        _text = State(initialValue: Self.find(label, in: card.gradedCompCents).map(Money.fieldText) ?? "")
+    }
+
+    /// A grade he typed by hand ("pristine 10") names the same figure as the
+    /// row's own spelling, so the lookup folds case the way a tag does. The
+    /// write always uses the row's spelling, which settles the key.
+    private static func find(_ label: String, in comps: [String: Int]) -> Int? {
+        let wanted = TagKey.of(label)
+        return comps.first { TagKey.of($0.key) == wanted }?.value
+    }
+
+    private static func key(_ label: String, in comps: [String: Int]) -> String? {
+        let wanted = TagKey.of(label)
+        return comps.keys.first { TagKey.of($0) == wanted }
     }
 
     var body: some View {
@@ -90,10 +124,12 @@ private struct CompRow: View {
                 .frame(maxWidth: 140)
         }
         .onChange(of: text) { _, newValue in
+            let existing = Self.key(label, in: card.gradedCompCents)
             if newValue.trimmingCharacters(in: .whitespaces).isEmpty {
-                guard card.gradedCompCents[label] != nil else { return }
-                card.gradedCompCents.removeValue(forKey: label)
-            } else if let cents = Money.cents(from: newValue), card.gradedCompCents[label] != cents {
+                guard let existing else { return }
+                card.gradedCompCents.removeValue(forKey: existing)
+            } else if let cents = Money.cents(from: newValue), Self.find(label, in: card.gradedCompCents) != cents {
+                if let existing, existing != label { card.gradedCompCents.removeValue(forKey: existing) }
                 card.gradedCompCents[label] = cents
             } else {
                 return
@@ -104,6 +140,6 @@ private struct CompRow: View {
 
     /// PPT's figure sits in the placeholder, so an empty field still reads.
     private var placeholder: String {
-        card.fetchedCompCents[label].map(Money.fieldText) ?? "0.00"
+        Self.find(label, in: card.fetchedCompCents).map(Money.fieldText) ?? "0.00"
     }
 }

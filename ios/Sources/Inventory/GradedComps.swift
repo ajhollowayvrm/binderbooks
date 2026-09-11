@@ -26,6 +26,20 @@ enum GradedComps {
         return low...high
     }
 
+    /// The comps key for a grade a card actually carries: "cgc" and
+    /// "Pristine 10" name the "CGC Pristine 10" figure.
+    static func compKey(grader: String, grade: String) -> String {
+        "\(grader.uppercased()) \(grade)"
+    }
+
+    /// What the card is worth at the grade it came back at, if he has a
+    /// figure for it. This is the realized value, not a projection.
+    static func value(grader: String?, grade: String?, in comps: [String: Int]) -> Int? {
+        guard let grader, let grade else { return nil }
+        let wanted = TagKey.of(compKey(grader: grader, grade: grade))
+        return comps.first { TagKey.of($0.key) == wanted }?.value
+    }
+
     /// The grader a card is out at, read from its labels. "at PSA" is psa.
     static func graderAtGrader(tags: [String]) -> String? {
         for tag in tags {

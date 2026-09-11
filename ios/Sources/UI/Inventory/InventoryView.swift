@@ -19,6 +19,7 @@ struct InventoryView: View {
     @State private var showMetrics = false
     @State private var tagTarget: TagSheetTarget?
     @State private var gradeTarget: TagSheetTarget?
+    @State private var markGradedTarget: TagSheetTarget?
     @State private var sellTarget: TagSheetTarget?
     @State private var compsTarget: TagSheetTarget?
     @State private var fetcher = CompsFetcher()
@@ -89,9 +90,24 @@ struct InventoryView: View {
                         }
                     }
                     .disabled(selection.isEmpty)
-                    // Raw cards only. A slab is already graded.
-                    Button("Grade") { gradeTarget = TagSheetTarget(cards: selectedCards(rows)) }
-                        .disabled(selection.isEmpty || selectedCards(rows).contains { $0.certNumber != nil })
+                    // Two different events: money going out to a grader, and
+                    // cards coming back at a grade. The imported charges name
+                    // no cards, so the second is the only way those 40 cards
+                    // ever get their grade.
+                    Menu("Grade") {
+                        Button {
+                            gradeTarget = TagSheetTarget(cards: selectedCards(rows))
+                        } label: {
+                            Label("Send to grader…", systemImage: "shippingbox")
+                        }
+                        .disabled(selectedCards(rows).contains { $0.isSlabbed })
+                        Button {
+                            markGradedTarget = TagSheetTarget(cards: selectedCards(rows))
+                        } label: {
+                            Label("Mark as graded…", systemImage: "seal")
+                        }
+                    }
+                    .disabled(selection.isEmpty)
                     Button("Sell") { sellTarget = TagSheetTarget(cards: selectedCards(rows)) }
                         .disabled(selection.isEmpty || selectedCards(rows).contains { CardTagIndex.has(ReservedTag.sold, on: $0) })
                     Menu {
@@ -137,6 +153,12 @@ struct InventoryView: View {
         }
         .sheet(item: $gradeTarget) { target in
             SendToGraderSheet(cards: target.cards) {
+                model.invalidateHaystacks()
+                endSelection()
+            }
+        }
+        .sheet(item: $markGradedTarget) { target in
+            MarkGradedSheet(cards: target.cards, name: { model.hits[$0.productId]?.name ?? $0.ocrName ?? "Card" }) {
                 model.invalidateHaystacks()
                 endSelection()
             }
@@ -194,6 +216,11 @@ struct InventoryView: View {
             // `CT_PROJECT_NEWEST="psa|12000,4000,2500"` sends the newest card
             // to that grader on paper and fills its top three comps, so a
             // screenshot shows the projected range.
+            // `CT_MARK_GRADED=1` opens the sheet on the newest card, because
+            // simctl cannot reach a button inside a pushed screen.
+            if env["CT_MARK_GRADED"] == "1", let newest = committed.first {
+                markGradedTarget = TagSheetTarget(cards: [newest])
+            }
             if let spec = env["CT_PROJECT_NEWEST"], let newest = committed.first {
                 let parts = spec.split(separator: "|")
                 let grader = String(parts.first ?? "psa")

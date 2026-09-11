@@ -39,6 +39,7 @@ private struct OwnedCardDetailBody: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var allCards: [OwnedCard]
     @State private var tagTarget: TagSheetTarget?
+    @State private var markingGraded = false
 
     private var hit: SearchHit? { model.hits[card.productId] }
     private var printings: [String] { model.prices[card.productId]?.map(\.subTypeName) ?? [] }
@@ -62,6 +63,11 @@ private struct OwnedCardDetailBody: View {
         }
         .sheet(item: $tagTarget) { target in
             TagSheet(target: target, uses: model.tagUses(in: allCards), allCards: allCards.filter(\.isCommitted)) {
+                model.invalidateHaystacks()
+            }
+        }
+        .sheet(isPresented: $markingGraded) {
+            MarkGradedSheet(cards: [card], name: { hit?.name ?? $0.ocrName ?? "Card" }) {
                 model.invalidateHaystacks()
             }
         }
@@ -212,6 +218,11 @@ private struct OwnedCardDetailBody: View {
                 chipRow("Printing", printings, selected: card.printing) { card.printing = $0; save() }
             }
             chipRow("Condition", CardCondition.allCases.map(\.rawValue), selected: card.condition) { card.condition = $0; save() }
+            Button {
+                markingGraded = true
+            } label: {
+                Label(card.gradeLabel == nil ? "Mark as graded…" : "Edit the grade…", systemImage: "seal")
+            }
             Toggle("Personal collection (not inventory)", isOn: Binding(get: { card.isPersonalCollection }, set: { card.isPersonalCollection = $0; save() }))
             Toggle("Bulk (identity only, no basis)", isOn: Binding(get: { card.isBulk }, set: { card.isBulk = $0; save() }))
             if card.matchConfidence == .uncertain {
