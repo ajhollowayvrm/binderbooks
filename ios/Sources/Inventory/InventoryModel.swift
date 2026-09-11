@@ -196,7 +196,7 @@ final class InventoryModel {
         if !filter.tagKeys.isEmpty, filter.tagKeys.isDisjoint(with: Set(card.tags.map(TagKey.of))) { return false }
         if !filter.confidences.isEmpty, !filter.confidences.contains(card.matchConfidence) { return false }
         if let groupId = filter.groupId, hits[card.productId]?.groupId != groupId { return false }
-        if filter.slabsOnly, card.certNumber == nil { return false }
+        if filter.slabsOnly, !card.isSlabbed { return false }
         if filter.hideBulk, card.isBulk { return false }
         if filter.personalOnly, !card.isPersonalCollection { return false }
         if !filter.showSold, CardTagIndex.has(ReservedTag.sold, on: card) { return false }

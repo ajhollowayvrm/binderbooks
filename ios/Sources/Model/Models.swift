@@ -255,6 +255,11 @@ final class OwnedCard {
 
     var isIdentified: Bool { productId > 0 }
 
+    /// A card in a slab, and so drawn as one. A cert number is not required:
+    /// the imported ledger recorded the grade and never a cert, and a slab
+    /// with a grade on its label is still a slab.
+    var isSlabbed: Bool { certNumber != nil || (graderRaw != nil && gradeLabel != nil) }
+
     /// A card is inventory once its session commits, or when it never came from a scan.
     var isCommitted: Bool { scanSession?.committedAt != nil || scanSession == nil }
 }

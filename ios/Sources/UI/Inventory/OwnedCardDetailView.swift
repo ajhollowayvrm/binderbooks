@@ -73,8 +73,8 @@ private struct OwnedCardDetailBody: View {
     private var identity: some View {
         Section {
             HStack(alignment: .top, spacing: 16) {
-                if let cert = card.certNumber {
-                    SlabBadge(imageUrl: hit?.imageUrl, grader: card.graderRaw, grade: card.gradeLabel, cert: cert)
+                if card.isSlabbed {
+                    SlabBadge(imageUrl: hit?.imageUrl, grader: card.graderRaw, grade: card.gradeLabel, cert: card.certNumber)
                         .frame(width: 110, height: 168)
                 } else {
                     ProductThumbnail(urlString: hit?.imageUrl?.replacingOccurrences(of: "_200w", with: "_400w"), isSealed: false)
@@ -91,9 +91,10 @@ private struct OwnedCardDetailBody: View {
                         ConfidenceMarker(confidence: card.matchConfidence, identified: card.isIdentified, isBulk: card.isBulk)
                         Text(card.matchConfidence.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
                     }
-                    if let cert = card.certNumber {
+                    if card.isSlabbed {
                         let grade = card.gradeLabel.map { " \($0)" } ?? ""
-                        Text("\((card.graderRaw ?? "slab").uppercased())\(grade) · cert \(cert)").font(.footnote)
+                        let cert = card.certNumber.map { " · cert \($0)" } ?? ""
+                        Text("\((card.graderRaw ?? "slab").uppercased())\(grade)\(cert)").font(.footnote)
                     }
                 }
             }

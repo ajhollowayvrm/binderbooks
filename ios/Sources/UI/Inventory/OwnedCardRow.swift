@@ -6,8 +6,8 @@ struct OwnedCardRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            if let cert = row.card.certNumber {
-                SlabBadge(imageUrl: row.hit?.imageUrl, grader: row.card.graderRaw, grade: row.card.gradeLabel, cert: cert)
+            if row.card.isSlabbed {
+                SlabBadge(imageUrl: row.hit?.imageUrl, grader: row.card.graderRaw, grade: row.card.gradeLabel, cert: row.card.certNumber)
                     .frame(width: 48, height: 74)
             } else {
                 ProductThumbnail(urlString: row.hit?.imageUrl, isSealed: false)
@@ -123,7 +123,7 @@ struct SlabBadge: View {
     var imageUrl: String?
     var grader: String?
     var grade: String?
-    var cert: String
+    var cert: String?
 
     var body: some View {
         let style = SlabStyle.of(grader)
@@ -143,7 +143,7 @@ struct SlabBadge: View {
 struct SlabLabel: View {
     var grader: String?
     var grade: String?
-    var cert: String
+    var cert: String?
     var style: SlabStyle
     var scale: CGFloat = 1
 
@@ -159,11 +159,13 @@ struct SlabLabel: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
-            Text(cert)
-                .font(.system(size: 6.5 * scale, weight: .medium).monospacedDigit())
-                .foregroundStyle(style.accent)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
+            if let cert, !cert.isEmpty {
+                Text(cert)
+                    .font(.system(size: 6.5 * scale, weight: .medium).monospacedDigit())
+                    .foregroundStyle(style.accent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 2 * scale)

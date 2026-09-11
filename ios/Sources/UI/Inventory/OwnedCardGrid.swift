@@ -81,12 +81,12 @@ struct OwnedCardCard: View {
     @ViewBuilder
     private var identity: some View {
         HStack(spacing: 5) {
-            if let cert = row.card.certNumber {
+            if row.card.isSlabbed {
                 // The label above already shows all three. One line here
                 // holds two of them without truncating.
                 Text(((row.card.graderRaw ?? "").uppercased() + " " + (row.card.gradeLabel ?? "")).trimmingCharacters(in: .whitespaces))
                     .fontWeight(.semibold)
-                if row.card.gradeLabel == nil {
+                if row.card.gradeLabel == nil, let cert = row.card.certNumber {
                     Text(cert)
                         .monospacedDigit()
                 }
@@ -110,10 +110,10 @@ struct OwnedCardCard: View {
     /// at grid size the way it does in the list.
     private var art: some View {
         Group {
-            if let cert = row.card.certNumber {
+            if row.card.isSlabbed {
                 let style = SlabStyle.of(row.card.graderRaw)
                 VStack(spacing: 0) {
-                    SlabLabel(grader: row.card.graderRaw, grade: row.card.gradeLabel, cert: cert, style: style, scale: 1.6)
+                    SlabLabel(grader: row.card.graderRaw, grade: row.card.gradeLabel, cert: row.card.certNumber, style: style, scale: 1.6)
                     artImage.padding(4)
                 }
                 .background(style.shell)

@@ -181,11 +181,14 @@ struct InventoryView: View {
             if env["CT_OPEN_METRICS"] == "1" { showMetrics = true }
             // `CT_SLAB_NEWEST="psa|12345678|10"` stamps a cert and a grade on
             // the newest card, because simctl cannot walk the grading sheets.
+            // An empty cert field ("cgc||Pristine 10") is the imported ledger's
+            // shape: a real grade and no cert number.
             if let spec = env["CT_SLAB_NEWEST"], let newest = committed.first {
-                let parts = spec.split(separator: "|")
+                let parts = spec.split(separator: "|", omittingEmptySubsequences: false)
                 newest.graderRaw = String(parts.first ?? "psa")
-                newest.certNumber = parts.count > 1 ? String(parts[1]) : "00000000"
-                newest.gradeLabel = parts.count > 2 ? String(parts[2]) : nil
+                let cert = parts.count > 1 ? String(parts[1]) : "00000000"
+                newest.certNumber = cert.isEmpty ? nil : cert
+                newest.gradeLabel = parts.count > 2 && !parts[2].isEmpty ? String(parts[2]) : nil
                 try? modelContext.save()
             }
             // `CT_PROJECT_NEWEST="psa|12000,4000,2500"` sends the newest card

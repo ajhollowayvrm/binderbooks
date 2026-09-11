@@ -47,27 +47,28 @@ struct PPTClient {
 
     // MARK: - Parsing
 
-    /// `/cards` answers with one bare object on an id lookup and a list on a
-    /// search, under `cards`, `data`, or nothing. All four shapes are read.
+    /// An id lookup answers `{"data": {…}}` with one card under it. A search
+    /// answers with a list, under `data` or `cards`. Both, and a bare object
+    /// or list, are read — the wrapper is not contractual anywhere in PPT's
+    /// docs, and the single-object form is what broke the first build.
     static func parse(_ data: Data, tcgPlayerId: Int) throws -> [String: Int]? {
         let decoder = JSONDecoder()
-        let cards: [Card]
-        if let one = try? decoder.decode(Card.self, from: data), one.tcgPlayerId != nil {
-            cards = [one]
-        } else if let wrapped = try? decoder.decode(Envelope.self, from: data) {
-            cards = wrapped.cards ?? wrapped.data ?? []
-        } else if let list = try? decoder.decode([Card].self, from: data) {
-            cards = list
-        } else {
-            throw Failure.unreadable
+        var cards: [Card] = []
+        if let envelope = try? decoder.decode(Envelope.self, from: data) {
+            cards = envelope.all
         }
+        if cards.isEmpty, let one = try? decoder.decode(Card.self, from: data), one.tcgPlayerId != nil {
+            cards = [one]
+        }
+        if cards.isEmpty, let list = try? decoder.decode([Card].self, from: data) {
+            cards = list
+        }
+        guard !cards.isEmpty else { throw Failure.unreadable }
         // Trust but verify: PPT once ignored the filter.
         guard let card = cards.first(where: { $0.tcgPlayerId?.value == tcgPlayerId }) else { return nil }
         return comps(from: card.ebay?.salesByGrade ?? [:])
     }
 
-    /// "psa10" is "PSA 10", "cgc9_5" is "CGC 9.5", and a bucket carrying
-    /// "pristine" is "CGC Pristine 10". Anything else is not a grade.
     static func comps(from buckets: [String: Bucket]) -> [String: Int] {
         var out: [String: Int] = [:]
         for (rawKey, bucket) in buckets {
@@ -77,21 +78,50 @@ struct PPTClient {
         return out
     }
 
+    /// "psa10" is "PSA 10" and "cgc9_5" is "CGC 9.5". The grader is whatever
+    /// letters lead the key, not a list the app keeps: PPT tracks `ace` and
+    /// `tag` alongside PSA and CGC, and an allowlist silently drops a grader
+    /// the day they add one. A key with no number ("ungraded") is not a grade.
+    ///
+    /// Note PPT has **no Pristine bucket**: CGC Pristine 10 sales sit in
+    /// `cgc10`, so a fetch never fills the app's "CGC Pristine 10" row.
     static func gradeLabel(forBucket key: String) -> String? {
         let lower = key.lowercased()
-        guard let grader = ["psa", "cgc", "bgs", "tag"].first(where: { lower.hasPrefix($0) }) else { return nil }
-        var rest = String(lower.dropFirst(grader.count))
-        let pristine = rest.contains("pristine")
-        rest = rest.replacingOccurrences(of: "pristine", with: "")
-        let digits = rest.replacingOccurrences(of: "_", with: ".").trimmingCharacters(in: CharacterSet(charactersIn: ". "))
-        guard !digits.isEmpty, digits.allSatisfy({ $0.isNumber || $0 == "." }) else { return nil }
-        let grade = digits.hasSuffix(".0") ? String(digits.dropLast(2)) : digits
-        return pristine ? "\(grader.uppercased()) Pristine \(grade)" : "\(grader.uppercased()) \(grade)"
+        let grader = String(lower.prefix { $0.isLetter })
+        guard !grader.isEmpty else { return nil }
+        let rest = lower.dropFirst(grader.count).replacingOccurrences(of: "_", with: ".")
+        guard !rest.isEmpty, rest.allSatisfy({ $0.isNumber || $0 == "." }) else { return nil }
+        let grade = rest.hasSuffix(".0") ? String(rest.dropLast(2)) : rest
+        return "\(grader.uppercased()) \(grade)"
     }
 
     struct Envelope: Decodable {
         var cards: [Card]?
-        var data: [Card]?
+        var data: Payload?
+
+        /// `data` is one card on an id lookup and a list on a search.
+        enum Payload: Decodable {
+            case one(Card)
+            case many([Card])
+
+            init(from decoder: Decoder) throws {
+                let single = try decoder.singleValueContainer()
+                if let list = try? single.decode([Card].self) {
+                    self = .many(list)
+                } else {
+                    self = .one(try single.decode(Card.self))
+                }
+            }
+
+            var cards: [Card] {
+                switch self {
+                case .one(let card): return [card]
+                case .many(let list): return list
+                }
+            }
+        }
+
+        var all: [Card] { (cards ?? []) + (data?.cards ?? []) }
     }
 
     struct Card: Decodable {
