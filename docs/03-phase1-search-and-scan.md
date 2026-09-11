@@ -151,26 +151,70 @@ tests:
 The name rule (tallest line, not topmost) and the matcher's name-only bar fixed
 the wrong-card half. The accumulator fixes the missed-read half without a still.
 
-**`capturePhoto()` ends the scanner**, which is why the still is now only a
-fallback for a shutter tap that read nothing at all. It parks the preview on the
-frame it took and leaves the session in a state `stopScanning()` and
-`startScanning()` cannot recover; the controller keeps reporting `isScanning`
-while nothing moves. Only a fresh `DataScannerViewController` brings the camera
-back, so `ScanSessionView` bumps the view's `id` — and now only when a still was
-actually taken. If manual mode ever needs a still on every tap, run an
-`AVCaptureSession` with `AVCapturePhotoOutput` instead and keep VisionKit for
-automatic: more code, and it owns the session so a photo cannot kill it.
+**The scanner owns an `AVCaptureSession`.** Changed 2026-09-11. This section
+used to say `DataScannerViewController`, and to predict this exact move: "if
+manual mode ever needs a still on every tap, run an `AVCaptureSession` … it owns
+the session so a photo cannot kill it." What forced it was not the still. It was
+artwork.
 
-`DataScannerViewController` (VisionKit) for live text. Declare recognition languages
-explicitly: **`en` and `ja`**.
+`DataScannerViewController` hands back recognised text and a `capturePhoto()`
+that tears down the preview, and **no frames at all**. Artwork matching needs a
+picture of every card, not of the rare one whose text failed, so there was no
+version of it that worked on VisionKit. What owning the session bought:
 
-Two strings matter:
+- **One Vision pass over one buffer.** Text and pixels used to come from two
+  different captures at two different moments and exposures. A signature from
+  one and a number from the other describe different looks at the card.
+- **The sharpest frame of the last second**, rather than whichever arrived.
+  Blur is the only degradation that measurably costs artwork accuracy — 95% to
+  82% — so `FrameSharpness` scores every frame and the accumulator keeps the
+  signature from the best one. Frames taken while the lens is moving are never
+  signed.
+- **The lens held where a card is.** `.near` focus range, because a card sits at
+  about a hand's width and an unrestricted lens racks past it to the desk.
+  Exposure biased −0.3, because foil blows out and the pattern is the signal.
+- **A card outline in the viewfinder**, which VisionKit could not draw.
+
+Work is rationed by `FramePolicy` — text at 4/s, card detection at 10/s, and a
+feature print only on a sharp frame that improves on what is already signed —
+because thirty frames a second of everything heats the phone and reads nothing
+better.
+
+Recognition languages are still declared explicitly: **`en` and `ja`**.
+
+Three things are read now, not two:
 
 - **Card name**
 - **Collector number** — `114/084`, `BT26-001`, `031/071`
+- **The artwork**, as a signature — see below
 
-Do not attempt artwork recognition, embeddings, or any ML model. No third-party
-dependency.
+**Artwork recognition is in, and the old "no ML, no embeddings" rule is gone.**
+It was the right rule while it stood: it kept a card tracker from becoming a
+machine-learning project. It broke on three things text cannot do — two cards
+sharing a number, a Japanese card whose name the catalog files in English, and
+the foil printings that share a name *and* a number and differ only in the
+pattern stamped across them. All three are visible and none is readable.
+
+There is still no third-party dependency and no model to train. `CardArtDescriptor`
+is Apple's `VNGenerateImageFeaturePrint`, projected to 128 dimensions and one byte
+each — 9.3 MB across the catalog instead of 58 MB, with the ordering preserved.
+The catalog carries a signature per product; the phone signs the card in front of
+it and compares.
+
+Two rules that keep this honest:
+
+- **The app and the catalog build tool compile the same source file.** Two
+  implementations of one arithmetic would drift, and the day they drifted every
+  distance would quietly become noise rather than an error.
+- **The catalog records the version it was signed with.** A signature the phone
+  cannot reproduce is ignored, not compared. A silent wrong answer is worse than
+  no answer.
+
+Measured on an index of 8,251 real cards, references degraded with perspective, a
+colour shift and a specular glare: **95% exact card at rank 1, 99.5% in the top
+3**. Perspective alone costs nothing, which is `CardRectifier` earning its place —
+it finds the card in the frame and flattens it before anything looks at pixels.
+Accuracy held as the index grew 33-fold.
 
 **Japanese cards print collector numbers in Arabic numerals**, so number-based
 matching works on them without recognizing a single kanji. Name OCR in Japanese is a
@@ -196,11 +240,34 @@ key across the whole catalog — no set symbol, no set selection.
 
 4. Apply session bias (below).
 
-5. Resolve:
+5. Score the artwork against each candidate's signature (below).
+
+6. Resolve:
      one candidate            -> .certain
      one clear winner         -> .likely
      several                  -> .uncertain, attach candidates for the chip
 ```
+
+**Artwork is a signal beside the number and the name, not above them.** It is
+weighted at about what a name is worth, so no single signal can overrule the
+other two on its own. A candidate with no reference image scores nothing here
+and is neither helped nor punished — roughly one product in forty has no image
+on TCGplayer, and "we cannot see it" is not "it is wrong".
+
+Two bars, not one, because they answer different questions:
+
+- **`sameCard`, 0.78** — is this that card? The nearest unrelated card sits at
+  0.84 and the printings of one card sit at 0.53 to 0.73, so this separates
+  cards cleanly.
+- **`artSamePrinting`, 0.40** — is this *that printing* of that card? Tighter on
+  purpose. The printings sit only about 0.5 apart, so a distance that comfortably
+  says "this is a Snivy" says nothing about which of the three Snivys it is.
+  Confusing these two bars is how a Master Ball card gets confidently logged as
+  the plain one.
+
+**Artwork can rescue a card whose text is a mess.** When the camera agrees with
+exactly one candidate and no other, a misread name and an ambiguous number stop
+deciding anything. This is the Japanese card, and the card read through glare.
 
 **A name on its own must be a strong match.** When no number is read at all,
 the name is the entire decision, and a loose match becomes a wrong card. Dice
@@ -259,7 +326,44 @@ numbering can collide with English. Those land in `.uncertain` and get the
 disambiguation chip, which is the right outcome since they're the cards most worth
 eyeballing.
 
-### Printing, without AI
+**Japanese script is itself a signal.** Added 2026-09-11. The catalog files a
+Japanese card under its *English* name, so the name printed on the card can never
+agree with it — and scoring it as a weak name dragged every Japanese card down to
+"nothing agrees" and assigned no product at all. Two rules fix it:
+
+1. A name line in kana or kanji is dropped before scoring. It is not a weak
+   signal, it is no signal, and the number is left to decide.
+2. Seeing Japanese script anywhere in the frame keeps the match inside the
+   Japanese catalogue. `034/190` is one card there and a different card in the
+   English one.
+
+The second rule runs **one way only**. Glare can hide every kana on a card, so
+the absence of Japanese script is not evidence that a card is English, and a
+frame with none must not rule the Japanese catalogue out.
+
+### Printing
+
+**The pattern printings are their own problem.** Black Bolt prints Snivy three
+times at `001/086`: plain, Poké Ball Pattern, Master Ball Pattern. Same name,
+same number, same art — the difference is foil stamped across the whole card.
+No reading of the text can see it, and the plain card wins the name every time,
+so a pattern card was logged as the plain one and looked `.certain` doing it.
+
+The card also prints only `Snivy`, never `Snivy (Poke Ball Pattern)`. Scoring
+against the catalog's full name penalised every variant for a qualifier printed
+nowhere on it, so the matcher scores against both and takes the better.
+
+Where the catalog has a reference image for each printing, artwork settles it
+outright — the pattern is plainly visible even in a 200px thumbnail. Where it
+does not, the scanner **asks**, and the correction screen shows the printings as
+art with prices, because three rows reading "Snivy" is not a question anyone can
+answer.
+
+It has to ask often: TCGplayer serves no image for **124 of 144** Master Ball and
+**102 of 160** Poké Ball products. This is the one place where more artwork in
+the catalog would buy more accuracy, and the missing images are not ours to fix.
+
+### Printing count, without AI
 
 `product.printingCount` comes from the catalog build, so:
 

@@ -114,8 +114,23 @@ reason attached.
 
 ### Scanning
 
-8. **OCR, not image recognition.** Read the card name and collector number with
-   Vision. No ML model, no embeddings, no third-party dependency.
+8. **OCR *and* image recognition.** Revised 2026-09-11, on AJ's call: he wants the
+   scan as accurate as Collectr's, and text alone cannot get there. This rule used
+   to read "OCR, not image recognition. No ML model, no embeddings." It held up
+   until three failures that text cannot reach: two cards sharing a collector
+   number, a Japanese card whose name the catalog files in English, and the foil
+   printings that share a name *and* a number and differ only in the pattern
+   across them. All three are visible; none is readable.
+
+   What survives of the old rule is the part that mattered: **no third-party
+   dependency, no model to train, nothing to serve.** The signature is Apple's own
+   `VNGenerateImageFeaturePrint`, squeezed to 128 bytes a card and shipped inside
+   the catalog, so the scan stays offline and free. Measured at 95% exact card on
+   an 8,251-card index; see docs/03.
+
+   The number and the name still lead. Artwork is weighted at about what a name is
+   worth, so no one signal can overrule the other two — and a card the camera
+   cannot settle is still asked about rather than guessed.
 9. **The set is inferred, never pre-selected.** The denominator in "114/084" is the
    set's printed total and is a strong discriminator; name + full number string is
    close to a unique key. Union Arena and Digimon encode the set in the number
