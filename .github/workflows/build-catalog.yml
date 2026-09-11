@@ -55,7 +55,10 @@ jobs:
   sign:
     needs: build
     runs-on: macos-15
-    timeout-minutes: 120
+    # Generous, because the first pass signs all 76,000 cards. The tool stops
+    # itself well before this and the job publishes what it has, so the timeout
+    # is a backstop and not the plan.
+    timeout-minutes: 200
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -84,7 +87,10 @@ jobs:
             -o build/build-descriptors
 
       - name: Sign the new products
-        run: ./build/build-descriptors --catalog build/catalog.sqlite --workers 12
+        # Stops at the deadline and lets the publish step run. Signatures are
+        # written as they are made, so a first pass too big for one job still
+        # makes progress: tomorrow carries these forward and continues.
+        run: ./build/build-descriptors --catalog build/catalog.sqlite --workers 12 --deadline-minutes 170
 
       - name: Repack
         run: |

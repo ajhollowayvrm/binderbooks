@@ -31,6 +31,15 @@ struct Options {
     var groupId: Int?
     var workers = 8
     var rebuild = false
+    /// Stop after this long and let the caller publish what was signed.
+    ///
+    /// The first full pass is 76,000 cards and over an hour, and a job that is
+    /// killed by its own timeout never reaches the publish step — so the work
+    /// is thrown away and the next run starts from nothing, for ever. Stopping
+    /// early is not a failure: signatures are written in batches as they are
+    /// made, the ones already in the file are published, and tomorrow's run
+    /// carries them forward and continues where this one stopped.
+    var deadlineMinutes: Double?
 }
 
 func parseOptions() -> Options {
@@ -52,6 +61,7 @@ func parseOptions() -> Options {
         case "--group": options.groupId = Int(value())
         case "--workers": options.workers = Int(value()) ?? 8
         case "--rebuild": options.rebuild = true
+        case "--deadline-minutes": options.deadlineMinutes = Double(value())
         default:
             FileHandle.standardError.write(Data("unknown flag \(flag)\n".utf8))
             exit(2)
@@ -254,8 +264,15 @@ struct Build {
 
         // Downloads run wide, and the signing is done as each image lands.
         // Vision is the slow half and it does not go faster in parallel here.
+        let deadline = options.deadlineMinutes.map { started.addingTimeInterval($0 * 60) }
+        var stoppedEarly = false
+
         var index = 0
         while index < rows.count {
+            if let deadline, Date() >= deadline {
+                stoppedEarly = true
+                break
+            }
             let batch = Array(rows[index..<min(index + options.workers, rows.count)])
             index += batch.count
 
@@ -290,6 +307,9 @@ struct Build {
         catalog.finish()
 
         let elapsed = Date().timeIntervalSince(started)
+        if stoppedEarly {
+            print("stopped at the deadline with \(rows.count - index) still to sign. Tomorrow's run continues from here.")
+        }
         print(String(format: """
         done in %.0f s
           signed        %d
