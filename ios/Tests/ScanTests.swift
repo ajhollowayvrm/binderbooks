@@ -495,6 +495,84 @@ import Testing
     }
 }
 
+@Suite struct SealedSelfBackfillTests {
+    /// A card must count as a box's self-card, and gets it.
+    @Test @MainActor func flagsACardThatStandsForAnUnrippedBox() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        defer { withExtendedLifetime(container) {} }
+        let context = container.mainContext
+        let box = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
+        context.insert(box)
+        let selfCard = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
+        selfCard.sourceItem = box
+        context.insert(selfCard)
+        try context.save()
+
+        SealedSelfBackfill.run(context, defaults: UserDefaults(suiteName: "sealedbackfill-\(UUID())")!)
+
+        #expect(selfCard.isSealedSelf)
+    }
+
+    /// A card pulled from a rip, not the box itself: it came from a scan, and
+    /// even if it did not, its product differs from the line's own.
+    @Test @MainActor func leavesAPulledCardAlone() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        defer { withExtendedLifetime(container) {} }
+        let context = container.mainContext
+        let box = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
+        context.insert(box)
+        let session = ScanSession()
+        context.insert(session)
+        let pulled = OwnedCard(productId: 10, printing: "Normal", condition: "Near Mint", confidence: .certain)
+        pulled.sourceItem = box
+        pulled.scanSession = session
+        context.insert(pulled)
+        try context.save()
+
+        SealedSelfBackfill.run(context, defaults: UserDefaults(suiteName: "sealedbackfill-\(UUID())")!)
+
+        #expect(!pulled.isSealedSelf)
+    }
+
+    /// A line already ripped in the imported ledger never gets a self-card
+    /// written back onto it: stale data, not a box waiting to be opened.
+    @Test @MainActor func skipsALineAlreadyMarkedRipped() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        defer { withExtendedLifetime(container) {} }
+        let context = container.mainContext
+        let box = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
+        box.isRipped = true
+        context.insert(box)
+        let stray = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
+        stray.sourceItem = box
+        context.insert(stray)
+        try context.save()
+
+        SealedSelfBackfill.run(context, defaults: UserDefaults(suiteName: "sealedbackfill-\(UUID())")!)
+
+        #expect(!stray.isSealedSelf)
+    }
+
+    @Test @MainActor func runsOnlyOnce() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        defer { withExtendedLifetime(container) {} }
+        let context = container.mainContext
+        let box = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
+        context.insert(box)
+        let selfCard = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
+        selfCard.sourceItem = box
+        context.insert(selfCard)
+        try context.save()
+        let defaults = UserDefaults(suiteName: "sealedbackfill-\(UUID())")!
+
+        SealedSelfBackfill.run(context, defaults: defaults)
+        selfCard.isSealedSelf = false
+        SealedSelfBackfill.run(context, defaults: defaults)
+
+        #expect(!selfCard.isSealedSelf)
+    }
+}
+
 @Suite @MainActor struct ReviewPricingTests {
     private func session() throws -> (ModelContainer, ScanSessionModel, [OwnedCard]) {
         let container = try CollectionStore.container(inMemory: true)

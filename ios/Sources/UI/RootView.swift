@@ -79,6 +79,9 @@ struct RootView: View {
             // Tags replaced the status picker. This copies each card's old
             // status into its reserved label, once.
             StatusTagBackfill.run(modelContext)
+            // The Rip option needs `isSealedSelf`, which arrived after boxes
+            // were already in inventory. This flags them, once.
+            SealedSelfBackfill.run(modelContext)
             applyDebugQuery()
         }
     }
