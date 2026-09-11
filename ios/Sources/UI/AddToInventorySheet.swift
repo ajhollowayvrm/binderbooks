@@ -123,8 +123,10 @@ struct AddToInventorySheet: View {
     }
 
     private func save() {
-        let cards = (0..<quantity).map { _ in
-            OwnedCard(productId: detail.hit.productId, printing: printing, condition: condition, confidence: .manual)
+        let cards = (0..<quantity).map { _ -> OwnedCard in
+            let card = OwnedCard(productId: detail.hit.productId, printing: printing, condition: condition, confidence: .manual)
+            card.isSealedSelf = detail.hit.isSealed
+            return card
         }
         if let costCents {
             let shares = Allocation.splitEqually(costCents, into: cards.count)

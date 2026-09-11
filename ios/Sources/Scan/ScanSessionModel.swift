@@ -254,18 +254,35 @@ final class ScanSessionModel {
 
     // MARK: - Commit
 
-    /// Attach the session to a purchase, create one line per card, allocate,
-    /// and mark the session committed.
+    /// Attach the session to a purchase and mark it committed. A generic
+    /// session gets one new line per card, and the whole purchase reallocates.
+    /// A rip session's cards join the box's own line instead: its cost is
+    /// already fixed, so only that line's cards need their basis rewritten.
     func commit(to purchase: Purchase) {
-        for card in cards where card.sourceItem == nil {
-            let item = PurchaseItem(productId: card.productId, quantity: 1, isSealed: false)
-            item.purchase = purchase
-            context.insert(item)
-            card.sourceItem = item
-            card.acquiredAt = purchase.date
+        if let target = session.ripTarget {
+            for card in cards where card.sourceItem == nil {
+                card.sourceItem = target
+                card.acquiredAt = purchase.date
+            }
+            if let selfCard = target.cards.first(where: \.isSealedSelf) {
+                context.delete(selfCard)
+                // Flushed now, or the split below still counts the card just
+                // deleted and gives away a share of the box's cost to nothing.
+                save()
+            }
+            target.isRipped = true
+            Allocation.writeCardBases(purchase)
+        } else {
+            for card in cards where card.sourceItem == nil {
+                let item = PurchaseItem(productId: card.productId, quantity: 1, isSealed: false)
+                item.purchase = purchase
+                context.insert(item)
+                card.sourceItem = item
+                card.acquiredAt = purchase.date
+            }
+            Allocation.allocate(purchase)
+            Allocation.writeCardBases(purchase)
         }
-        Allocation.allocate(purchase)
-        Allocation.writeCardBases(purchase)
         session.purchase = purchase
         session.committedAt = Date()
         save()

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 /// Cost allocation. Pure integer arithmetic; every split sums back exactly.
 enum Allocation {
@@ -65,6 +66,42 @@ enum Allocation {
         for entry in submission.entries {
             entry.card?.gradingBasisCents = entry.allocatedFeeCents
         }
+    }
+
+    /// The one line to rip for this sealed self-card: itself, if it already
+    /// covers a single unit, or a new line carved out of it otherwise.
+    ///
+    /// A box bought three at a time shares one `PurchaseItem` at `quantity: 3`.
+    /// Ripping one must not touch the cost of the other two, so it is split off
+    /// first: a new line at `quantity: 1` takes one equal share of the shared
+    /// line's `allocatedCostCents`, and the card being ripped moves onto it.
+    /// Idempotent — a card already on its own line comes back unchanged.
+    static func isolate(_ card: OwnedCard, context: ModelContext) -> PurchaseItem? {
+        guard let item = card.sourceItem else { return nil }
+        guard item.quantity > 1 else { return item }
+
+        let shares = splitEqually(item.allocatedCostCents, into: item.quantity)
+        let unit = PurchaseItem(productId: item.productId, quantity: 1, isSealed: item.isSealed)
+        unit.purchase = item.purchase
+        unit.parentItem = item.parentItem
+        unit.allocatedCostCents = shares.last ?? 0
+        context.insert(unit)
+
+        item.quantity -= 1
+        item.allocatedCostCents -= unit.allocatedCostCents
+        card.sourceItem = unit
+        return unit
+    }
+
+    /// The line to rip for a sealed self-card, creating one when the card was
+    /// added to inventory standing alone, with no purchase behind it.
+    static func ripTarget(for card: OwnedCard, context: ModelContext) -> PurchaseItem {
+        if let item = isolate(card, context: context) { return item }
+        let item = PurchaseItem(productId: card.productId, quantity: 1, isSealed: true)
+        item.allocatedCostCents = card.acquisitionBasisCents
+        context.insert(item)
+        card.sourceItem = item
+        return item
     }
 
     /// Writes each card's basis from its line. A line with several cards splits

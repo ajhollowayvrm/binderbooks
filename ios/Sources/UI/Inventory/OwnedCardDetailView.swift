@@ -37,9 +37,11 @@ private struct OwnedCardDetailBody: View {
     var onDelete: () -> Void
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(ScannerLauncher.self) private var launcher
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var allCards: [OwnedCard]
     @State private var tagTarget: TagSheetTarget?
     @State private var markingGraded = false
+    @State private var confirmNoHits = false
 
     private var hit: SearchHit? { model.hits[card.productId] }
     private var printings: [String] { model.prices[card.productId]?.map(\.subTypeName) ?? [] }
@@ -47,6 +49,7 @@ private struct OwnedCardDetailBody: View {
     var body: some View {
         List {
             identity
+            sealed
             tags
             basis
             GradedCompsSection(card: card)
@@ -58,6 +61,11 @@ private struct OwnedCardDetailBody: View {
         }
         .navigationTitle(hit?.name ?? "Card")
         .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("No hits from this box?", isPresented: $confirmNoHits, titleVisibility: .visible) {
+            Button("No hits", role: .destructive) { markNoHits() }
+        } message: {
+            Text("This removes the box from inventory with nothing pulled from it. Its cost stays on the books as a loss.")
+        }
         .confirmationDialog("Delete this card from inventory?", isPresented: $showDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive, action: onDelete)
         }
@@ -83,7 +91,7 @@ private struct OwnedCardDetailBody: View {
                     SlabBadge(imageUrl: hit?.imageUrl, grader: card.graderRaw, grade: card.gradeLabel, cert: card.certNumber)
                         .frame(width: 110, height: 168)
                 } else {
-                    ProductThumbnail(urlString: hit?.imageUrl?.replacingOccurrences(of: "_200w", with: "_400w"), isSealed: false)
+                    ProductThumbnail(urlString: hit?.imageUrl?.replacingOccurrences(of: "_200w", with: "_400w"), isSealed: card.isSealedSelf)
                         .frame(width: 110, height: 154)
                 }
                 VStack(alignment: .leading, spacing: 6) {
@@ -109,6 +117,29 @@ private struct OwnedCardDetailBody: View {
                 NavigationLink(value: hit) {
                     Label("Catalog entry and prices", systemImage: "books.vertical")
                 }
+            }
+        }
+    }
+
+    /// Only on the self-card that stands for an unopened box. Ripping and
+    /// dumping a dud are the same choice: what left inventory, one way or the
+    /// other.
+    @ViewBuilder
+    private var sealed: some View {
+        if card.isSealedSelf {
+            Section {
+                Button {
+                    rip()
+                } label: {
+                    Label("Rip it", systemImage: "camera")
+                }
+                Button("No hits", role: .destructive) {
+                    confirmNoHits = true
+                }
+            } header: {
+                Text("Sealed")
+            } footer: {
+                Text("Scan what comes out. The cards take this box's cost. A dud with nothing in it still leaves inventory — mark it No hits instead of ripping.")
             }
         }
     }
@@ -246,5 +277,26 @@ private struct OwnedCardDetailBody: View {
 
     private func save() {
         try? modelContext.save()
+    }
+
+    /// Starts a session scoped to this box alone, so its cost splits only over
+    /// what comes out of it, never the rest of a shared line or the purchase.
+    private func rip() {
+        let item = Allocation.ripTarget(for: card, context: modelContext)
+        let session = ScanSession()
+        session.purchase = item.purchase
+        session.ripTarget = item
+        modelContext.insert(session)
+        try? modelContext.save()
+        launcher.session = session
+    }
+
+    /// A box that produced nothing. Its line stays, ripped, at cost — the
+    /// dud's loss the purchase-level rip performance already expects — and
+    /// only the self-card that stood for it leaves.
+    private func markNoHits() {
+        let item = Allocation.ripTarget(for: card, context: modelContext)
+        item.isRipped = true
+        onDelete()
     }
 }

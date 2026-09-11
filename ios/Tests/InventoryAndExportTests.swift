@@ -250,6 +250,36 @@ private func seed(_ context: ModelContext) throws {
         #expect(try target.mainContext.fetch(FetchDescriptor<BusinessExpense>()).isEmpty)
     }
 
+    /// A sealed self-card and the rip session pointed at its own line, since
+    /// `isSealedSelf` and `ripTarget` are the newest fields in the file.
+    @Test @MainActor func aSealedSelfCardAndItsRipTargetSurviveTheRoundTrip() throws {
+        let purchase = Purchase(vendor: "Walmart", itemCostCents: 4_997)
+        source.mainContext.insert(purchase)
+        let box = PurchaseItem(productId: 55, quantity: 1, isSealed: true)
+        box.purchase = purchase
+        box.allocatedCostCents = 4_997
+        source.mainContext.insert(box)
+        let selfCard = OwnedCard(productId: 55, printing: "", condition: "Near Mint", confidence: .manual)
+        selfCard.isSealedSelf = true
+        selfCard.sourceItem = box
+        source.mainContext.insert(selfCard)
+        let session = ScanSession()
+        session.purchase = purchase
+        session.ripTarget = box
+        source.mainContext.insert(session)
+        try source.mainContext.save()
+
+        let file = try CollectionExport.snapshot(source.mainContext)
+        #expect(file.cards.first { $0.productId == 55 }?.isSealedSelf == true)
+        #expect(file.sessions.first?.ripTargetId == box.id)
+
+        _ = try CollectionExport.apply(file, to: target.mainContext, mode: .merge)
+        let restoredCard = try #require(try target.mainContext.fetch(FetchDescriptor<OwnedCard>()).first { $0.productId == 55 })
+        #expect(restoredCard.isSealedSelf)
+        let restoredSession = try #require(try target.mainContext.fetch(FetchDescriptor<ScanSession>()).first)
+        #expect(restoredSession.ripTarget?.productId == 55)
+    }
+
     @Test func exportIsDeterministic() throws {
         let file = CollectionExport.File(exportedAt: "2026-09-10T05:00:00Z", purchases: [], purchaseItems: [], cards: [], sessions: [])
         #expect(try CollectionExport.encode(file) == CollectionExport.encode(file))

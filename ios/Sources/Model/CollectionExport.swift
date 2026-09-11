@@ -16,8 +16,10 @@ enum CollectionExport {
     /// an intake path, not a record. A version 3 file still imports and its
     /// `rips` array is ignored, because `JSONDecoder` drops a key the struct
     /// does not declare. The gate is `file.version <= version`.
-    /// Version 5 added business expenses.
-    static let version = 5
+    /// Version 5 added business expenses. Version 6 added `OwnedCardDTO.isSealedSelf`
+    /// and `ScanSessionDTO.ripTargetId`, for ripping one sealed item from
+    /// inventory directly instead of opening its whole purchase.
+    static let version = 6
 
     struct File: Codable, Equatable {
         var format: String = CollectionExport.format
@@ -107,6 +109,9 @@ enum CollectionExport {
         /// non-optional property and throws `keyNotFound`, so a non-optional
         /// field would make every file written before tags unimportable.
         var tags: [String]?
+        /// Optional, like `tags`: added in version 6, for the self-card that
+        /// stands for an unopened sealed item.
+        var isSealedSelf: Bool?
     }
 
     struct GradingSubmissionDTO: Codable, Equatable {
@@ -177,6 +182,8 @@ enum CollectionExport {
         var defaultPrinting: String?
         var purchaseId: UUID?
         var observedGroupIds: [Int]
+        /// Optional, like `OwnedCardDTO.isSealedSelf`: added in version 6.
+        var ripTargetId: UUID?
     }
 
     enum ImportError: LocalizedError {
@@ -263,13 +270,14 @@ enum CollectionExport {
                     certNumber: $0.certNumber, graderRaw: $0.graderRaw, gradeLabel: $0.gradeLabel, ocrName: $0.ocrName, ocrNumber: $0.ocrNumber,
                     candidateProductIds: $0.candidateProductIds, scannedAt: $0.scannedAt,
                     gradedCompCents: $0.gradedCompCents, fetchedCompCents: $0.fetchedCompCents, compsFetchedAt: $0.compsFetchedAt, sourceRef: $0.sourceRef,
-                    tags: $0.tags
+                    tags: $0.tags, isSealedSelf: $0.isSealedSelf
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString },
             sessions: sessions.map {
                 ScanSessionDTO(
                     id: $0.id, startedAt: $0.startedAt, committedAt: $0.committedAt, defaultCondition: $0.defaultCondition,
-                    defaultPrinting: $0.defaultPrinting, purchaseId: $0.purchase?.id, observedGroupIds: $0.observedGroupIds
+                    defaultPrinting: $0.defaultPrinting, purchaseId: $0.purchase?.id, observedGroupIds: $0.observedGroupIds,
+                    ripTargetId: $0.ripTarget?.id
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString },
             grading: grading.map {
@@ -424,6 +432,11 @@ enum CollectionExport {
         for dto in file.purchaseItems {
             items[dto.id]?.parentItem = dto.parentItemId.flatMap { items[$0] }
         }
+        // A session's rip target is a `PurchaseItem`, resolved only now that
+        // every line exists.
+        for dto in file.sessions {
+            sessions[dto.id]?.ripTarget = dto.ripTargetId.flatMap { items[$0] }
+        }
 
         for dto in file.cards {
             let card = cards[dto.id] ?? {
@@ -458,6 +471,7 @@ enum CollectionExport {
             card.candidateProductIds = dto.candidateProductIds
             card.scannedAt = dto.scannedAt
             card.tags = dto.tags ?? []
+            card.isSealedSelf = dto.isSealedSelf ?? false
             card.gradedCompCents = dto.gradedCompCents ?? [:]
             card.fetchedCompCents = dto.fetchedCompCents ?? [:]
             card.compsFetchedAt = dto.compsFetchedAt

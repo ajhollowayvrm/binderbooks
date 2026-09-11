@@ -99,6 +99,9 @@ struct OwnedCardCard: View {
                     Text(cert)
                         .monospacedDigit()
                 }
+            } else if row.card.isSealedSelf {
+                Image(systemName: "shippingbox")
+                Text("Sealed")
             } else {
                 if let number = row.hit?.number {
                     Text(number)

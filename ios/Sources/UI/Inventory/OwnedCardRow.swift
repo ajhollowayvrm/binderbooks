@@ -10,7 +10,7 @@ struct OwnedCardRow: View {
                 SlabBadge(imageUrl: row.hit?.imageUrl, grader: row.card.graderRaw, grade: row.card.gradeLabel, cert: row.card.certNumber)
                     .frame(width: 48, height: 74)
             } else {
-                ProductThumbnail(urlString: row.hit?.imageUrl, isSealed: false)
+                ProductThumbnail(urlString: row.hit?.imageUrl, isSealed: row.card.isSealedSelf)
                     .frame(width: 44, height: 62)
             }
 
@@ -27,9 +27,13 @@ struct OwnedCardRow: View {
                         .lineLimit(1)
                 }
                 HStack(spacing: 6) {
-                    if let number = row.hit?.number { Text(number).monospacedDigit() }
-                    if !row.card.printing.isEmpty { Text(row.card.printing) }
-                    Text(CardCondition(rawValue: row.card.condition)?.short ?? row.card.condition)
+                    if row.card.isSealedSelf {
+                        Text("Sealed")
+                    } else {
+                        if let number = row.hit?.number { Text(number).monospacedDigit() }
+                        if !row.card.printing.isEmpty { Text(row.card.printing) }
+                        Text(CardCondition(rawValue: row.card.condition)?.short ?? row.card.condition)
+                    }
                     if row.card.quantity > 1 { Text("×\(row.card.quantity)") }
                     if row.card.isPersonalCollection { Text("PC") }
                 }

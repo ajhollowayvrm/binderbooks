@@ -188,6 +188,12 @@ final class OwnedCard {
     /// Cards he is keeping. Not inventory; excluded from COGS.
     var isPersonalCollection: Bool = false
 
+    /// True while this card stands for an unopened sealed item itself, not a
+    /// card pulled from one. Set only on the card `AddToInventorySheet` writes
+    /// for a sealed product. Ripping the item deletes this card, so it never
+    /// coexists with `sourceItem?.isRipped == true`.
+    var isSealedSelf: Bool = false
+
     var sourceItem: PurchaseItem?
     var scanSession: ScanSession?
 
@@ -275,6 +281,10 @@ final class ScanSession {
     var defaultCondition: String = CardCondition.nearMint.rawValue
     var defaultPrinting: String?
     var purchase: Purchase?
+    /// The sealed item this session is ripping, when it is one. Its cards join
+    /// this item directly on commit, instead of each starting a new line, so
+    /// the box's own share of the purchase is what splits over them.
+    var ripTarget: PurchaseItem?
 
     @Relationship(deleteRule: .cascade, inverse: \OwnedCard.scanSession)
     var cards: [OwnedCard] = []

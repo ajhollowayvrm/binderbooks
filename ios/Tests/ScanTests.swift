@@ -426,6 +426,73 @@ import Testing
         #expect(cards[0].acquisitionBasisCents == 2_000)
         #expect(cards[1].acquisitionBasisCents == 0)
     }
+
+    /// Three boxes bought together share one line. Ripping one must carve off
+    /// its own third of the cost and leave the shared line covering the
+    /// other two.
+    @Test @MainActor func isolateSplitsOneUnitOffASharedLine() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        defer { withExtendedLifetime(container) {} }
+        let context = container.mainContext
+        let purchase = Purchase(vendor: "Walmart", itemCostCents: 100)
+        context.insert(purchase)
+        let boxes = PurchaseItem(productId: 1, quantity: 3, isSealed: true)
+        boxes.purchase = purchase
+        boxes.allocatedCostCents = 100
+        context.insert(boxes)
+        let selfCard = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
+        selfCard.isSealedSelf = true
+        selfCard.sourceItem = boxes
+        context.insert(selfCard)
+
+        let unit = try #require(Allocation.isolate(selfCard, context: context))
+
+        #expect(unit !== boxes)
+        #expect(unit.quantity == 1)
+        #expect(unit.isSealed)
+        #expect(unit.allocatedCostCents == 33)
+        #expect(boxes.quantity == 2)
+        #expect(boxes.allocatedCostCents == 67)
+        #expect(selfCard.sourceItem === unit)
+
+        // A second box's self-card, already isolated once, comes back unchanged.
+        #expect(Allocation.isolate(selfCard, context: context) === unit)
+    }
+
+    @Test @MainActor func isolateLeavesASingleUnitLineAlone() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        defer { withExtendedLifetime(container) {} }
+        let context = container.mainContext
+        let item = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
+        item.allocatedCostCents = 4_997
+        context.insert(item)
+        let selfCard = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
+        selfCard.isSealedSelf = true
+        selfCard.sourceItem = item
+        context.insert(selfCard)
+
+        #expect(Allocation.isolate(selfCard, context: context) === item)
+        #expect(item.allocatedCostCents == 4_997)
+    }
+
+    /// A sealed card added to inventory on its own, with no purchase behind it,
+    /// still needs a line to rip against.
+    @Test @MainActor func ripTargetCreatesALineWhenTheCardStandsAlone() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        defer { withExtendedLifetime(container) {} }
+        let context = container.mainContext
+        let card = OwnedCard(productId: 9, printing: "", condition: "Near Mint", confidence: .manual)
+        card.isSealedSelf = true
+        card.acquisitionBasisCents = 2_500
+        context.insert(card)
+
+        let item = Allocation.ripTarget(for: card, context: context)
+
+        #expect(card.sourceItem === item)
+        #expect(item.quantity == 1)
+        #expect(item.isSealed)
+        #expect(item.allocatedCostCents == 2_500)
+    }
 }
 
 @Suite @MainActor struct ReviewPricingTests {
@@ -530,6 +597,60 @@ import Testing
         #expect(purchase.items.reduce(0) { $0 + $1.allocatedCostCents } == 19_339)
         #expect(model.cards.allSatisfy { $0.isCommitted && $0.basisIsAllocated && $0.sourceItem != nil })
         #expect(model.cards.reduce(0) { $0 + $1.acquisitionBasisCents } == 19_339)
+    }
+
+    /// Ripping a specific sealed line: its cards join that line alone, the
+    /// self-card that stood for the box is gone, and a sibling line in the
+    /// same purchase is untouched.
+    @Test @MainActor func commitOfARipRemovesTheSelfCardAndSpendsOnlyTheBoxsOwnCost() throws {
+        let context = container.mainContext
+        let purchase = Purchase(vendor: "Walmart", itemCostCents: 5_000)
+        context.insert(purchase)
+
+        let box = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
+        box.purchase = purchase
+        box.allocatedCostCents = 3_000
+        context.insert(box)
+        let selfCard = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
+        selfCard.isSealedSelf = true
+        selfCard.sourceItem = box
+        context.insert(selfCard)
+
+        let sibling = PurchaseItem(productId: 2)
+        sibling.purchase = purchase
+        sibling.allocatedCostCents = 2_000
+        context.insert(sibling)
+        let siblingCard = OwnedCard(productId: 2, printing: "Normal", condition: "Near Mint", confidence: .certain)
+        siblingCard.sourceItem = sibling
+        siblingCard.acquisitionBasisCents = 2_000
+        siblingCard.basisIsAllocated = true
+        context.insert(siblingCard)
+
+        let session = ScanSession()
+        session.purchase = purchase
+        session.ripTarget = box
+        context.insert(session)
+        let model = ScanSessionModel(session: session, context: context, catalog: CatalogController())
+
+        for id in [10, 11] {
+            let pulled = OwnedCard(productId: id, printing: "Normal", condition: "Near Mint", confidence: .certain)
+            pulled.scanSession = session
+            context.insert(pulled)
+        }
+
+        model.commit(to: purchase)
+
+        #expect(box.isRipped)
+        #expect(box.cards.count == 2)
+        #expect(box.cards.map(\.productId).sorted() == [10, 11])
+        #expect(box.cards.reduce(0) { $0 + $1.acquisitionBasisCents } == 3_000)
+        #expect(!box.cards.contains { $0.isSealedSelf })
+        #expect(try context.fetch(FetchDescriptor<OwnedCard>()).contains { $0.id == selfCard.id } == false)
+
+        // The sibling line and its card never moved.
+        #expect(sibling.allocatedCostCents == 2_000)
+        #expect(siblingCard.acquisitionBasisCents == 2_000)
+        #expect(purchase.items.count == 2)
     }
 
     @Test @MainActor func sessionBiasKeepsTheNewestSetsFirst() {
