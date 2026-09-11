@@ -11,7 +11,10 @@ struct PurchaseDetailView: View {
     @Environment(InventoryModel.self) private var inventory
     @Environment(ScannerLauncher.self) private var launcher
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
     @Query private var purchases: [Purchase]
+    @State private var confirmDelete = false
+    @State private var showBlocked = false
 
     init(purchaseID: UUID) {
         self.purchaseID = purchaseID
@@ -75,12 +78,37 @@ struct PurchaseDetailView: View {
                         Text("A derived cost is this purchase's total split over the cards. Read the purchase, not the card, to see how the opening did.")
                     }
                 }
+
+                Section {
+                    Button("Delete purchase", role: .destructive) {
+                        if cards.isEmpty { confirmDelete = true } else { showBlocked = true }
+                    }
+                }
             } else {
                 ContentUnavailableView("This purchase is gone", systemImage: "questionmark.folder")
             }
         }
         .navigationTitle("Purchase")
         .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("Delete this purchase?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { deletePurchase() }
+        }
+        // Deleting a purchase deletes its lines, and the lines own the cards.
+        // He removes the cards first, on purpose, or the purchase stays.
+        .alert("Cards came out of this purchase", isPresented: $showBlocked) {
+            Button("OK") {}
+        } message: {
+            Text(cards.count == 1
+                ? "1 card in inventory came from this purchase. Delete it first."
+                : "\(cards.count) cards in inventory came from this purchase. Delete them first.")
+        }
+    }
+
+    private func deletePurchase() {
+        guard let purchase else { return }
+        modelContext.delete(purchase)
+        try? modelContext.save()
+        dismiss()
     }
 
     private func cardRow(_ card: OwnedCard) -> some View {
@@ -118,7 +146,12 @@ struct GradingDetailView: View {
     let submissionID: UUID
 
     @Environment(InventoryModel.self) private var inventory
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
     @Query private var submissions: [GradingSubmission]
+    @State private var recording = false
+    @State private var confirmDelete = false
+    @State private var blockedMessage: String?
 
     init(submissionID: UUID) {
         self.submissionID = submissionID
@@ -159,11 +192,18 @@ struct GradingDetailView: View {
                     ForEach(submission.entries) { entry in
                         if let card = entry.card {
                             NavigationLink(value: AppRoute.ownedCard(card.id)) {
-                                LabeledContent(
-                                    inventory.hits[card.productId]?.name ?? "Unknown",
-                                    value: entry.grade.map { "\($0)" } ?? "not back"
-                                )
+                                LabeledContent(inventory.hits[card.productId]?.name ?? card.ocrName ?? "Unknown", value: gradeText(entry))
                             }
+                            .swipeActions(edge: .trailing) {
+                                Button("Remove", role: .destructive) { remove(entry) }
+                            }
+                        }
+                    }
+                    if submission.entries.contains(where: { $0.card != nil }) {
+                        Button {
+                            recording = true
+                        } label: {
+                            Label(submission.returnedAt == nil ? "Record return" : "Edit return", systemImage: "shippingbox")
                         }
                     }
                 } header: {
@@ -172,7 +212,13 @@ struct GradingDetailView: View {
                     if submission.entries.isEmpty {
                         // docs/04: the charge names a card count and no cards.
                         Text("The imported charges name a card count and nothing else, so nothing was joined to them. Each card carries its own grading cost.")
+                    } else {
+                        Text("Swipe a card to take it off this submission.")
                     }
+                }
+
+                Section {
+                    Button("Delete submission", role: .destructive) { requestDelete(submission) }
                 }
             } else {
                 ContentUnavailableView("This charge is gone", systemImage: "questionmark.folder")
@@ -180,5 +226,55 @@ struct GradingDetailView: View {
         }
         .navigationTitle("Grading")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $recording) {
+            if let submission = submissions.first {
+                GradingReturnSheet(submission: submission) { inventory.invalidateHaystacks() }
+            }
+        }
+        .confirmationDialog("Delete this submission?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { deleteSubmission() }
+        }
+        .alert("Cards are still on this submission", isPresented: Binding(get: { blockedMessage != nil }, set: { if !$0 { blockedMessage = nil } })) {
+            Button("OK") {}
+        } message: {
+            Text(blockedMessage ?? "")
+        }
+    }
+
+    private func gradeText(_ entry: GradingEntry) -> String {
+        if entry.noGrade { return "no grade" }
+        guard let grade = entry.grade else { return "not back" }
+        let text = GradingReturnSheet.gradeText(grade)
+        return entry.certNumber.isEmpty ? text : "\(text) · \(entry.certNumber)"
+    }
+
+    /// The card leaves the submission and the fee it carried comes off it.
+    /// The slab stays: a cert number on a card is a fact about the card.
+    private func remove(_ entry: GradingEntry) {
+        if let card = entry.card {
+            let editor = CardTagEditor(context: modelContext)
+            for label in ReservedTag.allAtGrader { editor.remove(label, from: [card]) }
+            if card.gradingBasisCents == entry.allocatedFeeCents { card.gradingBasisCents = 0 }
+        }
+        modelContext.delete(entry)
+        try? modelContext.save()
+    }
+
+    private func requestDelete(_ submission: GradingSubmission) {
+        let linked = submission.entries.filter { $0.card != nil }.count
+        if linked > 0 {
+            blockedMessage = linked == 1
+                ? "1 card in inventory is on this submission. Remove it first."
+                : "\(linked) cards in inventory are on this submission. Remove them first."
+        } else {
+            confirmDelete = true
+        }
+    }
+
+    private func deleteSubmission() {
+        guard let submission = submissions.first else { return }
+        modelContext.delete(submission)
+        try? modelContext.save()
+        dismiss()
     }
 }

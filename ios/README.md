@@ -182,6 +182,8 @@ The simulator cannot type or tap for a script, so debug builds read these on lau
 | `CT_OPEN_SETTINGS=1` | Pushes Settings, which holds export. |
 | `CT_OPEN_METRICS=1` | Opens the inventory Metrics sheet. |
 | `CT_SELECT_ALL=1` | Enters selection with every row ticked. |
+| `CT_SLAB_NEWEST="psa\|12345678\|10"` | Stamps that grader, cert, and grade on the newest card, so it renders as a slab. |
+| `CT_PROJECT_NEWEST="psa\|12000,4000,2500"` | Tags the newest card "at PSA" and fills its top comps in cents, so its price shows as a range. |
 | `CT_OPEN_INVENTORY=1` | Deprecated. Inventory is the landing screen, so this only clears the query and pops to the root. |
 
 Prefix each with `SIMCTL_CHILD_` on `xcrun simctl launch`.

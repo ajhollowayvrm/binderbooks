@@ -7,8 +7,8 @@ struct OwnedCardRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             if let cert = row.card.certNumber {
-                SlabBadge(imageUrl: row.hit?.imageUrl, grader: row.card.graderRaw, cert: cert)
-                    .frame(width: 48, height: 70)
+                SlabBadge(imageUrl: row.hit?.imageUrl, grader: row.card.graderRaw, grade: row.card.gradeLabel, cert: cert)
+                    .frame(width: 48, height: 74)
             } else {
                 ProductThumbnail(urlString: row.hit?.imageUrl, isSealed: false)
                     .frame(width: 44, height: 62)
@@ -41,15 +41,24 @@ struct OwnedCardRow: View {
             Spacer(minLength: 8)
 
             VStack(alignment: .trailing, spacing: 3) {
-                Text(row.marketCents?.asCurrency ?? "—")
+                Text(row.priceText)
                     .font(.body.monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                if let grader = row.graderAtGrader, row.projectedRange != nil {
+                    Text("if \(grader.uppercased()) grades it")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 if row.card.isBulk {
                     Text("bulk")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                } else if let diff = row.unrealizedCents {
+                } else if row.projectedRange == nil, let diff = row.unrealizedCents {
                     // The gain against what the card cost, split basis or not.
-                    // This is the number he reads before he sells.
+                    // This is the number he reads before he sells. Not shown
+                    // under a projection, because it is a gain on the raw
+                    // price and the row no longer leads with that.
                     Text((diff >= 0 ? "+" : "−") + abs(diff).asCurrency)
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(diff >= 0 ? .green : .red)
@@ -68,30 +77,96 @@ struct OwnedCardRow: View {
     }
 }
 
-/// A small slab: label strip with grader and cert on top, the card below.
+/// The look of a grader's label. PSA prints a red label with white text. CGC
+/// prints a black label with a blue band. Anything else keeps the plain gray
+/// label the app started with.
+struct SlabStyle {
+    var label: Color
+    var text: Color
+    var accent: Color
+    var shell: Color
+    var border: Color
+
+    static func of(_ grader: String?) -> SlabStyle {
+        switch grader?.lowercased().trimmingCharacters(in: .whitespaces) {
+        case "psa":
+            return SlabStyle(
+                label: Color(red: 0.78, green: 0.09, blue: 0.13),
+                text: .white,
+                accent: .white,
+                shell: Color(white: 0.93),
+                border: Color(white: 0.7)
+            )
+        case "cgc":
+            return SlabStyle(
+                label: Color(white: 0.1),
+                text: .white,
+                accent: Color(red: 0.2, green: 0.55, blue: 0.9),
+                shell: Color(white: 0.88),
+                border: Color(white: 0.6)
+            )
+        default:
+            return SlabStyle(
+                label: Color(white: 0.96),
+                text: .primary,
+                accent: .secondary,
+                shell: Color(white: 0.9),
+                border: Color(white: 0.75)
+            )
+        }
+    }
+}
+
+/// A small slab: label strip with grader, grade, and cert on top, the card
+/// below.
 struct SlabBadge: View {
     var imageUrl: String?
     var grader: String?
+    var grade: String?
     var cert: String
 
     var body: some View {
+        let style = SlabStyle.of(grader)
         VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                Text((grader ?? "slab").uppercased())
-                    .font(.system(size: 7, weight: .heavy))
-                Text(cert)
-                    .font(.system(size: 6.5, weight: .medium).monospacedDigit())
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 2)
-            .background(Color(white: 0.96))
+            SlabLabel(grader: grader, grade: grade, cert: cert, style: style)
             ProductThumbnail(urlString: imageUrl, isSealed: false)
                 .padding(3)
         }
-        .background(Color(white: 0.9))
+        .background(style.shell)
         .clipShape(RoundedRectangle(cornerRadius: 4))
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.75), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(style.border, lineWidth: 1))
+    }
+}
+
+/// The strip across the top of a slab: grader name, the grade large, and the
+/// cert number. The grade is what he reads first on a real label.
+struct SlabLabel: View {
+    var grader: String?
+    var grade: String?
+    var cert: String
+    var style: SlabStyle
+    var scale: CGFloat = 1
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text((grader ?? "slab").uppercased())
+                .font(.system(size: 7 * scale, weight: .heavy))
+                .foregroundStyle(style.text)
+            if let grade, !grade.isEmpty {
+                Text(grade.uppercased())
+                    .font(.system(size: 10 * scale, weight: .black))
+                    .foregroundStyle(style.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            }
+            Text(cert)
+                .font(.system(size: 6.5 * scale, weight: .medium).monospacedDigit())
+                .foregroundStyle(style.accent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2 * scale)
+        .background(style.label)
     }
 }

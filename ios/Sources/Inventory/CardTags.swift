@@ -32,11 +32,27 @@ struct TagUse: Identifiable, Equatable, Sendable {
 enum ReservedTag {
     static let sold = "sold"
     static let listed = "listed"
+    /// The old status label, and the fallback for a grader the app does not
+    /// know. A send to PSA or CGC writes the grader's own label instead.
     static let atGrader = "at grader"
+    static let atPSA = "at PSA"
+    static let atCGC = "at CGC"
     static let graded = "graded"
     static let lost = "lost"
 
-    static let all = [sold, listed, atGrader, graded, lost]
+    static let all = [sold, listed, atGrader, atPSA, atCGC, graded, lost]
+
+    /// The label a card wears while it is out at that grader.
+    static func atGrader(_ grader: String) -> String {
+        switch grader.lowercased().trimmingCharacters(in: .whitespaces) {
+        case "psa": return atPSA
+        case "cgc": return atCGC
+        default: return atGrader
+        }
+    }
+
+    /// Every label that means "out at a grader". A return clears them all.
+    static let allAtGrader = [atGrader, atPSA, atCGC]
 
     /// The label for a stored `CardStatus` raw value. `owned` needs no label,
     /// because an owned card is the default.

@@ -91,11 +91,14 @@ enum CollectionExport {
         var matchConfidenceRaw: String
         var certNumber: String?
         var graderRaw: String?
+        var gradeLabel: String?
         var ocrName: String?
         var ocrNumber: String?
         var candidateProductIds: [Int]
         var scannedAt: Date
         var gradedCompCents: [String: Int]?
+        var fetchedCompCents: [String: Int]?
+        var compsFetchedAt: Date?
         var sourceRef: String?
         /// Optional on purpose. The synthesised decoder calls `decode` for a
         /// non-optional property and throws `keyNotFound`, so a non-optional
@@ -241,9 +244,9 @@ enum CollectionExport {
                     basisIsAllocated: $0.basisIsAllocated, basisIsManual: $0.basisIsManual,
                     isBulk: $0.isBulk, isPersonalCollection: $0.isPersonalCollection,
                     sourceItemId: $0.sourceItem?.id, scanSessionId: $0.scanSession?.id, matchConfidenceRaw: $0.matchConfidenceRaw,
-                    certNumber: $0.certNumber, graderRaw: $0.graderRaw, ocrName: $0.ocrName, ocrNumber: $0.ocrNumber,
+                    certNumber: $0.certNumber, graderRaw: $0.graderRaw, gradeLabel: $0.gradeLabel, ocrName: $0.ocrName, ocrNumber: $0.ocrNumber,
                     candidateProductIds: $0.candidateProductIds, scannedAt: $0.scannedAt,
-                    gradedCompCents: $0.gradedCompCents, sourceRef: $0.sourceRef,
+                    gradedCompCents: $0.gradedCompCents, fetchedCompCents: $0.fetchedCompCents, compsFetchedAt: $0.compsFetchedAt, sourceRef: $0.sourceRef,
                     tags: $0.tags
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString },
@@ -425,12 +428,15 @@ enum CollectionExport {
             card.matchConfidenceRaw = dto.matchConfidenceRaw
             card.certNumber = dto.certNumber
             card.graderRaw = dto.graderRaw
+            card.gradeLabel = dto.gradeLabel
             card.ocrName = dto.ocrName
             card.ocrNumber = dto.ocrNumber
             card.candidateProductIds = dto.candidateProductIds
             card.scannedAt = dto.scannedAt
             card.tags = dto.tags ?? []
             card.gradedCompCents = dto.gradedCompCents ?? [:]
+            card.fetchedCompCents = dto.fetchedCompCents ?? [:]
+            card.compsFetchedAt = dto.compsFetchedAt
             card.sourceRef = dto.sourceRef ?? ""
             report.cards += 1
         }

@@ -18,6 +18,13 @@ enum Money {
         return f
     }()
 
+    /// Cents to "12.34" for a text field. No symbol, no grouping, no `Double`.
+    static func fieldText(_ cents: Int) -> String {
+        let sign = cents < 0 ? "-" : ""
+        let magnitude = abs(cents)
+        return "\(sign)\(magnitude / 100)." + String(format: "%02d", magnitude % 100)
+    }
+
     /// Parses typed text into cents. Rejects a third decimal digit.
     static func cents(from text: String) -> Int? {
         let filtered = text.filter { $0.isNumber || $0 == "." }

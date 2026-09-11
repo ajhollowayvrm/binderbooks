@@ -54,10 +54,10 @@ struct OwnedCardCard: View {
         VStack(alignment: .leading, spacing: 5) {
             art
             HStack(spacing: 4) {
-                Text(row.marketCents?.asCurrency ?? "—")
+                Text(row.priceText)
                     .font(.subheadline.monospacedDigit().weight(.semibold))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.6)
                 ConfidenceMarker(
                     confidence: row.card.matchConfidence,
                     identified: row.card.isIdentified,
@@ -82,10 +82,14 @@ struct OwnedCardCard: View {
     private var identity: some View {
         HStack(spacing: 5) {
             if let cert = row.card.certNumber {
-                Text((row.card.graderRaw ?? "").uppercased())
+                // The label above already shows all three. One line here
+                // holds two of them without truncating.
+                Text(((row.card.graderRaw ?? "").uppercased() + " " + (row.card.gradeLabel ?? "")).trimmingCharacters(in: .whitespaces))
                     .fontWeight(.semibold)
-                Text(cert)
-                    .monospacedDigit()
+                if row.card.gradeLabel == nil {
+                    Text(cert)
+                        .monospacedDigit()
+                }
             } else {
                 if let number = row.hit?.number {
                     Text(number)
@@ -102,20 +106,20 @@ struct OwnedCardCard: View {
         .lineLimit(1)
     }
 
+    /// A slab draws its label over the art, so a graded card reads as a slab
+    /// at grid size the way it does in the list.
     private var art: some View {
-        AsyncImage(url: row.hit?.largeImageURL) { phase in
-            switch phase {
-            case .success(let image):
-                image.resizable().scaledToFit()
-            case .empty:
-                Rectangle().fill(.fill.quaternary)
-            default:
-                Rectangle()
-                    .fill(.fill.quaternary)
-                    .overlay {
-                        Image(systemName: "rectangle.portrait")
-                            .foregroundStyle(.tertiary)
-                    }
+        Group {
+            if let cert = row.card.certNumber {
+                let style = SlabStyle.of(row.card.graderRaw)
+                VStack(spacing: 0) {
+                    SlabLabel(grader: row.card.graderRaw, grade: row.card.gradeLabel, cert: cert, style: style, scale: 1.6)
+                    artImage.padding(4)
+                }
+                .background(style.shell)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(style.border, lineWidth: 1))
+            } else {
+                artImage
             }
         }
         .frame(maxWidth: .infinity)
@@ -139,6 +143,24 @@ struct OwnedCardCard: View {
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(.tint, lineWidth: 3)
                     .transition(.opacity)
+            }
+        }
+    }
+
+    private var artImage: some View {
+        AsyncImage(url: row.hit?.largeImageURL) { phase in
+            switch phase {
+            case .success(let image):
+                image.resizable().scaledToFit()
+            case .empty:
+                Rectangle().fill(.fill.quaternary)
+            default:
+                Rectangle()
+                    .fill(.fill.quaternary)
+                    .overlay {
+                        Image(systemName: "rectangle.portrait")
+                            .foregroundStyle(.tertiary)
+                    }
             }
         }
     }

@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var importError: String?
     @State private var importReport: CollectionExport.Report?
     @AppStorage("lastExportAt") private var lastExportAt: Double = 0
+    @AppStorage(PPTKey.defaultsKey) private var pptKey = ""
 
     var body: some View {
         List {
@@ -23,6 +24,16 @@ struct SettingsView: View {
                 NavigationLink(value: AppRoute.catalogStatus) {
                     Label("Catalog status and updates", systemImage: "externaldrive")
                 }
+            }
+
+            Section {
+                SecureField("API key", text: $pptKey)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            } header: {
+                Text("PokemonPriceTracker")
+            } footer: {
+                Text("Fetches graded comps onto cards. About two credits per card. Your own figures always win over fetched ones.")
             }
 
             Section {

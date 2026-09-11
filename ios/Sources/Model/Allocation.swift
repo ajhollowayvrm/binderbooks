@@ -45,6 +45,16 @@ enum Allocation {
         }
     }
 
+    /// Equal split of a submission's total cost across its entries. Correct
+    /// here, because the grader charged per card.
+    static func allocate(_ submission: GradingSubmission) {
+        let entries = submission.entries.sorted { $0.id.uuidString < $1.id.uuidString }
+        let shares = splitEqually(submission.totalCostCents, into: entries.count)
+        for (entry, share) in zip(entries, shares) {
+            entry.allocatedFeeCents = share
+        }
+    }
+
     /// Writes each card's basis from its line. A line with several cards splits
     /// its share equally among them.
     static func writeCardBases(_ purchase: Purchase) {

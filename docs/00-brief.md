@@ -169,6 +169,10 @@ reason attached.
     Marketplace Insights API is limited-release and rarely approved, and since
     2026-07-22 eBay redirects signed-out visitors to a login on any sold or completed
     search. He has a Card Ladder subscription and will enter comps himself.
+    **Amended 2026-09-10:** PokemonPriceTracker fills what it has, per card or
+    over a selection, straight from the phone with his key. Its figures sit in
+    `fetchedCompCents`; his hand entry stays in `gradedCompCents` and wins on
+    display. PriceCharting was the other candidate and costs about $50 a month.
 25. **The purchase-decision tool leads with discount to market, not EV.** He rips
     because he enjoys ripping and buys on "good deal" more than expected value. Show
     the numbers; never render a verdict telling him not to rip something.

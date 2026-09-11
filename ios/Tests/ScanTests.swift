@@ -328,6 +328,39 @@ import Testing
         #expect(purchase.items.reduce(0) { $0 + $1.allocatedCostCents } == 497)
     }
 
+    /// The grader charged per card, so the submission's whole cost splits
+    /// evenly across its entries and sums back exactly.
+    @Test @MainActor func gradingFeesSplitAcrossEntries() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        defer { withExtendedLifetime(container) {} }
+        let context = container.mainContext
+        let submission = GradingSubmission(graderRaw: "psa", gradingFeesCents: 5_000)
+        submission.shipToGraderCents = 1_200
+        submission.shipReturnCents = 1_500
+        submission.insuranceCents = 301
+        context.insert(submission)
+        for _ in 0..<3 {
+            let card = OwnedCard(productId: 1, printing: "Holofoil", condition: "Near Mint", confidence: .manual)
+            context.insert(card)
+            context.insert(GradingEntry(submission: submission, card: card))
+        }
+
+        Allocation.allocate(submission)
+
+        let fees = submission.entries.map(\.allocatedFeeCents).sorted(by: >)
+        #expect(fees == [2_667, 2_667, 2_667])
+        #expect(fees.reduce(0, +) == submission.totalCostCents)
+    }
+
+    @Test @MainActor func gradingAllocationWithNoEntriesDoesNothing() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        defer { withExtendedLifetime(container) {} }
+        let submission = GradingSubmission(graderRaw: "cgc", gradingFeesCents: 999)
+        container.mainContext.insert(submission)
+        Allocation.allocate(submission)
+        #expect(submission.entries.isEmpty)
+    }
+
     /// A total he set at review comes out of the purchase total first, and the
     /// rest splits over the cards he did not price. This is the test that
     /// catches an allocator overwriting a price he typed.

@@ -18,6 +18,11 @@ struct InventoryView: View {
     @State private var showTagFilter = false
     @State private var showMetrics = false
     @State private var tagTarget: TagSheetTarget?
+    @State private var gradeTarget: TagSheetTarget?
+    @State private var sellTarget: TagSheetTarget?
+    @State private var compsTarget: TagSheetTarget?
+    @State private var fetcher = CompsFetcher()
+    @State private var compsMessage: String?
     @State private var isSelecting = false
     @State private var selection: Set<UUID> = []
     @State private var recentHits: [SearchHit] = []
@@ -84,8 +89,24 @@ struct InventoryView: View {
                         }
                     }
                     .disabled(selection.isEmpty)
+                    // Raw cards only. A slab is already graded.
+                    Button("Grade") { gradeTarget = TagSheetTarget(cards: selectedCards(rows)) }
+                        .disabled(selection.isEmpty || selectedCards(rows).contains { $0.certNumber != nil })
+                    Button("Sell") { sellTarget = TagSheetTarget(cards: selectedCards(rows)) }
+                        .disabled(selection.isEmpty || selectedCards(rows).contains { CardTagIndex.has(ReservedTag.sold, on: $0) })
+                    Menu {
+                        Button {
+                            compsTarget = TagSheetTarget(cards: selectedCards(rows))
+                        } label: {
+                            Label("Fetch comps from PPT", systemImage: "arrow.down.circle")
+                        }
+                        .disabled(!PPTKey.isSet)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .disabled(selection.isEmpty || fetcher.isRunning)
                     Spacer()
-                    Text("\(selection.count) selected")
+                    Text(fetcher.isRunning ? "comps \(fetcher.done)/\(fetcher.total)" : "\(selection.count) selected")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         // The bottom bar squeezes the middle item first, and
@@ -114,6 +135,34 @@ struct InventoryView: View {
                 model.invalidateHaystacks()
             }
         }
+        .sheet(item: $gradeTarget) { target in
+            SendToGraderSheet(cards: target.cards) {
+                model.invalidateHaystacks()
+                endSelection()
+            }
+        }
+        .sheet(item: $sellTarget) { target in
+            SellSheet(cards: target.cards, name: { model.hits[$0.productId]?.name ?? $0.ocrName ?? "" }) {
+                model.invalidateHaystacks()
+                endSelection()
+            }
+        }
+        // The count and the cost show before anything is spent. A run over
+        // three hundred cards is most of a day's credits.
+        .confirmationDialog(
+            compsTarget.map { "Fetch comps for \($0.cards.count) cards? About \(CompsFetcher.creditEstimate(for: $0.cards)) PPT credits." } ?? "",
+            isPresented: Binding(get: { compsTarget != nil }, set: { if !$0 { compsTarget = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Fetch") {
+                if let target = compsTarget { Task { await fetchComps(target.cards) } }
+            }
+        }
+        .alert("Comps", isPresented: Binding(get: { compsMessage != nil }, set: { if !$0 { compsMessage = nil } })) {
+            Button("OK") {}
+        } message: {
+            Text(compsMessage ?? "")
+        }
         // `ShellContentView` owns the hit and price caches, because a query
         // needs them even when this page never appeared.
         .task(id: catalog.database?.path) {
@@ -130,6 +179,26 @@ struct InventoryView: View {
             // the button.
             let env = ProcessInfo.processInfo.environment
             if env["CT_OPEN_METRICS"] == "1" { showMetrics = true }
+            // `CT_SLAB_NEWEST="psa|12345678|10"` stamps a cert and a grade on
+            // the newest card, because simctl cannot walk the grading sheets.
+            if let spec = env["CT_SLAB_NEWEST"], let newest = committed.first {
+                let parts = spec.split(separator: "|")
+                newest.graderRaw = String(parts.first ?? "psa")
+                newest.certNumber = parts.count > 1 ? String(parts[1]) : "00000000"
+                newest.gradeLabel = parts.count > 2 ? String(parts[2]) : nil
+                try? modelContext.save()
+            }
+            // `CT_PROJECT_NEWEST="psa|12000,4000,2500"` sends the newest card
+            // to that grader on paper and fills its top three comps, so a
+            // screenshot shows the projected range.
+            if let spec = env["CT_PROJECT_NEWEST"], let newest = committed.first {
+                let parts = spec.split(separator: "|")
+                let grader = String(parts.first ?? "psa")
+                let grades = grader == "cgc" ? GradedComps.cgcGrades : GradedComps.psaGrades
+                let cents = parts.count > 1 ? parts[1].split(separator: ",").compactMap { Int($0) } : []
+                for (grade, value) in zip(grades, cents) { newest.gradedCompCents[grade] = value }
+                CardTagEditor(context: modelContext).add(ReservedTag.atGrader(grader), to: [newest])
+            }
             // `CT_SELECT_ALL=1` enters selection with every row ticked, because
             // simctl cannot long press.
             if env["CT_SELECT_ALL"] == "1" {
@@ -309,6 +378,12 @@ struct InventoryView: View {
         }
     }
 
+    private func fetchComps(_ cards: [OwnedCard]) async {
+        let report = await fetcher.fetch(cards, context: modelContext, client: PPTClient(key: PPTKey.value))
+        compsMessage = report.summary
+        endSelection()
+    }
+
     private func loadRecents() async {
         guard let db = catalog.database else {
             recentHits = []
@@ -336,8 +411,9 @@ struct InventoryView: View {
         .buttonStyle(.plain)
     }
 
-    /// Two chips, and that is deliberate. Tags carry what the status chips
-    /// carried, and he narrows by label far more than by anything else.
+    /// Three chips, and that is deliberate. Tags carry what the status chips
+    /// carried, and he narrows by label far more than by anything else. Sold
+    /// gets its own chip because a sold card is hidden, not filtered.
     private var filterRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -348,6 +424,10 @@ struct InventoryView: View {
                     Chip(title: set.name, systemImage: "xmark", isSelected: true) { model.filter.groupId = nil }
                 } else {
                     Chip(title: "Set", systemImage: "square.stack", isSelected: false) { showSetPicker = true }
+                }
+                // Sold cards left inventory. This is the one door back to them.
+                Chip(title: "Sold", systemImage: model.filter.showSold ? "checkmark" : "bag", isSelected: model.filter.showSold) {
+                    model.filter.showSold.toggle()
                 }
                 if model.filter.isActive {
                     Button("Clear") { model.filter = InventoryFilter() }

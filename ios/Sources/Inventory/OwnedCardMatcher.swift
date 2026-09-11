@@ -47,6 +47,7 @@ enum OwnedCardMatcher {
         if let ocrNumber = card.ocrNumber { parts.append(ocrNumber) }
         if let cert = card.certNumber { parts.append(cert) }
         if let grader = card.graderRaw { parts.append(NameCleaner.clean(grader)) }
+        if let grade = card.gradeLabel { parts.append(NameCleaner.clean(grade)) }
         // The tag hook. A label he typed reaches the one search field here.
         parts.append(contentsOf: card.tags.map(NameCleaner.clean))
         return parts.joined(separator: " ").lowercased()

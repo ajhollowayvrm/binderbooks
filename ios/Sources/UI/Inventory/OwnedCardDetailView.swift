@@ -48,6 +48,7 @@ private struct OwnedCardDetailBody: View {
             identity
             tags
             basis
+            GradedCompsSection(card: card)
             source
             edits
             Section {
@@ -73,8 +74,8 @@ private struct OwnedCardDetailBody: View {
         Section {
             HStack(alignment: .top, spacing: 16) {
                 if let cert = card.certNumber {
-                    SlabBadge(imageUrl: hit?.imageUrl, grader: card.graderRaw, cert: cert)
-                        .frame(width: 110, height: 160)
+                    SlabBadge(imageUrl: hit?.imageUrl, grader: card.graderRaw, grade: card.gradeLabel, cert: cert)
+                        .frame(width: 110, height: 168)
                 } else {
                     ProductThumbnail(urlString: hit?.imageUrl?.replacingOccurrences(of: "_200w", with: "_400w"), isSealed: false)
                         .frame(width: 110, height: 154)
@@ -91,7 +92,8 @@ private struct OwnedCardDetailBody: View {
                         Text(card.matchConfidence.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
                     }
                     if let cert = card.certNumber {
-                        Text("\((card.graderRaw ?? "slab").uppercased()) cert \(cert)").font(.footnote)
+                        let grade = card.gradeLabel.map { " \($0)" } ?? ""
+                        Text("\((card.graderRaw ?? "slab").uppercased())\(grade) · cert \(cert)").font(.footnote)
                     }
                 }
             }
@@ -107,6 +109,18 @@ private struct OwnedCardDetailBody: View {
     private var basis: some View {
         Section("Value") {
             LabeledContent("Market", value: model.marketCents(for: card)?.asCurrency ?? "—")
+            // What it might come back worth, per grader, from the comps he
+            // entered. The grader it is out at is the one that matters now.
+            let atGrader = GradedComps.graderAtGrader(tags: card.tags)
+            ForEach(GradedComps.graders, id: \.self) { grader in
+                if let range = GradedComps.range(for: grader, in: card.effectiveCompCents) {
+                    LabeledContent("If \(grader.uppercased()) grades it") {
+                        Text(GradedComps.rangeText(range))
+                            .monospacedDigit()
+                            .fontWeight(atGrader == grader ? .semibold : .regular)
+                    }
+                }
+            }
             LabeledContent("Acquisition basis") {
                 HStack(spacing: 4) {
                     Text(card.acquisitionBasisCents.asCurrency).monospacedDigit()

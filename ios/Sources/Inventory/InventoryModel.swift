@@ -21,6 +21,24 @@ struct InventoryRow: Identifiable {
         guard !card.isBulk, card.totalBasisCents > 0, let market = marketCents else { return nil }
         return market - card.totalBasisCents
     }
+
+    /// The grader the card is out at, from its "at PSA" / "at CGC" label.
+    var graderAtGrader: String? { GradedComps.graderAtGrader(tags: card.tags) }
+
+    /// What the card might come back worth: lowest to highest of the comps he
+    /// entered for the grader it is at. Nil when it is home, or when he has
+    /// entered no comps for that grader.
+    var projectedRange: ClosedRange<Int>? {
+        guard let grader = graderAtGrader else { return nil }
+        return GradedComps.range(for: grader, in: card.effectiveCompCents)
+    }
+
+    /// The figure the row leads with. A card out at a grader leads with its
+    /// projection, because the raw market price is not what it will sell for.
+    var priceText: String {
+        if let range = projectedRange { return GradedComps.rangeText(range) }
+        return marketCents?.asCurrency ?? "—"
+    }
 }
 
 struct InventoryFilter: Equatable {
@@ -29,6 +47,8 @@ struct InventoryFilter: Equatable {
     var slabsOnly = false
     var hideBulk = false
     var personalOnly = false
+    /// A sold card left inventory. It stays out of the page unless he asks.
+    var showSold = false
     /// `TagKey` values, not display forms. A card matches when it holds any of
     /// them, which is what "binder 3" plus "for sale" means to him.
     var tagKeys: Set<String> = []
@@ -36,7 +56,7 @@ struct InventoryFilter: Equatable {
     /// True when a chip is on. The typed query is not part of this, because the
     /// search header owns the query and the Clear button must not wipe it.
     var isActive: Bool {
-        !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly || !tagKeys.isEmpty
+        !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly || showSold || !tagKeys.isEmpty
     }
 }
 
@@ -179,6 +199,7 @@ final class InventoryModel {
         if filter.slabsOnly, card.certNumber == nil { return false }
         if filter.hideBulk, card.isBulk { return false }
         if filter.personalOnly, !card.isPersonalCollection { return false }
+        if !filter.showSold, CardTagIndex.has(ReservedTag.sold, on: card) { return false }
         return true
     }
 }

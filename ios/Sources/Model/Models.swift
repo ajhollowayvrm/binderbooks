@@ -196,11 +196,25 @@ final class OwnedCard {
     /// A slab read by barcode. The grader's cert number.
     var certNumber: String?
     var graderRaw: String?
+    /// The grade as printed on the label: "10", "9.5", "Pristine 10". Nil
+    /// until the submission returns, or for a slab the barcode alone read.
+    var gradeLabel: String?
 
     /// What he believes the card sells for at each grade, in cents, keyed by
     /// the grade as printed: "10", "9.5", "9". He enters these by hand from
     /// Card Ladder, so they are expensive to recreate and must never be dropped.
     var gradedCompCents: [String: Int] = [:]
+
+    /// The same, as PPT last reported them. Kept apart from what he typed, so
+    /// a fetch never overwrites his number and a cleared field falls back to
+    /// PPT's. Empty when PPT had nothing or was never asked.
+    var fetchedCompCents: [String: Int] = [:]
+    var compsFetchedAt: Date?
+
+    /// What the app reads: his figures over PPT's.
+    var effectiveCompCents: [String: Int] {
+        fetchedCompCents.merging(gradedCompCents) { _, his in his }
+    }
 
     /// What the scanner read. Kept for review and for correcting the matcher.
     var ocrName: String?

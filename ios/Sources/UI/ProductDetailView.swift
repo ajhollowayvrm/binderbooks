@@ -8,6 +8,7 @@ struct ProductDetailView: View {
     @Environment(RecentlyViewed.self) private var recents
     @State private var detail: ProductDetail?
     @State private var errorMessage: String?
+    @State private var adding = false
 
     var body: some View {
         Group {
@@ -79,6 +80,14 @@ struct ProductDetailView: View {
                 .listRowSeparator(.hidden)
             }
 
+            Section {
+                Button {
+                    adding = true
+                } label: {
+                    Label("Add to inventory", systemImage: "plus.square.on.square")
+                }
+            }
+
             Section("Market price") {
                 if detail.prices.isEmpty {
                     Text("No TCGplayer price yet.")
@@ -121,5 +130,8 @@ struct ProductDetailView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .sheet(isPresented: $adding) {
+            AddToInventorySheet(detail: detail)
+        }
     }
 }

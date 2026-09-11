@@ -6,7 +6,11 @@ struct SaleDetailView: View {
     let saleID: UUID
 
     @Environment(InventoryModel.self) private var inventory
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
     @Query private var sales: [Sale]
+    @State private var confirmDelete = false
+    @State private var blockedMessage: String?
 
     init(saleID: UUID) {
         self.saleID = saleID
@@ -49,13 +53,24 @@ struct SaleDetailView: View {
                     }
                     ForEach(sale.lines.sorted { $0.describedAs < $1.describedAs }) { line in
                         row(for: line)
+                            .swipeActions(edge: .trailing) {
+                                if line.card != nil {
+                                    Button("Unsell", role: .destructive) { unsell(line) }
+                                }
+                            }
                     }
                 } header: {
                     Text(sale.lines.count == 1 ? "1 card" : "\(sale.lines.count) cards")
                 } footer: {
                     if sale.lines.contains(where: \.basisIncomplete) {
                         Text("A card with no cost is not counted in the gain. The revenue is real; what it cost was never recorded.")
+                    } else if sale.lines.contains(where: { $0.card != nil }) {
+                        Text("Swipe a card to put it back in inventory.")
                     }
+                }
+
+                Section {
+                    Button("Delete order", role: .destructive) { requestDelete(sale) }
                 }
             } else {
                 ContentUnavailableView("This order is gone", systemImage: "questionmark.folder")
@@ -63,6 +78,43 @@ struct SaleDetailView: View {
         }
         .navigationTitle("Order")
         .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("Delete this order?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { deleteSale() }
+        }
+        .alert("Cards are still on this order", isPresented: Binding(get: { blockedMessage != nil }, set: { if !$0 { blockedMessage = nil } })) {
+            Button("OK") {}
+        } message: {
+            Text(blockedMessage ?? "")
+        }
+    }
+
+    /// The line goes and the card is his again. The order keeps its money.
+    private func unsell(_ line: SaleLine) {
+        if let card = line.card {
+            CardTagEditor(context: modelContext).remove(ReservedTag.sold, from: [card])
+        }
+        modelContext.delete(line)
+        try? modelContext.save()
+    }
+
+    /// Blocked while a card in inventory points here. Deleting the order would
+    /// leave the card tagged sold with nothing to say what sold it.
+    private func requestDelete(_ sale: Sale) {
+        let linked = sale.lines.filter { $0.card != nil }.count
+        if linked > 0 {
+            blockedMessage = linked == 1
+                ? "1 card in inventory is on this order. Unsell it first."
+                : "\(linked) cards in inventory are on this order. Unsell them first."
+        } else {
+            confirmDelete = true
+        }
+    }
+
+    private func deleteSale() {
+        guard let sale else { return }
+        modelContext.delete(sale)
+        try? modelContext.save()
+        dismiss()
     }
 
     @ViewBuilder private func deduction(_ label: String, _ cents: Int) -> some View {
