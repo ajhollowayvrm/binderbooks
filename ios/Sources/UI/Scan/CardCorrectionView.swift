@@ -49,9 +49,35 @@ struct CardCorrectionView: View {
                     }
                 }
 
-                if card.candidateProductIds.count > 1 {
+                // The pattern printings. These share a name and a number and
+                // differ only in the foil stamped across them, so a row of text
+                // cannot ask the question — the art has to be big enough to see
+                // the pattern on. This is the one choice the scanner cannot make
+                // for him when the catalog has no reference image for a
+                // printing, which for most of them it does not.
+                if patternFamily.count > 1 {
+                    Section {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(alignment: .top, spacing: 12) {
+                                ForEach(patternFamily) { hit in
+                                    patternTile(hit)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    } header: {
+                        Text("Which printing")
+                    } footer: {
+                        Text("Same card, same number. Only the foil differs.")
+                    }
+                }
+
+                let others = card.candidateProductIds.filter { id in
+                    !patternFamily.contains { $0.productId == id }
+                }
+                if others.count > 1 || (others.count == 1 && patternFamily.isEmpty) {
                     Section("Candidates") {
-                        ForEach(card.candidateProductIds, id: \.self) { id in
+                        ForEach(others, id: \.self) { id in
                             if let hit = model.hits[id] {
                                 candidateRow(hit)
                             }
@@ -137,6 +163,55 @@ struct CardCorrectionView: View {
         case .likely: return "Likely"
         case .uncertain: return card.isIdentified ? "Uncertain, check it" : "Not matched"
         }
+    }
+
+    /// The printings of this one card: same set, same number, names that differ
+    /// only by a qualifier. Empty unless there are at least two, because one
+    /// printing is not a choice.
+    private var patternFamily: [SearchHit] {
+        let hits = card.candidateProductIds.compactMap { model.hits[$0] }
+        guard let anchor = model.hit(for: card) ?? hits.first else { return [] }
+        let family = hits.filter { CardMatcher.isVariantSibling($0, of: anchor) }
+        return family.count > 1 ? family : []
+    }
+
+    /// One printing, big enough to see the foil on. The qualifier is the label,
+    /// because "Snivy" three times over tells him nothing.
+    private func patternTile(_ hit: SearchHit) -> some View {
+        Button {
+            model.assign(card, to: hit)
+            dismiss()
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                ZStack(alignment: .topTrailing) {
+                    ProductThumbnail(urlString: hit.imageUrl, isSealed: false)
+                        .frame(width: 104, height: 145)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(
+                                    hit.productId == card.productId ? Color.accentColor : Color.clear,
+                                    lineWidth: 3
+                                )
+                        }
+                    if hit.productId == card.productId {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.white, Color.accentColor)
+                            .padding(4)
+                    }
+                }
+                Text(CardMatcher.qualifier(of: hit) ?? "Plain")
+                    .font(.caption)
+                    .lineLimit(2)
+                    .frame(width: 104, alignment: .leading)
+                if let price = hit.priceLabel {
+                    Text(price)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private func candidateRow(_ hit: SearchHit) -> some View {

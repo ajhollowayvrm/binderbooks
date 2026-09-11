@@ -323,6 +323,18 @@ import Testing
         #expect(Set(result.candidates.map(\.productId)) == [7, 16])
     }
 
+    /// The picker labels each printing by its qualifier, because "Snivy" three
+    /// times over tells him nothing about which one he is holding.
+    @Test func theQualifierNamesThePrinting() throws {
+        let hits = try Fixture.make().read { db in
+            try CatalogSearch.fetchHits(db, ids: [13, 14, 15], filter: SearchFilter())
+        }
+        let byId = Dictionary(uniqueKeysWithValues: hits.map { ($0.productId, $0) })
+        #expect(CardMatcher.qualifier(of: byId[13]!) == nil)
+        #expect(CardMatcher.qualifier(of: byId[14]!) == "Poke Ball Pattern")
+        #expect(CardMatcher.qualifier(of: byId[15]!) == "Master Ball Pattern")
+    }
+
     // MARK: - Artwork
 
     /// The fix for his report. The camera sees the Poké Ball pattern stamped

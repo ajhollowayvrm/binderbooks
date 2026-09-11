@@ -290,6 +290,17 @@ struct CardMatcher: Sendable {
         return NameCleaner.clean(String(hit.name[hit.name.startIndex..<open]))
     }
 
+    /// The parenthetical part of a product's name, which is what distinguishes
+    /// one printing of a card from another: "Poke Ball Pattern". Nil for the
+    /// plain card, whose name carries no qualifier at all.
+    static func qualifier(of hit: SearchHit) -> String? {
+        guard let open = hit.name.firstIndex(of: "("),
+              let close = hit.name[open...].firstIndex(of: ")")
+        else { return nil }
+        let inside = hit.name[hit.name.index(after: open)..<close].trimmingCharacters(in: .whitespaces)
+        return inside.isEmpty ? nil : inside
+    }
+
     /// True when two products are the same card printed twice in one set: the
     /// same set, the same number, and a name that is the other's name plus a
     /// qualifier. "Snivy" and "Snivy (Poké Ball Pattern)" are such a pair.
