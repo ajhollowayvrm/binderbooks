@@ -62,6 +62,30 @@ STATUS_MAP = {
     "Kept": ("owned", None),
 }
 
+# ios/Sources/Inventory/CardTags.swift: sending a card to a named grader
+# writes that grader's own label, so the app can show a value range while a
+# card is out ("at PSA" / "at CGC"). An unknown grader keeps the old generic
+# label, which reads but earns no range.
+ATGRADER_TAG = {"psa": "at PSA", "cgc": "at CGC"}
+
+
+def parse_grade(grade: str) -> tuple[str | None, str | None]:
+    """"CGC 10 Pristine" -> ("cgc", "Pristine 10"). "PSA 9" -> ("psa", "9").
+
+    The label is reordered to match `OwnedCard.gradeLabel`'s own convention
+    (the word before the number, "Pristine 10") — BinderBooks wrote the
+    number first, and the two disagreeing would read as two different grades
+    to anything that parses the number back out of the string.
+    """
+    if grade == "Raw":
+        return None, None
+    tokens = grade.split()
+    grader = tokens[0].lower()
+    rest = [t for t in tokens[1:] if t.lower() != "pristine"]
+    label = "Pristine " + " ".join(rest) if len(rest) != len(tokens) - 1 else " ".join(rest)
+    return grader, (label or None)
+
+
 CHANNEL_MAP = {
     "TCGplayer": "tcgplayer",
     "eBay": "ebay",
@@ -408,13 +432,26 @@ class Converter:
             tags = [tag] if tag else []
 
             grade = row.get("grade") or "Raw"
-            # A card out for grading names its grader while it is still raw, so
-            # read the field first and fall back to the grade ("CGC 10" -> CGC).
-            grader = row.get("grader") or (grade.split()[0] if grade != "Raw" else None)
+            grader_from_grade, grade_label = parse_grade(grade)
+            # A card out for grading names its grader while still raw, so read
+            # that field first and fall back to the one the grade string carries.
+            explicit_grader = (row.get("grader") or "").lower() or None
+            grader = explicit_grader or grader_from_grade
             if grade != "Raw" and "graded" not in tags:
                 tags.append("graded")
+            if tag == "at grader" and grader in ATGRADER_TAG:
+                tags[tags.index(tag)] = ATGRADER_TAG[grader]
             if row.get("seed"):
                 tags.append("seed")
+
+            # Speculative grades for a card already at a named grader carry no
+            # grader of their own ("8", "9"), so a range for "if PSA grades
+            # it" would match nothing. Prefixing them is safe only here: a
+            # card with no destination grader keeps bare keys, which is the
+            # documented behavior for a figure that names no company.
+            comps = row.get("gradeEst") or {}
+            if grader in ATGRADER_TAG and comps:
+                comps = {f"{grader.upper()} {k}": v for k, v in comps.items()}
 
             rip = rip_of_hit.get(hit_id or "")
 
@@ -442,11 +479,12 @@ class Converter:
                     "matchConfidenceRaw": confidence,
                     "certNumber": None,
                     "graderRaw": grader,
+                    "gradeLabel": grade_label,
                     "ocrName": None,
                     "ocrNumber": None,
                     "candidateProductIds": [],
                     "scannedAt": when(row.get("date")),
-                    "gradedCompCents": {k: cents(v) for k, v in (row.get("gradeEst") or {}).items()},
+                    "gradedCompCents": {k: cents(v) for k, v in comps.items()},
                     "sourceRef": source_id,
                     "tags": tags,
                 }

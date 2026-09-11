@@ -278,7 +278,10 @@ private func seed(_ context: ModelContext) throws {
         try CollectionExport.apply(file, to: store.mainContext, mode: .replace)
         let cards = try store.mainContext.fetch(FetchDescriptor<OwnedCard>())
 
-        let atGrader = cards.filter { $0.tags.contains("at grader") }
+        // A card at a named grader carries that grader's own label, so its
+        // price can show as a range. Every at-grader row in this ledger names
+        // PSA or CGC; none falls back to the generic "at grader" label.
+        let atGrader = cards.filter { $0.tags.contains("at PSA") || $0.tags.contains("at CGC") || $0.tags.contains("at grader") }
         #expect(atGrader.count == 40)
         #expect(atGrader.allSatisfy { $0.graderRaw != nil })
         // Nine carry no per-card fee: the outstanding May 2026 PSA submission
@@ -291,6 +294,17 @@ private func seed(_ context: ModelContext) throws {
 
         let withComps = cards.filter { !$0.gradedCompCents.isEmpty }
         #expect(withComps.count == 33)
+        // A card at a named grader gets a real range immediately, because its
+        // speculative grades now carry that grader's own prefix.
+        let projectable = cards.filter { GradedComps.graderAtGrader(tags: $0.tags) != nil && GradedComps.range(for: GradedComps.graderAtGrader(tags: $0.tags)!, in: $0.gradedCompCents) != nil }
+        #expect(projectable.count == 33)
+
+        // A card that came back graded carries the grade it was returned at,
+        // reordered to the app's own "word before number" convention.
+        let returned = cards.filter { $0.tags.contains("graded") }
+        #expect(returned.count == 35)
+        #expect(returned.allSatisfy { $0.gradeLabel != nil })
+        #expect(returned.filter { $0.gradeLabel == "Pristine 10" }.count == 14)
     }
 
     @Test @MainActor func kePtIsADefaultAndNeverMeansPersonalCollection() throws {

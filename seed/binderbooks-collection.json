@@ -8,6 +8,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -39,6 +40,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -68,6 +70,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -99,8 +102,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "05A270C7-5896-58FB-BCEF-A755AF1DD9F5",
       "isBulk": false,
@@ -130,6 +134,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -159,8 +164,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "0C6B0FCE-44A4-5674-865E-D009AA9A2C46",
       "isBulk": false,
@@ -190,6 +196,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -219,6 +226,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -250,6 +258,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -279,6 +288,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -310,6 +320,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -341,6 +352,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -372,6 +384,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -403,6 +416,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -434,8 +448,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "12195E00-8E41-5030-81EB-7B23C13F7EBC",
       "isBulk": false,
@@ -466,6 +481,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -495,6 +511,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -526,6 +543,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -555,6 +573,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -586,6 +605,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -617,6 +637,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -648,6 +669,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -677,6 +699,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -706,6 +729,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -737,6 +761,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -768,6 +793,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -797,8 +823,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "1FC04DE4-113D-5371-B192-C431749ED913",
       "isBulk": false,
@@ -828,6 +855,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -859,10 +887,11 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 75000
+        "PSA 10": 75000
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 16474,
       "id": "2015D94F-A4AC-5864-9862-22D5BCA87E9C",
       "isBulk": false,
@@ -881,7 +910,7 @@
       "sourceRef": "zy1640fy",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -892,6 +921,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -923,6 +953,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -952,14 +983,15 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 32500,
-        "6": 4999,
-        "7": 4675,
-        "8": 6497,
-        "9": 6962
+        "PSA 10": 32500,
+        "PSA 6": 4999,
+        "PSA 7": 4675,
+        "PSA 8": 6497,
+        "PSA 9": 6962
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 8966,
       "id": "2A683F64-521A-5873-A5F8-85FC3F4057D4",
       "isBulk": false,
@@ -978,7 +1010,7 @@
       "sourceRef": "gqmenrsr",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -989,6 +1021,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1020,14 +1053,15 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 26037,
-        "6": 2712,
-        "7": 6050,
-        "8": 6000,
-        "9": 9250
+        "PSA 10": 26037,
+        "PSA 6": 2712,
+        "PSA 7": 6050,
+        "PSA 8": 6000,
+        "PSA 9": 9250
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 8629,
       "id": "2BFBC31C-B398-5B44-A912-63CDA8884609",
       "isBulk": false,
@@ -1046,7 +1080,7 @@
       "sourceRef": "drli3wr0",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -1057,8 +1091,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "2C61F7BA-4AFA-5FBF-A9C9-02688EA01074",
       "isBulk": false,
@@ -1089,8 +1124,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 2268,
       "id": "2CE6847E-D0F7-50D0-AD9F-EA8B461F57B2",
       "isBulk": false,
@@ -1109,7 +1145,7 @@
       "sourceRef": "o8r2yf8l",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -1120,8 +1156,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "309C6FB6-8CDE-5893-8932-E32797BE08AF",
       "isBulk": false,
@@ -1151,6 +1188,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1182,6 +1220,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1211,6 +1250,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1242,6 +1282,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1271,6 +1312,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1302,6 +1344,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1333,6 +1376,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1364,6 +1408,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1395,8 +1440,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 3025,
       "id": "3B074889-A183-51B7-8EE4-AC7BD994A15F",
       "isBulk": false,
@@ -1415,7 +1461,7 @@
       "sourceRef": "p5dbjh5r",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -1426,6 +1472,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1455,6 +1502,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1486,12 +1534,13 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 131823,
-        "8": 5000,
-        "9": 8250
+        "PSA 10": 131823,
+        "PSA 8": 5000,
+        "PSA 9": 8250
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 8966,
       "id": "3BA6D0B2-3166-50BE-8ECB-A06A94473888",
       "isBulk": false,
@@ -1510,7 +1559,7 @@
       "sourceRef": "ntm0psww",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -1521,6 +1570,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1552,6 +1602,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1583,13 +1634,14 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 3300,
-        "8.5": 1472,
-        "9": 950,
-        "9.5": 1600
+        "CGC 10": 3300,
+        "CGC 8.5": 1472,
+        "CGC 9": 950,
+        "CGC 9.5": 1600
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 3025,
       "id": "3CBC9FEB-B57D-564C-907D-6334761B5BD4",
       "isBulk": false,
@@ -1608,7 +1660,7 @@
       "sourceRef": "t0tkcx7d",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -1619,6 +1671,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1650,6 +1703,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1681,6 +1735,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1712,10 +1767,11 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 7498
+        "CGC 10": 7498
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 3025,
       "id": "419E038A-7E8B-5B51-AF00-4DF807BD2316",
       "isBulk": false,
@@ -1734,7 +1790,7 @@
       "sourceRef": "h7wf29tn",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -1745,6 +1801,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1776,8 +1833,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 2268,
       "id": "42437FF0-0DCC-5ADD-9B88-273D059AC1CE",
       "isBulk": false,
@@ -1796,7 +1854,7 @@
       "sourceRef": "1s7h6jle",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -1807,6 +1865,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1838,6 +1897,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1869,6 +1929,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1900,6 +1961,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1931,6 +1993,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -1962,8 +2025,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "47125F43-704C-5BBA-9FA6-0C5DF631800C",
       "isBulk": false,
@@ -1994,6 +2058,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2025,6 +2090,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2056,6 +2122,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2085,6 +2152,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2114,6 +2182,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2143,6 +2212,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2174,6 +2244,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2205,14 +2276,15 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 148750,
-        "6": 35500,
-        "7": 35971,
-        "8": 33350,
-        "9": 39500
+        "PSA 10": 148750,
+        "PSA 6": 35500,
+        "PSA 7": 35971,
+        "PSA 8": 33350,
+        "PSA 9": 39500
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 8629,
       "id": "4EE2E1A7-DB81-5230-81EA-612BF1D465C5",
       "isBulk": false,
@@ -2231,7 +2303,7 @@
       "sourceRef": "qmd85692",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -2242,14 +2314,15 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 17262,
-        "6": 2150,
-        "7": 3250,
-        "8": 4550,
-        "9": 5000
+        "PSA 10": 17262,
+        "PSA 6": 2150,
+        "PSA 7": 3250,
+        "PSA 8": 4550,
+        "PSA 9": 5000
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 0,
       "id": "4FEE1CB5-DC3E-55DC-AF4A-CE2633F9B651",
       "isBulk": false,
@@ -2268,7 +2341,7 @@
       "sourceRef": "7edmbbj7",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -2279,6 +2352,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2308,13 +2382,14 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 30027,
-        "6": 6400,
-        "8": 6000,
-        "9": 8700
+        "PSA 10": 30027,
+        "PSA 6": 6400,
+        "PSA 8": 6000,
+        "PSA 9": 8700
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 0,
       "id": "518C3DA3-848E-51CA-9089-3D74DF855F92",
       "isBulk": false,
@@ -2333,7 +2408,7 @@
       "sourceRef": "q4a8d9gj",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -2344,6 +2419,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2373,6 +2449,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2402,6 +2479,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2433,6 +2511,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2464,6 +2543,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2493,8 +2573,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "57C215FF-D6B8-50B9-BB8C-ADEA17BF32B5",
       "isBulk": false,
@@ -2524,10 +2605,11 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 9998
+        "CGC 10": 9998
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 3025,
       "id": "5ADE0D6D-35C5-527D-8A91-397F6710F5EF",
       "isBulk": false,
@@ -2546,7 +2628,7 @@
       "sourceRef": "ex3xmjpi",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -2557,8 +2639,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 2268,
       "id": "5AF91738-0042-5C49-BDC2-9A73172771DA",
       "isBulk": false,
@@ -2577,7 +2660,7 @@
       "sourceRef": "wqavwutv",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -2588,6 +2671,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2617,8 +2701,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "5B964610-2CCB-5F0C-A43A-E7FD85CE70FD",
       "isBulk": false,
@@ -2649,6 +2734,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2680,6 +2766,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2709,6 +2796,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2740,13 +2828,14 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 8000,
-        "7": 1050,
-        "8": 1625,
-        "9": 1325
+        "PSA 10": 8000,
+        "PSA 7": 1050,
+        "PSA 8": 1625,
+        "PSA 9": 1325
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 0,
       "id": "5F473BDF-8E24-5D59-9925-C3A60BFE61E8",
       "isBulk": false,
@@ -2765,7 +2854,7 @@
       "sourceRef": "zuq0wjny",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -2776,8 +2865,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "5FFDBB45-C78A-5646-BBD8-6DFE11A1F4BF",
       "isBulk": false,
@@ -2807,6 +2897,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2838,6 +2929,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2869,6 +2961,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2900,6 +2993,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2931,6 +3025,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2962,6 +3057,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -2991,6 +3087,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3020,8 +3117,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "6642E520-A231-503F-BE74-974DAF0A8070",
       "isBulk": false,
@@ -3051,6 +3149,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3082,8 +3181,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "6716F100-64BC-562B-9355-4312D16F8717",
       "isBulk": false,
@@ -3113,6 +3213,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3144,8 +3245,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "69961BEF-262B-522D-A373-FEB25C55B6D5",
       "isBulk": false,
@@ -3176,6 +3278,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3207,6 +3310,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3238,6 +3342,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3269,6 +3374,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3300,6 +3406,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3331,6 +3438,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3362,8 +3470,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "6DE96663-5EBD-5148-A72B-9DEC9C76E8CD",
       "isBulk": false,
@@ -3393,6 +3502,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3424,11 +3534,12 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "8": 5100,
-        "9": 4250
+        "PSA 8": 5100,
+        "PSA 9": 4250
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 16474,
       "id": "6F02F1D8-066E-5BF5-853E-EAA7B604CA68",
       "isBulk": false,
@@ -3447,7 +3558,7 @@
       "sourceRef": "cxnegluw",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -3458,6 +3569,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3489,6 +3601,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3518,13 +3631,14 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 74238,
-        "7": 20999,
-        "8": 20381,
-        "9": 24000
+        "PSA 10": 74238,
+        "PSA 7": 20999,
+        "PSA 8": 20381,
+        "PSA 9": 24000
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 0,
       "id": "6FBDE2BB-79FF-58E0-9378-69CEBE000522",
       "isBulk": false,
@@ -3543,7 +3657,7 @@
       "sourceRef": "363n39qd",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -3554,6 +3668,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3585,14 +3700,15 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 30800,
-        "6": 1900,
-        "7": 2600,
-        "8": 2749,
-        "9": 3399
+        "PSA 10": 30800,
+        "PSA 6": 1900,
+        "PSA 7": 2600,
+        "PSA 8": 2749,
+        "PSA 9": 3399
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 0,
       "id": "71642058-7FEC-5509-9A88-21679AB39B78",
       "isBulk": false,
@@ -3611,7 +3727,7 @@
       "sourceRef": "8sctcff3",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -3622,6 +3738,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3653,8 +3770,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "73FC79D9-551E-506F-9B3C-E1A5AD4336C3",
       "isBulk": false,
@@ -3684,6 +3802,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3715,11 +3834,12 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 5676,
-        "9": 2400
+        "CGC 10": 5676,
+        "CGC 9": 2400
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 2268,
       "id": "7639B253-E106-537E-BDE9-496DB2A5EBE5",
       "isBulk": false,
@@ -3738,7 +3858,7 @@
       "sourceRef": "8sc6g76i",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -3749,6 +3869,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3780,6 +3901,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3811,6 +3933,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3842,6 +3965,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3873,6 +3997,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -3904,11 +4029,12 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 3748,
-        "9.5": 1550
+        "CGC 10": 3748,
+        "CGC 9.5": 1550
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 3300,
       "id": "7E3F89CD-0AA7-54DA-982A-34E244B06918",
       "isBulk": false,
@@ -3927,7 +4053,7 @@
       "sourceRef": "a0i2oagt",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -3938,8 +4064,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "7F0C6CD6-C2E1-55F8-9667-B76CB7BF1CC5",
       "isBulk": false,
@@ -3970,14 +4097,15 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 17500,
-        "6": 2575,
-        "7": 3399,
-        "8": 3051,
-        "9": 4455
+        "PSA 10": 17500,
+        "PSA 6": 2575,
+        "PSA 7": 3399,
+        "PSA 8": 3051,
+        "PSA 9": 4455
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 8629,
       "id": "7FC7DB61-6853-56E4-8430-C9DD3D5550FB",
       "isBulk": false,
@@ -3996,7 +4124,7 @@
       "sourceRef": "9g3wmrov",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -4007,6 +4135,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4038,12 +4167,13 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 3998,
-        "9": 2200,
-        "9.5": 3400
+        "CGC 10": 3998,
+        "CGC 9": 2200,
+        "CGC 9.5": 3400
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 3300,
       "id": "8102D06C-843A-5C9B-9131-19956A4A92B3",
       "isBulk": false,
@@ -4062,7 +4192,7 @@
       "sourceRef": "vbquirh7",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -4073,6 +4203,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4104,6 +4235,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4133,6 +4265,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4164,6 +4297,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4193,6 +4327,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4224,6 +4359,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4255,6 +4391,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4284,6 +4421,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4313,6 +4451,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4342,6 +4481,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4373,8 +4513,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "8A6D9E2E-A479-5128-B6CF-73BC566842C6",
       "isBulk": false,
@@ -4405,6 +4546,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4434,6 +4576,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4463,6 +4606,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4492,12 +4636,13 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 6200,
-        "8": 2039,
-        "9": 975
+        "PSA 10": 6200,
+        "PSA 8": 2039,
+        "PSA 9": 975
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 8965,
       "id": "8DC29A69-596A-5148-AC6B-9364443CB203",
       "isBulk": false,
@@ -4516,7 +4661,7 @@
       "sourceRef": "tvrc9593",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -4527,13 +4672,14 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 30027,
-        "6": 6400,
-        "8": 6000,
-        "9": 8700
+        "PSA 10": 30027,
+        "PSA 6": 6400,
+        "PSA 8": 6000,
+        "PSA 9": 8700
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 0,
       "id": "8DC57121-602E-517D-A6FC-1169DF076AA9",
       "isBulk": false,
@@ -4552,7 +4698,7 @@
       "sourceRef": "vo9krtzk",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -4563,6 +4709,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4594,6 +4741,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4625,8 +4773,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 2268,
       "id": "929A5EB8-A6D0-5D48-BFEF-4C56C1B3787F",
       "isBulk": false,
@@ -4645,7 +4794,7 @@
       "sourceRef": "x0niqm8j",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -4656,8 +4805,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "9333097B-26BF-5779-8682-24F9111B0969",
       "isBulk": false,
@@ -4687,6 +4837,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4718,6 +4869,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4749,6 +4901,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4778,6 +4931,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4809,10 +4963,11 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 4950
+        "CGC 10": 4950
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 3300,
       "id": "98D2CAA4-38E9-55AD-9110-92FE80833769",
       "isBulk": false,
@@ -4831,7 +4986,7 @@
       "sourceRef": "glvhe9ru",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -4842,6 +4997,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4873,6 +5029,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4904,6 +5061,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4933,6 +5091,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4964,6 +5123,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -4995,13 +5155,14 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 30925,
-        "7": 11325,
-        "8": 11050,
-        "9": 12800
+        "PSA 10": 30925,
+        "PSA 7": 11325,
+        "PSA 8": 11050,
+        "PSA 9": 12800
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 0,
       "id": "9C0DA3CD-6199-5756-9437-1F2D83F768BA",
       "isBulk": false,
@@ -5020,7 +5181,7 @@
       "sourceRef": "gy21lg8q",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -5031,8 +5192,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "9E5F0FBC-5F95-5060-B55B-ACFC16C05B93",
       "isBulk": false,
@@ -5062,6 +5224,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5091,13 +5254,14 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 12200,
-        "7": 9700,
-        "8": 9728,
-        "9": 12500
+        "PSA 10": 12200,
+        "PSA 7": 9700,
+        "PSA 8": 9728,
+        "PSA 9": 12500
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 8629,
       "id": "A019CF22-9C60-525C-8FD5-CE09A385F090",
       "isBulk": false,
@@ -5116,7 +5280,7 @@
       "sourceRef": "twgz56jc",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -5127,6 +5291,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5156,8 +5321,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "A1E2461F-B231-501F-93BE-85CB899C3117",
       "isBulk": false,
@@ -5188,6 +5354,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5219,6 +5386,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5250,6 +5418,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5281,6 +5450,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5310,6 +5480,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5341,6 +5512,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5372,14 +5544,15 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 3000,
-        "8": 892,
-        "8.5": 750,
-        "9": 1088,
-        "9.5": 1615
+        "CGC 10": 3000,
+        "CGC 8": 892,
+        "CGC 8.5": 750,
+        "CGC 9": 1088,
+        "CGC 9.5": 1615
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 2268,
       "id": "A7444406-E119-54FD-B0B9-7E42E94170EB",
       "isBulk": false,
@@ -5398,7 +5571,7 @@
       "sourceRef": "zg4f3cji",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -5409,6 +5582,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5440,6 +5614,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5471,6 +5646,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5502,6 +5678,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5533,6 +5710,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5562,8 +5740,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "B238FF71-6434-53BE-9737-BA95AE7F8502",
       "isBulk": false,
@@ -5593,6 +5772,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5624,6 +5804,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5655,8 +5836,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "B6A9AD31-F89C-5E49-ACC1-DFD3A321F743",
       "isBulk": false,
@@ -5686,8 +5868,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "B70D5FBF-4238-5E2A-899B-435E21F186DD",
       "isBulk": false,
@@ -5717,6 +5900,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5748,6 +5932,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5779,10 +5964,11 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 9998
+        "CGC 10": 9998
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 3025,
       "id": "BA88D3BF-9BD6-5F86-9B09-CA6AEA020E69",
       "isBulk": false,
@@ -5801,7 +5987,7 @@
       "sourceRef": "3w3odn3s",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -5812,6 +5998,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5843,6 +6030,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5874,8 +6062,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "BEBD978B-611C-5A88-96E5-ACB14EB5E039",
       "isBulk": false,
@@ -5906,6 +6095,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5935,6 +6125,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5966,6 +6157,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -5997,6 +6189,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6028,6 +6221,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6057,6 +6251,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6086,14 +6281,15 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 3960,
-        "8": 1487,
-        "8.5": 500,
-        "9": 1275,
-        "9.5": 1602
+        "CGC 10": 3960,
+        "CGC 8": 1487,
+        "CGC 8.5": 500,
+        "CGC 9": 1275,
+        "CGC 9.5": 1602
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 2269,
       "id": "C4915CFF-238B-5218-82A6-0D4AD99F603D",
       "isBulk": false,
@@ -6112,7 +6308,7 @@
       "sourceRef": "scq8stbg",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -6123,6 +6319,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6154,6 +6351,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6185,6 +6383,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6214,6 +6413,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6245,6 +6445,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6276,6 +6477,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6307,6 +6509,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6336,6 +6539,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6367,6 +6571,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6398,6 +6603,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6427,6 +6633,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6458,8 +6665,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "CE6A16D1-B1F4-5F2A-9DB2-BE91AAE22564",
       "isBulk": false,
@@ -6489,6 +6697,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6520,6 +6729,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6551,6 +6761,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6582,8 +6793,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "D1D0F858-2137-5568-8A7F-B5D90E03714E",
       "isBulk": false,
@@ -6613,6 +6825,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6644,10 +6857,11 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 13998
+        "CGC 10": 13998
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 2269,
       "id": "D462AC3F-DD85-5F0D-8647-6B5A31FCF8F2",
       "isBulk": false,
@@ -6666,7 +6880,7 @@
       "sourceRef": "a1esc93s",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -6677,6 +6891,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6708,6 +6923,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6739,10 +6955,11 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 9998
+        "CGC 10": 9998
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 2268,
       "id": "D7CC7089-16A4-5FA1-A879-0E1045FA5106",
       "isBulk": false,
@@ -6761,7 +6978,7 @@
       "sourceRef": "slim86tf",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -6772,6 +6989,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6803,6 +7021,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6834,8 +7053,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "DA7CF79B-B170-5C22-853E-7725CBEDAE52",
       "isBulk": false,
@@ -6865,6 +7085,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6896,14 +7117,15 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 26037,
-        "6": 2712,
-        "7": 6050,
-        "8": 6000,
-        "9": 9250
+        "PSA 10": 26037,
+        "PSA 6": 2712,
+        "PSA 7": 6050,
+        "PSA 8": 6000,
+        "PSA 9": 9250
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 8629,
       "id": "DB5CB4F4-0EF7-5ED0-9CC0-A91705CC6DB6",
       "isBulk": false,
@@ -6922,7 +7144,7 @@
       "sourceRef": "82lxkuq1",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -6933,6 +7155,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6962,6 +7185,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -6993,6 +7217,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7024,6 +7249,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7055,6 +7281,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7084,8 +7311,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "DF26642D-9F48-5959-BD87-D4E2ED823A67",
       "isBulk": false,
@@ -7115,6 +7343,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7146,6 +7375,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7177,6 +7407,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7206,6 +7437,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7237,6 +7469,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7268,6 +7501,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7299,6 +7533,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7328,13 +7563,14 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 10553,
-        "6": 5000,
-        "8": 1632,
-        "9": 2699
+        "PSA 10": 10553,
+        "PSA 6": 5000,
+        "PSA 8": 1632,
+        "PSA 9": 2699
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 0,
       "id": "E29AE358-9EE5-5462-B944-556D87627701",
       "isBulk": false,
@@ -7353,7 +7589,7 @@
       "sourceRef": "m9xoh1vg",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -7364,6 +7600,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7393,8 +7630,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "E2D84FD9-6350-5ED4-B1AF-F16CE44EA9B1",
       "isBulk": false,
@@ -7425,8 +7663,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "9",
       "gradedCompCents": {},
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 0,
       "id": "E34E505F-D004-5874-980A-B4ADAA83352E",
       "isBulk": false,
@@ -7456,10 +7695,11 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 8600
+        "CGC 10": 8600
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 3025,
       "id": "E36A4A5F-ED24-51FC-A833-C1946F2FD3E7",
       "isBulk": false,
@@ -7478,7 +7718,7 @@
       "sourceRef": "9hvp4pct",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -7489,6 +7729,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7520,6 +7761,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7551,6 +7793,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7580,8 +7823,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "E52C38D3-38E1-5AA4-AD50-D5124D7578C1",
       "isBulk": false,
@@ -7611,6 +7855,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7640,6 +7885,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7669,6 +7915,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7700,6 +7947,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7731,8 +7979,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "EA8FB116-A988-5113-B654-D3454402427F",
       "isBulk": false,
@@ -7762,6 +8011,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7793,8 +8043,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "Pristine 10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "EC3A7E68-11AB-56E1-A587-8E5A89264504",
       "isBulk": false,
@@ -7824,6 +8075,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7855,6 +8107,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7886,6 +8139,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -7917,8 +8171,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 2268,
       "id": "ECE9B35F-1A96-5661-AA1C-B89952AA2E41",
       "isBulk": false,
@@ -7937,7 +8192,7 @@
       "sourceRef": "9ldh4vai",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -7948,8 +8203,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 7266,
       "id": "ED2F7192-2AF1-5F47-B171-A4E2F35F6D10",
       "isBulk": false,
@@ -7968,7 +8224,7 @@
       "sourceRef": "0iu0v921",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -7979,6 +8235,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8008,6 +8265,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8039,6 +8297,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8070,6 +8329,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8101,10 +8361,11 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 11899
+        "CGC 10": 11899
       },
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 2268,
       "id": "F01EA264-9FD3-5377-B031-C01D68CF83CB",
       "isBulk": false,
@@ -8123,7 +8384,7 @@
       "sourceRef": "12no8hh9",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at CGC"
       ]
     },
     {
@@ -8134,6 +8395,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8165,6 +8427,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8194,6 +8457,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8225,6 +8489,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8254,6 +8519,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8285,8 +8551,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "9",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "F725F35C-642F-575F-9D48-D15740734204",
       "isBulk": false,
@@ -8317,6 +8584,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8348,6 +8616,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8379,6 +8648,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8410,14 +8680,15 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {
-        "10": 10727,
-        "6": 1535,
-        "7": 1100,
-        "8": 1458,
-        "9": 2423
+        "PSA 10": 10727,
+        "PSA 6": 1535,
+        "PSA 7": 1100,
+        "PSA 8": 1458,
+        "PSA 9": 2423
       },
-      "graderRaw": "PSA",
+      "graderRaw": "psa",
       "gradingBasisCents": 0,
       "id": "F984A889-F25C-59C7-AD75-193EB4F2CF11",
       "isBulk": false,
@@ -8436,7 +8707,7 @@
       "sourceRef": "lkpyezfs",
       "statusRaw": "atGrader",
       "tags": [
-        "at grader"
+        "at PSA"
       ]
     },
     {
@@ -8447,6 +8718,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8478,6 +8750,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8509,6 +8782,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8540,8 +8814,9 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": "10",
       "gradedCompCents": {},
-      "graderRaw": "CGC",
+      "graderRaw": "cgc",
       "gradingBasisCents": 0,
       "id": "FC96A6FA-BC0A-564F-B080-9DD23A1A1F7B",
       "isBulk": false,
@@ -8571,6 +8846,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8602,6 +8878,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8633,6 +8910,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
@@ -8664,6 +8942,7 @@
       "candidateProductIds": [],
       "certNumber": null,
       "condition": "Near Mint",
+      "gradeLabel": null,
       "gradedCompCents": {},
       "graderRaw": null,
       "gradingBasisCents": 0,
