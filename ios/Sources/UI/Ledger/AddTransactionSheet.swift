@@ -1,7 +1,7 @@
 import SwiftData
 import SwiftUI
 
-/// Record money by hand: a purchase, an order, or a grading charge.
+/// Record money by hand: a purchase, an order, a grading charge, or an expense.
 ///
 /// This writes the money and nothing else. An order recorded here carries no
 /// cards, so it reads "gain not known" and it does not mark anything sold —
@@ -12,9 +12,13 @@ struct AddTransactionSheet: View {
         case purchase = "Purchase"
         case sale = "Order"
         case grading = "Grading"
+        case expense = "Expense"
 
         var id: String { rawValue }
         var isMoneyIn: Bool { self == .sale }
+        /// An expense is one amount. Nothing rides on top of it and nothing
+        /// comes off it, so the three extra fields would only be empty rows.
+        var hasExtras: Bool { self != .expense }
     }
 
     var onAdded: (LedgerEntry.Kind) -> Void
@@ -25,6 +29,7 @@ struct AddTransactionSheet: View {
     @State private var kind: Kind = .purchase
     @State private var date = Date()
     @State private var who = ""
+    @State private var category = ""
     @State private var note = ""
     @State private var amountText = ""
     @State private var feesText = ""
@@ -48,6 +53,7 @@ struct AddTransactionSheet: View {
         case .purchase: return amountCents + shippingCents + taxCents + feesCents
         case .grading: return amountCents + shippingCents
         case .sale: return amountCents - feesCents - shippingCents - taxCents
+        case .expense: return amountCents
         }
     }
 
@@ -68,17 +74,32 @@ struct AddTransactionSheet: View {
                     money(amountLabel, $amountText)
                 }
 
-                Section(extrasLabel) {
-                    money("Fees", $feesText)
-                    money(kind == .grading ? "Shipping both ways" : "Shipping", $shippingText)
-                    if kind != .grading { money("Sales tax", $taxText) }
+                if kind.hasExtras {
+                    Section(extrasLabel) {
+                        money("Fees", $feesText)
+                        money(kind == .grading ? "Shipping both ways" : "Shipping", $shippingText)
+                        if kind != .grading { money("Sales tax", $taxText) }
+                    }
                 }
 
-                if kind == .purchase {
+                if kind == .expense {
+                    Section {
+                        // Free text, not a picker. A fixed category list is the
+                        // reporting dimension decision 23 rules out.
+                        TextField("Category, e.g. Supplies", text: $category)
+                            .textInputAutocapitalization(.words)
+                    } footer: {
+                        Text("For your own bookkeeping. Nothing is broken down by it.")
+                    }
+                }
+
+                if kind == .purchase || kind == .expense {
                     Section {
                         TextField("What it was", text: $note, axis: .vertical)
                     } footer: {
-                        Text("What you would write on a receipt. \"6x Chaos Rising Booster Pack\".")
+                        Text(kind == .expense
+                             ? "What you would write on a receipt. \"500 penny sleeves\"."
+                             : "What you would write on a receipt. \"6x Chaos Rising Booster Pack\".")
                     }
                 }
 
@@ -126,6 +147,7 @@ struct AddTransactionSheet: View {
         case .purchase: return "Vendor, e.g. Gamecraft"
         case .sale: return "Channel, e.g. TCGplayer"
         case .grading: return "Grader, e.g. PSA"
+        case .expense: return "Paid to, e.g. Amazon"
         }
     }
 
@@ -134,6 +156,7 @@ struct AddTransactionSheet: View {
         case .purchase: return "Item cost"
         case .sale: return "Gross"
         case .grading: return "Grading fees"
+        case .expense: return "Amount"
         }
     }
 
@@ -142,6 +165,7 @@ struct AddTransactionSheet: View {
         case .purchase: return "Nothing is identified yet. Open the purchase and scan what came out of it."
         case .sale: return "This records the money. It does not mark a card sold, and the gain reads as not known until a card is attached."
         case .grading: return "No cards are attached. Each card keeps its own grading cost."
+        case .expense: return "A cost that attaches to no card. It comes off the profit on the Summary tab."
         }
     }
 
@@ -174,6 +198,15 @@ struct AddTransactionSheet: View {
             modelContext.insert(submission)
             try? modelContext.save()
             onAdded(.grading(submission.id))
+
+        case .expense:
+            let expense = BusinessExpense(
+                date: date, category: category.trimmingCharacters(in: .whitespaces), vendor: name,
+                amountCents: amountCents, note: note.trimmingCharacters(in: .whitespaces)
+            )
+            modelContext.insert(expense)
+            try? modelContext.save()
+            onAdded(.expense(expense.id))
         }
         dismiss()
     }

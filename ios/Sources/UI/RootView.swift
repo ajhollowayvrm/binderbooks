@@ -53,7 +53,8 @@ struct RootView: View {
                 case .settings: SettingsView()
                 case .catalogStatus: CatalogStatusView()
                 case .ownedCard(let id): OwnedCardDetailView(cardID: id)
-                case .ledger: LedgerView(filter: Self.debugLedgerFilter, adding: Self.debugLedgerAdding)
+                case .ledger:
+                    LedgerView(tab: Self.debugLedgerTab, filter: Self.debugLedgerFilter, adding: Self.debugLedgerAdding)
                 }
             }
             .navigationDestination(for: LedgerEntry.Kind.self) { kind in
@@ -61,6 +62,7 @@ struct RootView: View {
                 case .purchase(let id): PurchaseDetailView(purchaseID: id)
                 case .grading(let id): GradingDetailView(submissionID: id)
                 case .sale(let id): SaleDetailView(saleID: id)
+                case .expense(let id): ExpenseDetailView(expenseID: id)
                 }
             }
         }
@@ -86,6 +88,14 @@ struct RootView: View {
     }
 
     /// Screenshot state for the ledger. Always the default outside DEBUG.
+    static var debugLedgerTab: LedgerTab {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["CT_OPEN_LEDGER"] == "summary" ? .summary : .activity
+        #else
+        .activity
+        #endif
+    }
+
     static var debugLedgerFilter: LedgerFilter {
         #if DEBUG
         switch ProcessInfo.processInfo.environment["CT_OPEN_LEDGER"] {
@@ -123,9 +133,10 @@ struct RootView: View {
     /// `CT_SEARCH_LAYOUT=list` switches every card list to the dense row.
     /// `CT_OPEN_CARD=1` pushes the newest card. `CT_OPEN_SETTINGS=1` pushes
     /// Settings. `CT_OPEN_SCANNER=1` opens the scanner. `CT_OPEN_LEDGER` takes
-    /// `1` for the ledger, `in` or `out` for one side of it, `add` for the add
-    /// sheet, `sale` for the newest order, or `purchase` for the newest
-    /// purchase. `CT_IMPORT_FILE=<path>` merges a collection file, so
+    /// `1` for the ledger, `in` or `out` for one side of it, `summary` for the
+    /// Summary tab, `add` for the add sheet, `sale` for the newest order,
+    /// `purchase` for the newest purchase, or `expense` for the newest expense.
+    /// `CT_IMPORT_FILE=<path>` merges a collection file, so
     /// a simulator can hold his real books without the file picker.
     /// `CT_OPEN_INVENTORY=1` is deprecated and only returns to the landing
     /// screen.
@@ -190,6 +201,10 @@ struct RootView: View {
                     var d = FetchDescriptor<Purchase>(sortBy: [SortDescriptor(\.date, order: .reverse)])
                     d.fetchLimit = 1
                     if let purchase = try? modelContext.fetch(d).first { path.append(LedgerEntry.Kind.purchase(purchase.id)) }
+                case "expense":
+                    var d = FetchDescriptor<BusinessExpense>(sortBy: [SortDescriptor(\.date, order: .reverse)])
+                    d.fetchLimit = 1
+                    if let expense = try? modelContext.fetch(d).first { path.append(LedgerEntry.Kind.expense(expense.id)) }
                 default: break
                 }
             }

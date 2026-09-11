@@ -455,10 +455,8 @@ struct InventoryView: View {
                 } else {
                     Chip(title: "Set", systemImage: "square.stack", isSelected: false) { showSetPicker = true }
                 }
-                // Sold cards left inventory. This is the one door back to them.
-                Chip(title: "Sold", systemImage: model.filter.showSold ? "checkmark" : "bag", isSelected: model.filter.showSold) {
-                    model.filter.showSold.toggle()
-                }
+                // No Sold chip. A card he sold is not inventory, and the ledger
+                // holds it on its order.
                 if model.filter.isActive {
                     Button("Clear") { model.filter = InventoryFilter() }
                         .font(.subheadline)

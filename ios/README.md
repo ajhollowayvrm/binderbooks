@@ -117,6 +117,19 @@ replaced the status chips, and he narrows by label more than by anything else.
 The confidence, slab, bulk, and personal filters stay in `InventoryFilter` but
 have no chip; the row markers still show confidence and bulk.
 
+**A card he sold is not inventory.** It is gone from the inventory page, from the
+collection half of a search, and from Metrics, and there is no chip to bring it
+back — the Sold chip and `InventoryFilter.showSold` are both gone. The exclusion
+sits in `InventoryModel.rows` beside `isCommitted`, not in the chip filter, so
+`applyFilter: false` cannot let sold cards back into a search the way it used to.
+`CardTagIndex.isSold` reads the `sold` label and `statusRaw`, because the two
+disagree: `SellSheet` writes only the label, and an imported row carries only the
+status until `StatusTagBackfill` runs.
+
+A sold card is still reachable on its order in the Ledger, which is where it
+belongs. Its row, basis, tags and comps all stay in the store, so Unsell on the
+order puts it straight back.
+
 The money sits behind the **Metrics** button, not above the cards. The sheet
 reports what the current chips and query left on the page, so its figures always
 match the cards behind it. Graded cards render as a small slab with the grader and
@@ -155,10 +168,51 @@ those cards. `OwnedCard.basisIsManual` then marks the basis as his:
   market price shows the difference, because that is the figure he compares a
   sale against.
 
+## Ledger
+
+Two halves, on one segmented control under the navigation bar.
+
+**Activity** is the bank statement: purchases, grading charges, orders, and
+expenses in one list, newest first, in month sections that each carry their own
+two totals. `All`, `In`, and `Out` filter it, and that control lives inside the
+list because it belongs to the list.
+
+**Summary** answers "how am I actually doing", which a list of transactions
+cannot. Four sections: the realized gain with the count of orders it covers, the
+periodic P&L (`revenue − COGS − expenses`, with `COGS = beginning + purchases −
+ending`), what he holds at cost and at market, and the cash totals that used to
+sit on top of Activity.
+
+Every figure covers the whole business. Nothing is broken down by vendor, set,
+product, or channel — decision 23 in `docs/00-brief.md`, amended 2026-09-11 to
+allow the totals and nothing else. There are no charts and no `PeriodSummary`
+model: `LedgerSummary` computes on read, so no stored copy can disagree with the
+store.
+
+Two things the arithmetic gets right and are easy to get wrong:
+
+- **A sold card keeps its row and its basis.** `LedgerSummary.isHeld` drops sold
+  and lost cards, or ending inventory, the position, and the profit would all be
+  inflated by everything he has ever sold. It shares `CardTagIndex.isSold` with
+  the inventory, so a card cannot be off the inventory page and inside the
+  ending inventory at the same time.
+- **Grading is capitalised** into `OwnedCard.gradingBasisCents`, so a submission's
+  cost counts as a purchase *and* comes back in ending inventory for every card
+  still held. Both sides, or neither.
+
+`BusinessExpense` covers mailers, toploaders, postage, and the Card Ladder
+subscription — costs that hit the books and attach to no card. `category` and
+`vendor` are free text for his own bookkeeping, not dimensions. Add one from the
+`+` button, the fourth kind in the sheet.
+
+An order with any card lacking a cost reports no gain at all, rather than a gain
+of the whole price. Thirty-five imported orders are that shape, so Summary prints
+how many orders the realized figure actually covers.
+
 ## Export and import
 
 Settings prepares the export when the screen opens, so exporting is one tap into
-the share sheet. The file holds every purchase, line, card, and session, with
+the share sheet. The file holds every purchase, line, card, session, and expense, with
 relationships as UUIDs and dates as seconds since the reference date, sorted by id.
 Two exports of the same store are byte-identical, and importing an export then
 exporting again reproduces the file exactly. Import offers merge, which upserts by
@@ -184,6 +238,8 @@ The simulator cannot type or tap for a script, so debug builds read these on lau
 | `CT_SELECT_ALL=1` | Enters selection with every row ticked. |
 | `CT_SLAB_NEWEST="psa\|12345678\|10"` | Stamps that grader, cert, and grade on the newest card, so it renders as a slab. |
 | `CT_PROJECT_NEWEST="psa\|12000,4000,2500"` | Tags the newest card "at PSA" and fills its top comps in cents, so its price shows as a range. |
+| `CT_OPEN_LEDGER` | `1` for the ledger, `summary` for the Summary tab, `in` or `out` for one side of Activity, `add` for the add sheet, `sale`, `purchase`, or `expense` for the newest of each. |
+| `CT_IMPORT_FILE=<path>` | Merges a collection file, so a simulator can hold his real books without the file picker. |
 | `CT_OPEN_INVENTORY=1` | Deprecated. Inventory is the landing screen, so this only clears the query and pops to the root. |
 
 Prefix each with `SIMCTL_CHILD_` on `xcrun simctl launch`.

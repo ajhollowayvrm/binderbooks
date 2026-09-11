@@ -59,8 +59,6 @@ struct InventoryFilter: Equatable {
     var slabsOnly = false
     var hideBulk = false
     var personalOnly = false
-    /// A sold card left inventory. It stays out of the page unless he asks.
-    var showSold = false
     /// `TagKey` values, not display forms. A card matches when it holds any of
     /// them, which is what "binder 3" plus "for sale" means to him.
     var tagKeys: Set<String> = []
@@ -68,7 +66,7 @@ struct InventoryFilter: Equatable {
     /// True when a chip is on. The typed query is not part of this, because the
     /// search header owns the query and the Clear button must not wipe it.
     var isActive: Bool {
-        !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly || showSold || !tagKeys.isEmpty
+        !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly || !tagKeys.isEmpty
     }
 }
 
@@ -107,10 +105,15 @@ final class InventoryModel {
     /// in that order everywhere else.
     /// `applyFilter` is false for the collection section of a search, so the
     /// chips on the inventory page never narrow a search result in silence.
+    ///
+    /// A sold card is excluded either way. It is not a chip he can turn off,
+    /// because a card he sold is not inventory — it is on its order in the
+    /// ledger, which is the one place it belongs. `applyFilter: false` used to
+    /// let sold cards back into the collection half of a search.
     func rows(from cards: [OwnedCard], query: String = "", applyFilter: Bool = true) -> [InventoryRow] {
         let parsed = OwnedCardQuery(query)
         return cards
-            .filter { $0.isCommitted && (!applyFilter || matches($0)) && matchesQuery($0, parsed) }
+            .filter { $0.isCommitted && !CardTagIndex.isSold($0) && (!applyFilter || matches($0)) && matchesQuery($0, parsed) }
             .sorted { $0.acquiredAt == $1.acquiredAt ? $0.scannedAt > $1.scannedAt : $0.acquiredAt > $1.acquiredAt }
             .map { InventoryRow(card: $0, hit: hits[$0.productId], marketCents: marketCents(for: $0)) }
     }
@@ -211,7 +214,6 @@ final class InventoryModel {
         if filter.slabsOnly, !card.isSlabbed { return false }
         if filter.hideBulk, card.isBulk { return false }
         if filter.personalOnly, !card.isPersonalCollection { return false }
-        if !filter.showSold, CardTagIndex.has(ReservedTag.sold, on: card) { return false }
         return true
     }
 }

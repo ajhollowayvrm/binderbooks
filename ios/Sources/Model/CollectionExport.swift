@@ -16,7 +16,8 @@ enum CollectionExport {
     /// an intake path, not a record. A version 3 file still imports and its
     /// `rips` array is ignored, because `JSONDecoder` drops a key the struct
     /// does not declare. The gate is `file.version <= version`.
-    static let version = 4
+    /// Version 5 added business expenses.
+    static let version = 5
 
     struct File: Codable, Equatable {
         var format: String = CollectionExport.format
@@ -33,11 +34,13 @@ enum CollectionExport {
         var gradingEntries: [GradingEntryDTO]?
         var sales: [SaleDTO]?
         var saleLines: [SaleLineDTO]?
+        var expenses: [BusinessExpenseDTO]?
 
         var counts: String {
             var parts = ["\(purchases.count) purchases", "\(purchaseItems.count) lines", "\(cards.count) cards", "\(sessions.count) sessions"]
             if let grading, !grading.isEmpty { parts.append("\(grading.count) submissions") }
             if let sales, !sales.isEmpty { parts.append("\(sales.count) sales") }
+            if let expenses, !expenses.isEmpty { parts.append("\(expenses.count) expenses") }
             return parts.joined(separator: ", ")
         }
     }
@@ -156,6 +159,16 @@ enum CollectionExport {
         var sourceRef: String?
     }
 
+    struct BusinessExpenseDTO: Codable, Equatable {
+        var id: UUID
+        var date: Date
+        var category: String
+        var vendor: String
+        var amountCents: Int
+        var note: String
+        var sourceRef: String?
+    }
+
     struct ScanSessionDTO: Codable, Equatable {
         var id: UUID
         var startedAt: Date
@@ -194,6 +207,7 @@ enum CollectionExport {
         var gradingEntries = 0
         var sales = 0
         var saleLines = 0
+        var expenses = 0
         var deleted = 0
 
         /// What the import wrote, leaving out anything the file did not carry.
@@ -203,6 +217,7 @@ enum CollectionExport {
             if gradingEntries > 0 { parts.append("\(gradingEntries) grading entries") }
             if sales > 0 { parts.append("\(sales) sales") }
             if saleLines > 0 { parts.append("\(saleLines) sale lines") }
+            if expenses > 0 { parts.append("\(expenses) expenses") }
             return parts.joined(separator: ", ") + ". \(deleted) rows deleted first."
         }
     }
@@ -219,6 +234,7 @@ enum CollectionExport {
         let gradingEntries = try context.fetch(FetchDescriptor<GradingEntry>())
         let sales = try context.fetch(FetchDescriptor<Sale>())
         let saleLines = try context.fetch(FetchDescriptor<SaleLine>())
+        let expenses = try context.fetch(FetchDescriptor<BusinessExpense>())
 
         return File(
             exportedAt: ISO8601DateFormatter().string(from: now),
@@ -284,6 +300,12 @@ enum CollectionExport {
                     basisCents: $0.basisCents, basisIncomplete: $0.basisIncomplete, describedAs: $0.describedAs,
                     sourceRef: $0.sourceRef
                 )
+            }.sorted { $0.id.uuidString < $1.id.uuidString },
+            expenses: expenses.map {
+                BusinessExpenseDTO(
+                    id: $0.id, date: $0.date, category: $0.category, vendor: $0.vendor,
+                    amountCents: $0.amountCents, note: $0.note, sourceRef: $0.sourceRef
+                )
             }.sorted { $0.id.uuidString < $1.id.uuidString }
         )
     }
@@ -321,6 +343,7 @@ enum CollectionExport {
         var report = Report()
 
         if mode == .replace {
+            for expense in try context.fetch(FetchDescriptor<BusinessExpense>()) { context.delete(expense); report.deleted += 1 }
             for line in try context.fetch(FetchDescriptor<SaleLine>()) { context.delete(line); report.deleted += 1 }
             for sale in try context.fetch(FetchDescriptor<Sale>()) { context.delete(sale); report.deleted += 1 }
             for entry in try context.fetch(FetchDescriptor<GradingEntry>()) { context.delete(entry); report.deleted += 1 }
@@ -340,6 +363,7 @@ enum CollectionExport {
         var entries = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<GradingEntry>()).map { ($0.id, $0) })
         var sales = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<Sale>()).map { ($0.id, $0) })
         var saleLines = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<SaleLine>()).map { ($0.id, $0) })
+        var expenses = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<BusinessExpense>()).map { ($0.id, $0) })
 
         for dto in file.purchases {
             let purchase = purchases[dto.id] ?? {
@@ -517,6 +541,23 @@ enum CollectionExport {
             line.describedAs = dto.describedAs
             line.sourceRef = dto.sourceRef ?? ""
             report.saleLines += 1
+        }
+
+        for dto in file.expenses ?? [] {
+            let expense = expenses[dto.id] ?? {
+                let e = BusinessExpense()
+                e.id = dto.id
+                context.insert(e)
+                expenses[dto.id] = e
+                return e
+            }()
+            expense.date = dto.date
+            expense.category = dto.category
+            expense.vendor = dto.vendor
+            expense.amountCents = dto.amountCents
+            expense.note = dto.note
+            expense.sourceRef = dto.sourceRef ?? ""
+            report.expenses += 1
         }
 
         try context.save()

@@ -8,13 +8,16 @@ import SwiftData
 /// screens he has to reconcile by hand.
 ///
 /// This is not a reporting layer. It aggregates nothing by vendor, set, or
-/// product — see decision 23 in docs/00-brief.md. A month header carries the
-/// month's two totals, which is the same table docs/04 already prints.
+/// product — see decision 23 in docs/00-brief.md, amended 2026-09-11. A month
+/// header carries the month's two totals, which is the same table docs/04
+/// already prints, and the Summary tab totals the whole business over time.
+/// Neither one slices. A per-vendor or per-set row belongs in neither.
 struct LedgerEntry: Identifiable, Hashable {
     enum Kind: Hashable {
         case purchase(UUID)
         case grading(UUID)
         case sale(UUID)
+        case expense(UUID)
     }
 
     var kind: Kind
@@ -27,9 +30,14 @@ struct LedgerEntry: Identifiable, Hashable {
     var id: Kind { kind }
     var isMoneyIn: Bool { amountCents >= 0 }
 
-    static func entries(purchases: [Purchase], grading: [GradingSubmission], sales: [Sale]) -> [LedgerEntry] {
+    static func entries(
+        purchases: [Purchase],
+        grading: [GradingSubmission],
+        sales: [Sale],
+        expenses: [BusinessExpense] = []
+    ) -> [LedgerEntry] {
         var out: [LedgerEntry] = []
-        out.reserveCapacity(purchases.count + grading.count + sales.count)
+        out.reserveCapacity(purchases.count + grading.count + sales.count + expenses.count)
 
         for purchase in purchases {
             out.append(
@@ -69,6 +77,18 @@ struct LedgerEntry: Identifiable, Hashable {
             )
         }
 
+        for expense in expenses {
+            out.append(
+                LedgerEntry(
+                    kind: .expense(expense.id),
+                    date: expense.date,
+                    title: expense.vendor.isEmpty ? "Expense" : expense.vendor,
+                    detail: expense.category.isEmpty ? expense.note : expense.category,
+                    amountCents: -expense.amountCents
+                )
+            )
+        }
+
         return out.sorted { $0.date == $1.date ? $0.title < $1.title : $0.date > $1.date }
     }
 
@@ -102,6 +122,17 @@ struct LedgerMonth: Identifiable {
             .map { LedgerMonth(start: $0.key, entries: $0.value) }
             .sorted { $0.start > $1.start }
     }
+}
+
+/// The two halves of the ledger: what happened, and how it is going.
+///
+/// Activity is the bank statement. Summary answers the question in the brief's
+/// one-sentence goal, which a list of transactions cannot answer.
+enum LedgerTab: String, CaseIterable, Identifiable {
+    case activity = "Activity"
+    case summary = "Summary"
+
+    var id: String { rawValue }
 }
 
 /// What the ledger shows, and what it hides.

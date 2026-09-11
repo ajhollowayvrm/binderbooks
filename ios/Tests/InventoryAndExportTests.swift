@@ -207,6 +207,49 @@ private func seed(_ context: ModelContext) throws {
         #expect(card.tags == [])
     }
 
+    /// An expense is money that attaches to no card, so nothing else in the
+    /// file points at it. It still has to survive the only backup he has.
+    @Test @MainActor func anExpenseSurvivesTheRoundTrip() throws {
+        let expense = BusinessExpense(
+            date: Date(timeIntervalSinceReferenceDate: 800_000_000),
+            category: "Supplies", vendor: "Amazon", amountCents: 2_499, note: "500 penny sleeves"
+        )
+        source.mainContext.insert(expense)
+        try source.mainContext.save()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_200)
+
+        let first = try CollectionExport.exportData(source.mainContext, now: now)
+        let file = try CollectionExport.decode(first)
+        #expect(file.expenses?.count == 1)
+
+        let report = try CollectionExport.apply(file, to: target.mainContext, mode: .merge)
+        #expect(report.expenses == 1)
+
+        let restored = try #require(try target.mainContext.fetch(FetchDescriptor<BusinessExpense>()).first)
+        #expect(restored.id == expense.id)
+        #expect(restored.category == "Supplies")
+        #expect(restored.vendor == "Amazon")
+        #expect(restored.amountCents == 2_499)
+        #expect(restored.note == "500 penny sleeves")
+
+        #expect(try CollectionExport.exportData(target.mainContext, now: now) == first)
+    }
+
+    /// Every backup he already holds is version 4 and carries no `expenses`
+    /// key. A non-optional field in `File` would throw `keyNotFound` on all of
+    /// them, the same way a non-optional `tags` would have.
+    @Test @MainActor func importsAVersionFourFileWithNoExpensesKey() throws {
+        let json = """
+        {"format":"cardtracker-collection","version":4,"exportedAt":"2026-01-01T00:00:00Z",
+         "purchases":[],"purchaseItems":[],"sessions":[],"cards":[]}
+        """
+        let file = try CollectionExport.decode(Data(json.utf8))
+        #expect(file.expenses == nil)
+        let report = try CollectionExport.apply(file, to: target.mainContext, mode: .merge)
+        #expect(report.expenses == 0)
+        #expect(try target.mainContext.fetch(FetchDescriptor<BusinessExpense>()).isEmpty)
+    }
+
     @Test func exportIsDeterministic() throws {
         let file = CollectionExport.File(exportedAt: "2026-09-10T05:00:00Z", purchases: [], purchaseItems: [], cards: [], sessions: [])
         #expect(try CollectionExport.encode(file) == CollectionExport.encode(file))
@@ -420,6 +463,65 @@ private func seed(_ context: ModelContext) throws {
 
         model.filter = InventoryFilter(hideBulk: true)
         #expect(Set(model.rows(from: cards).map(\.card.productId)) == [1, 2])
+    }
+
+    /// A sold card is not inventory. It stays out of the page, out of the
+    /// collection half of a search, and out of the totals — with no chip to
+    /// bring it back. The search path is the one that used to leak, because
+    /// `applyFilter: false` skipped the sold check with everything else.
+    @Test @MainActor func aSoldCardIsGoneFromEveryInventoryView() throws {
+        try seed(container.mainContext)
+        let model = InventoryModel()
+        model.setTestRows(hits: [1: hit(1, group: 100), 2: hit(2, group: 101), 3: hit(3, group: 101)], prices: [:])
+        let cards = try container.mainContext.fetch(FetchDescriptor<OwnedCard>())
+        let sold = try #require(cards.first { $0.productId == 2 })
+
+        #expect(model.rows(from: cards).contains { $0.card.productId == 2 })
+
+        // What the sell flow writes, and nothing else.
+        CardTagEditor(context: container.mainContext).add(ReservedTag.sold, to: [sold])
+        try container.mainContext.save()
+        #expect(sold.status == .owned)
+
+        // The inventory page.
+        #expect(!model.rows(from: cards).contains { $0.card.productId == 2 })
+        // The collection half of a search, which does not apply the chips.
+        #expect(!model.rows(from: cards, applyFilter: false).contains { $0.card.productId == 2 })
+        // Metrics reports what the page left, so the pull's $16.00 goes with
+        // it and only the slab's $41.00 remains.
+        #expect(model.summary(of: model.rows(from: cards)).basisCents == 4_100)
+
+        // An imported row carries the status and no label until the backfill
+        // runs. It must be gone too.
+        let imported = try #require(cards.first { $0.productId == 3 })
+        imported.status = .sold
+        try container.mainContext.save()
+        #expect(!model.rows(from: cards, applyFilter: false).contains { $0.card.productId == 3 })
+    }
+
+    /// Unsell on the order is the only way back now that the chip is gone, so
+    /// it has to actually work.
+    @Test @MainActor func unsellingPutsTheCardBackInInventory() throws {
+        try seed(container.mainContext)
+        let model = InventoryModel()
+        model.setTestRows(hits: [1: hit(1, group: 100), 2: hit(2, group: 101), 3: hit(3, group: 101)], prices: [:])
+        let cards = try container.mainContext.fetch(FetchDescriptor<OwnedCard>())
+        let card = try #require(cards.first { $0.productId == 2 })
+
+        let editor = CardTagEditor(context: container.mainContext)
+        editor.add(ReservedTag.sold, to: [card])
+        try container.mainContext.save()
+        #expect(!model.rows(from: cards).contains { $0.card.productId == 2 })
+
+        // What `SaleDetailView.unsell` does.
+        editor.remove(ReservedTag.sold, from: [card])
+        try container.mainContext.save()
+
+        #expect(model.rows(from: cards).contains { $0.card.productId == 2 })
+        // Its cost came back with it, so the totals reconcile again.
+        #expect(model.summary(of: model.rows(from: cards)).basisCents == 5_700)
+        // And the card kept the comps he typed in by hand.
+        #expect(card.gradedCompCents == ["10": 12_000, "9.5": 5_100])
     }
 
     @Test @MainActor func uncommittedCardsStayOut() throws {

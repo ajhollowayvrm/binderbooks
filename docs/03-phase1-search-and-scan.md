@@ -403,7 +403,10 @@ of the rest exists.
 ## Notes for whoever builds this
 
 - Do not add analytics, charts, or reporting. He explicitly rejected per-vendor,
-  per-set, and per-product performance breakdowns.
+  per-set, and per-product performance breakdowns. **Amended 2026-09-11:** the
+  ledger's `Summary` tab holds whole-business totals and the periodic P&L. See
+  decision 23 in `00-brief.md`. Still no charts, and still nothing sliced by
+  vendor, set, product, or channel.
 - Do not add CloudKit, accounts, or sync. Free developer account; it isn't available.
 - Do not add AWS or any server. GitHub Actions and a public release asset cover it.
 - Do not bundle a catalog in the binary.

@@ -101,6 +101,17 @@ enum CardTagIndex {
         let key = TagKey.of(label)
         return card.tags.contains { TagKey.of($0) == key }
     }
+
+    /// A card he has sold. It is not inventory, anywhere in the app.
+    ///
+    /// This reads the label and the status, because the two disagree. Tags
+    /// replaced `CardStatus`, and `SellSheet` writes only the `sold` label, so
+    /// a card sold in the app keeps `statusRaw` at `owned` forever. An imported
+    /// row is the other way round until `StatusTagBackfill` runs. Read one
+    /// signal and half his sold cards come back.
+    static func isSold(_ card: OwnedCard) -> Bool {
+        has(ReservedTag.sold, on: card) || card.status == .sold
+    }
 }
 
 /// Every write to a card's labels. `InventoryModel` stays read-only and holds

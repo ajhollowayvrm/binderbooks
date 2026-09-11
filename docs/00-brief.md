@@ -162,6 +162,13 @@ reason attached.
 23. **No performance analytics.** He explicitly does not want per-vendor, per-set, or
     per-product performance breakdowns. `vendor` is a plain string for bookkeeping,
     not a dimension. Don't build a reporting layer.
+    **Amended 2026-09-11:** the ledger has a second half, `Summary`, holding whole-
+    business totals: realized gain, the periodic P&L from `02`, what he holds at cost
+    and at market, and the cash totals that used to sit on top of the transaction
+    list. The prohibition is unchanged for everything it named. Summary totals over
+    time and never slices — no vendor, set, product, or channel row — because the
+    goal question is "how am I actually doing", not "which vendor is best". A list of
+    transactions cannot answer the first one, which is why this exists.
 
 ### Things that stay manual
 

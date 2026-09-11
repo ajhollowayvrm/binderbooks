@@ -461,10 +461,42 @@ final class SaleLine {
     }
 }
 
+/// A cost that hits the books and attaches to no card: mailers, toploaders,
+/// team bags, postage, the Card Ladder subscription.
+///
+/// Not trivial at his volume, and until now the app had nowhere to put one. The
+/// periodic P&L subtracts these, so money spent on supplies stops reading as
+/// profit. `category` and `vendor` are free text for bookkeeping, the way
+/// `Purchase.vendor` is. Neither is a dimension: see decision 23 in
+/// docs/00-brief.md.
+@Model
+final class BusinessExpense {
+    #Unique<BusinessExpense>([\.id])
+
+    var id: UUID = UUID()
+    var date: Date = Date()
+    var category: String = ""
+    var vendor: String = ""
+    var amountCents: Int = 0
+    var note: String = ""
+
+    var sourceRef: String = ""
+
+    init(date: Date = Date(), category: String = "", vendor: String = "", amountCents: Int = 0, note: String = "") {
+        self.id = UUID()
+        self.date = date
+        self.category = category
+        self.vendor = vendor
+        self.amountCents = amountCents
+        self.note = note
+    }
+}
+
 enum CollectionStore {
     static let models: [any PersistentModel.Type] = [
         Purchase.self, PurchaseItem.self, OwnedCard.self, ScanSession.self,
         GradingSubmission.self, GradingEntry.self, Sale.self, SaleLine.self,
+        BusinessExpense.self,
     ]
 
     static func container(inMemory: Bool = false) throws -> ModelContainer {
