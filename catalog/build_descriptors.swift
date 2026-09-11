@@ -29,7 +29,7 @@ struct Options {
     var catalog = "scripts/catalog.sqlite"
     var limit: Int?
     var groupId: Int?
-    var workers = 8
+    var workers = max(4, ProcessInfo.processInfo.activeProcessorCount * 2)
     var rebuild = false
     /// Stop after this long and let the caller publish what was signed.
     ///
@@ -59,7 +59,7 @@ func parseOptions() -> Options {
         case "--catalog": options.catalog = value()
         case "--limit": options.limit = Int(value())
         case "--group": options.groupId = Int(value())
-        case "--workers": options.workers = Int(value()) ?? 8
+        case "--workers": options.workers = Int(value()) ?? options.workers
         case "--rebuild": options.rebuild = true
         case "--deadline-minutes": options.deadlineMinutes = Double(value())
         default:
@@ -218,6 +218,33 @@ func download(_ urlString: String, session: URLSession) async -> Data? {
     return nil
 }
 
+/// What one product's attempt produced. TCGplayer serving no image is an
+/// ordinary outcome, not an error, and is counted separately from an image that
+/// arrived and could not be read.
+enum Signed: Sendable {
+    case signature(Int, Data)
+    case noImage
+    case unreadable
+}
+
+/// Gathers results from threads that are all writing at once.
+final class SignedCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var collected: [Signed] = []
+
+    func add(_ result: Signed) {
+        lock.lock()
+        collected.append(result)
+        lock.unlock()
+    }
+
+    var results: [Signed] {
+        lock.lock()
+        defer { lock.unlock() }
+        return collected
+    }
+}
+
 func decode(_ data: Data) -> CGImage? {
     guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
     return CGImageSourceCreateImageAtIndex(source, 0, nil)
@@ -262,8 +289,15 @@ struct Build {
         var unreadable = 0
         let started = Date()
 
-        // Downloads run wide, and the signing is done as each image lands.
-        // Vision is the slow half and it does not go faster in parallel here.
+        // Download *and* sign in the same task, so both run wide.
+        //
+        // This used to fetch a batch in parallel and then sign it in a serial
+        // loop, with a comment claiming Vision would not go faster in parallel.
+        // That was wrong and the numbers said so: eight workers and twelve
+        // workers both gave about seventeen cards a second, because the workers
+        // were never the constraint — the one-at-a-time feature print was.
+        // Vision builds its own request and handler per call, so there is
+        // nothing to serialise around.
         let deadline = options.deadlineMinutes.map { started.addingTimeInterval($0 * 60) }
         var stoppedEarly = false
 
@@ -276,6 +310,16 @@ struct Build {
             let batch = Array(rows[index..<min(index + options.workers, rows.count)])
             index += batch.count
 
+            // Fetch on the cooperative pool, sign on real threads.
+            //
+            // Signing cannot go in the task group with the download, however
+            // much it looks like it should. `featurePrint` is a blocking
+            // synchronous call, and blocking a cooperative thread is forbidden:
+            // with one task per core all sitting inside Vision, nothing is left
+            // to resume the download continuations and the whole job deadlocks
+            // at zero per cent CPU. Measured, not guessed — it hung for
+            // twenty-four minutes on a batch the serial version did in thirty
+            // seconds.
             let images = await withTaskGroup(of: (Int, Data?).self) { group -> [(Int, Data?)] in
                 for row in batch {
                     group.addTask { (row.productId, await download(row.imageUrl, session: session)) }
@@ -285,13 +329,26 @@ struct Build {
                 return out
             }
 
-            for (productId, data) in images {
-                guard let data else { missing += 1; continue }
+            // `concurrentPerform` brings its own threads, so the blocking work
+            // runs wide without ever touching the cooperative pool.
+            let collector = SignedCollector()
+            DispatchQueue.concurrentPerform(iterations: images.count) { position in
+                let (productId, data) = images[position]
+                guard let data else { return collector.add(.noImage) }
                 guard let image = decode(data),
                       let raw = try? CardArtDescriptor.featurePrint(of: image),
                       let descriptor = CardArtDescriptor.make(fromRaw: raw)
-                else { unreadable += 1; continue }
-                signatures.append((productId, CardArtDescriptor.data(from: descriptor)))
+                else { return collector.add(.unreadable) }
+                collector.add(.signature(productId, CardArtDescriptor.data(from: descriptor)))
+            }
+            let signed = collector.results
+
+            for result in signed {
+                switch result {
+                case .noImage: missing += 1
+                case .unreadable: unreadable += 1
+                case let .signature(productId, data): signatures.append((productId, data))
+                }
             }
 
             if signatures.count >= 500 {
