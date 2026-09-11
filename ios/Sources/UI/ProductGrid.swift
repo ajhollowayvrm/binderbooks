@@ -40,11 +40,14 @@ struct ProductCard: View {
                     .font(.subheadline)
                     .foregroundStyle(.tertiary)
             }
+            Text(hit.name)
+                .font(.caption.weight(.medium))
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
             Text(hit.setName)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
+                .lineLimit(1)
             // The printing count lives in the list layout. At grid width it
             // truncated the collector number, which matters more.
             if let number = hit.number {

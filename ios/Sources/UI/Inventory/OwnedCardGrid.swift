@@ -64,11 +64,20 @@ struct OwnedCardCard: View {
                     isBulk: row.card.isBulk
                 )
             }
-            Text(row.hit?.setName ?? row.card.ocrName ?? "Unknown")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            // The name leads, then the set. The art names a card faster than
+            // text does — until it does not: a slab covers its own art with a
+            // label, and a cell whose image is still loading has nothing else
+            // to say which card it is.
+            Text(row.hit?.name ?? row.card.ocrName ?? "Unknown")
+                .font(.caption.weight(.medium))
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
+            if let setName = row.hit?.setName {
+                Text(setName)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             identity
             TagBadgeRow(tags: row.card.tags, limit: 2)
             Spacer(minLength: 0)
