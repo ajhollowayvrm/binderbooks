@@ -39,8 +39,11 @@ struct CatalogSearch: Sendable {
             }
         }
 
-        // Path B: typo tolerance, only when A came back thin.
-        if candidates.count < SearchQueryBuilder.trigramFallbackThreshold,
+        // Path B: typo tolerance, only when A found nothing at all. A came
+        // back with real, narrow matches means every typed word already hit
+        // something exact — there is no typo to correct, so path B must not
+        // run and dilute those matches with unrelated trigram noise.
+        if candidates.isEmpty,
            text.count >= SearchQueryBuilder.trigramMinimumLength,
            let match = SearchQueryBuilder.trigramMatch(text) {
             let rows = try Row.fetchAll(

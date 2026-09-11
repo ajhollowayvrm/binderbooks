@@ -32,6 +32,10 @@ enum Fixture {
         // Combusken and nothing else.
         Product(id: 10, groupId: 105, categoryId: 3, name: "Combusken", number: "004/131", rarity: "Common", sealed: false, prices: [("Normal", 25)]),
         Product(id: 11, groupId: 106, categoryId: 3, name: "Cyndaquil", number: "004/162", rarity: "Common", sealed: false, prices: [("Normal", 40)]),
+        // A decoy for the trigram fallback: shares the "pro" trigram with
+        // "promo" but nothing else. A query for a promo card by name must not
+        // pull this in just because path A came back thin.
+        Product(id: 12, groupId: 106, categoryId: 3, name: "Professional Grade Toploader", number: nil, rarity: nil, sealed: true, prices: [("Normal", 199)]),
     ]
 
     static func make() throws -> DatabaseQueue {

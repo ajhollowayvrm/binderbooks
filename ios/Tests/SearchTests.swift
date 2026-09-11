@@ -59,6 +59,13 @@ import Testing
         #expect(SearchQueryBuilder.trigramMatch("ab") == nil)
         #expect(SearchQueryBuilder.trigramMatch("aaaa") == "\"aaa\"")
     }
+
+    @Test func trigramAndsEachTokenSeparately() {
+        // Each word gets its own OR group. A row must match every group, so a
+        // second word can't pull in rows that only share a trigram with it.
+        #expect(SearchQueryBuilder.trigramMatch("bin pro") == "(\"bin\") AND (\"pro\")")
+        #expect(SearchQueryBuilder.trigramMatch("ab pro") == "\"pro\"")
+    }
 }
 
 @Suite struct MoneyTests {
@@ -170,6 +177,25 @@ import Testing
         #expect(hits.first?.name.hasPrefix("Charizard") == true)
     }
 
+    @Test func onlyEmptyPathAFallsBackToTrigrams() throws {
+        // "Legendary Warriors" only shows up as a promo card via its set
+        // name, so path A already finds it directly. Path B must not run at
+        // all here, so nothing dilutes the two real hits with unrelated
+        // trigram noise (a query for a promo card must not return every
+        // promo card in the catalog).
+        let ids = try Fixture.search("legendary promo").map(\.productId)
+        #expect(Set(ids) == [4, 5])
+    }
+
+    @Test func trigramFallbackStillAndsEachTypoedWord() throws {
+        // Both words are misspelled, so path A finds nothing and path B
+        // fires. It must still require both words to fuzzy-match, so
+        // "Professional Grade Toploader" (which shares no trigram with
+        // either misspelled word) does not sneak in as a false positive.
+        let ids = try Fixture.search("legendairy colection").map(\.productId)
+        #expect(Set(ids) == [4, 5])
+    }
+
     @Test func collectorNumberIsExact() throws {
         #expect(try Fixture.search("125/197").first?.productId == 1)
         #expect(try Fixture.search("4/102").first?.productId == 2)
@@ -183,9 +209,8 @@ import Testing
     }
 
     @Test func buyingBoostsTheSealedProduct() throws {
-        // Compare the pair, not the first row. The trigram fallback pulls in
-        // unrelated cards on a two-word query, and the context boost is a
-        // statement about these two products only.
+        // Compare the pair, not the first row. The context boost is a
+        // statement about these two products only, not about the full list.
         func rank(_ context: SearchContext, _ id: Int) throws -> Int {
             let ids = try Fixture.search("legendary warriors", context: context).map(\.productId)
             return try #require(ids.firstIndex(of: id))
