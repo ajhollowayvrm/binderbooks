@@ -55,6 +55,18 @@ enum Allocation {
         }
     }
 
+    /// Puts each entry's share of the fee onto its card.
+    ///
+    /// This runs when the cards go out, not only when they come back. The P&L
+    /// counts a submission in purchases from the moment it exists, so a fee
+    /// sitting on the submission and not on the cards reads as a straight loss
+    /// for as long as they are away. Both sides, or neither.
+    static func capitalise(_ submission: GradingSubmission) {
+        for entry in submission.entries {
+            entry.card?.gradingBasisCents = entry.allocatedFeeCents
+        }
+    }
+
     /// Writes each card's basis from its line. A line with several cards splits
     /// its share equally among them.
     static func writeCardBases(_ purchase: Purchase) {

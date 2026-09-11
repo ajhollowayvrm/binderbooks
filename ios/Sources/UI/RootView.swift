@@ -90,7 +90,10 @@ struct RootView: View {
     /// Screenshot state for the ledger. Always the default outside DEBUG.
     static var debugLedgerTab: LedgerTab {
         #if DEBUG
-        return ProcessInfo.processInfo.environment["CT_OPEN_LEDGER"] == "summary" ? .summary : .activity
+        switch ProcessInfo.processInfo.environment["CT_OPEN_LEDGER"] {
+        case "summary", "outlook": return .summary
+        default: return .activity
+        }
         #else
         .activity
         #endif

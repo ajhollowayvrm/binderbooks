@@ -57,6 +57,94 @@ struct LedgerSummary: Equatable {
     var ordersWithUnknownBasis: Int { orderCount - ordersWithKnownBasis }
 }
 
+/// The outcome to assume for every card out at a grader.
+enum GradeAssumption: String, CaseIterable, Identifiable {
+    case ten = "10"
+    case nine = "9"
+    case eight = "8"
+    case low = "Low"
+
+    var id: String { rawValue }
+
+    /// The grade number to price at. `low` prices at his worst figure instead,
+    /// whatever grade that is, so it has no number of its own.
+    var gradeNumber: Double? {
+        switch self {
+        case .ten: return 10
+        case .nine: return 9
+        case .eight: return 8
+        case .low: return nil
+        }
+    }
+
+    /// What the row calls it. "10" covers a CGC Pristine 10 too, because both
+    /// are grade 10 and the better figure wins.
+    var title: String { rawValue }
+}
+
+/// What the cards at a grader do to the books if they all come back at one grade.
+///
+/// He has real money in a pile whose value is unknown, and the question that
+/// follows is whether the best case clears the hole. This answers it with his own
+/// comps and his own fee rate. Nothing here is a forecast — it is arithmetic on
+/// figures he typed.
+struct GradingOutlook: Equatable {
+    var assumption: GradeAssumption = .ten
+    var cardCount = 0
+    /// How many of those carry a figure at this grade. It moves with the grade,
+    /// and a reader who cannot see it will mistake a gap in his comps for a
+    /// collapse in value.
+    var pricedCount = 0
+    var costCents = 0
+    var grossCents = 0
+    var netCents = 0
+    var profitTodayCents = 0
+
+    var unpricedCount: Int { cardCount - pricedCount }
+    var feeCents: Int { grossCents - netCents }
+
+    /// Selling a card moves its proceeds into revenue and takes its cost out of
+    /// ending inventory. In `revenue − (beginning + purchases − ending)` that is
+    /// `+net` and `−cost`, so the whole scenario is one addition.
+    var profitAfterCents: Int { profitTodayCents + netCents - costCents }
+
+    /// What the net would have to reach for the books to come back to zero.
+    var breakEvenNetCents: Int { costCents - profitTodayCents }
+
+    var breaksEven: Bool { profitAfterCents >= 0 }
+}
+
+extension LedgerSummary {
+    /// `atGrader` is the held cards out at a grader, already filtered.
+    static func outlook(
+        assumption: GradeAssumption,
+        atGrader: [OwnedCard],
+        profitTodayCents: Int,
+        costs: SellingCosts
+    ) -> GradingOutlook {
+        var out = GradingOutlook(assumption: assumption, profitTodayCents: profitTodayCents)
+
+        for card in atGrader {
+            out.cardCount += 1
+            out.costCents += card.totalBasisCents
+
+            // The grader comes from the card's label. `graderRaw` is only set
+            // when a card comes back, and these have not.
+            guard let grader = GradedComps.graderAtGrader(tags: card.tags) else { continue }
+            let comps = card.effectiveCompCents
+            let value = assumption.gradeNumber.map { GradedComps.value(at: $0, for: grader, in: comps) }
+                ?? GradedComps.lowest(for: grader, in: comps)
+            guard let value else { continue }
+
+            out.pricedCount += 1
+            out.grossCents += value
+        }
+
+        out.netCents = costs.net(out.grossCents)
+        return out
+    }
+}
+
 extension LedgerSummary {
     /// Whether a card is still inventory he holds.
     ///

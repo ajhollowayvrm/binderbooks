@@ -183,6 +183,16 @@ reason attached.
 25. **The purchase-decision tool leads with discount to market, not EV.** He rips
     because he enjoys ripping and buys on "good deal" more than expected value. Show
     the numbers; never render a verdict telling him not to rip something.
+    **Amended 2026-09-11:** the ledger's grading outlook does render a verdict
+    ("Short by $1,141.00"), and that is allowed. The rule guards a *purchase he is
+    weighing*: a tool that tells him not to buy something is a tool he stops
+    opening. The outlook reports on money already spent on cards already at a
+    grader, so it is a report, not advice. It is not licence to add a "do not grade
+    this" verdict to a card he still holds — that would be the same mistake decision
+    25 exists to prevent.
+    The outlook also reads a fee rate off his own orders, which is the settings
+    surface `02` asks for. Keep it to that one rate; the bulk-listing floor and the
+    grade-or-not calculator are still not built and still need his sign-off first.
 
 ---
 

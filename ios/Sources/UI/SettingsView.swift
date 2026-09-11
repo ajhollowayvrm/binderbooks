@@ -17,6 +17,10 @@ struct SettingsView: View {
     @State private var importReport: CollectionExport.Report?
     @AppStorage("lastExportAt") private var lastExportAt: Double = 0
     @AppStorage(PPTKey.defaultsKey) private var pptKey = ""
+    @AppStorage(SellingCostsKey.defaultsKey) private var costOverride = ""
+    @Query private var sales: [Sale]
+
+    private var derivedRates: ChannelRates { ChannelRates.derived(from: sales) }
 
     var body: some View {
         List {
@@ -35,6 +39,8 @@ struct SettingsView: View {
             } footer: {
                 Text("Fetches graded comps onto cards. About two credits per card. Your own figures always win over fetched ones.")
             }
+
+            feesSection
 
             Section {
                 if let exportData {
@@ -91,6 +97,51 @@ struct SettingsView: View {
             ImportConfirmSheet(file: file) { mode in
                 run(file, mode: mode)
             }
+        }
+    }
+
+    /// What selling a card costs him, for the grading projection on the ledger's
+    /// Summary tab.
+    ///
+    /// The rates come from his own orders, so there is nothing to type and they
+    /// correct themselves as he sells. The one field overrides the blend when he
+    /// knows better — a slab sells on eBay whatever his singles do.
+    @ViewBuilder private var feesSection: some View {
+        let rates = derivedRates
+
+        Section {
+            if rates.isEmpty {
+                Text("No orders yet, so there is no rate to read.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(rates.rows) { row in
+                    LabeledContent(row.name) {
+                        Text("\(SellingCostsKey.fieldText(row.feeBasisPoints))% · \(row.orderCount) \(row.orderCount == 1 ? "order" : "orders")")
+                            .font(.footnote.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                LabeledContent("Shipping you pay") {
+                    Text("\(SellingCostsKey.fieldText(rates.shippingBasisPoints))%")
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack {
+                Text("Rate for projections")
+                Spacer()
+                TextField(SellingCostsKey.fieldText(rates.totalBasisPoints), text: $costOverride)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .font(.body.monospacedDigit())
+                    .frame(maxWidth: 90)
+                Text("%").foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Fees")
+        } footer: {
+            Text("Read from your own orders. Fees and shipping together come to \(SellingCostsKey.fieldText(rates.totalBasisPoints))%, which the grading projection uses. Type a rate to override it; clear the field to go back.")
         }
     }
 

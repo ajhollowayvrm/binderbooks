@@ -178,10 +178,50 @@ two totals. `All`, `In`, and `Out` filter it, and that control lives inside the
 list because it belongs to the list.
 
 **Summary** answers "how am I actually doing", which a list of transactions
-cannot. Four sections: the realized gain with the count of orders it covers, the
+cannot. Five sections: the realized gain with the count of orders it covers, the
 periodic P&L (`revenue − COGS − expenses`, with `COGS = beginning + purchases −
-ending`), what he holds at cost and at market, and the cash totals that used to
-sit on top of Activity.
+ending`), the grading outlook below, what he holds at cost and at market, and the
+cash totals that used to sit on top of Activity.
+
+### If everything grades 10
+
+40 cards are out at PSA and CGC with $3,233.77 in them, and the question that
+follows is whether the best case clears the hole. The section answers it from his
+own comps and his own fee rate, with a picker for 10, 9, 8, or his lowest figure.
+
+```
+profitAfter    = profitToday + net − cost
+breakEvenNet   = cost − profitToday
+```
+
+Selling a card moves its proceeds into revenue and takes its cost out of ending
+inventory, so the whole scenario is one addition rather than a second P&L.
+
+Three things it gets right that are easy to get wrong:
+
+- **"Priced at this grade" is the honesty of the section.** Coverage moves with the
+  grade — 32 of 40 carry a figure at 10, only 23 at 9 — because 14 CGC cards have a
+  `CGC 10` and 5 have a `CGC 9`. Without the count, a gap in his comps reads as a
+  collapse in value.
+- **A card with no figure at that grade counts as nothing**, never as the raw
+  print's price. A slab projection and an ungraded catalogue price are different
+  numbers and must not be added together.
+- **`GradedComps.value(at:for:in:)` matches on the parsed grade number**, so
+  "CGC Pristine 10" and "CGC 10" compete and the better one wins. No card in his
+  store carries a Pristine figure, so a lookup keyed on the head of `cgcGrades`
+  would answer nil for every CGC card.
+
+### Selling costs
+
+`SellingCosts` is basis points, `Int`, so the projection never picks up float drift
+on the way to a cents figure. `ChannelRates.derived(from:)` reads the rate off his
+own 131 orders rather than asking him to type one — TCGplayer 10.40%, eBay 14.44%,
+and 3.22% of gross in shipping he pays. Settings shows each channel and takes one
+override for the projection; clearing the field goes back to the derived blend.
+
+The blend is 17.69%, and one $1,150 local sale at 18.69% is a third of his lifetime
+gross, so it pulls the figure up. That is why the override exists and why Settings
+lists the channels rather than only the blend.
 
 Every figure covers the whole business. Nothing is broken down by vendor, set,
 product, or channel — decision 23 in `docs/00-brief.md`, amended 2026-09-11 to
@@ -198,7 +238,11 @@ Two things the arithmetic gets right and are easy to get wrong:
   ending inventory at the same time.
 - **Grading is capitalised** into `OwnedCard.gradingBasisCents`, so a submission's
   cost counts as a purchase *and* comes back in ending inventory for every card
-  still held. Both sides, or neither.
+  still held. Both sides, or neither. `Allocation.capitalise` runs at **send**, not
+  only at return: the P&L counts a submission in purchases from the moment it
+  exists, so a fee that is not also in ending inventory reads as a straight loss
+  for as long as the cards are away. `GradingReturnSheet` re-allocates and
+  overwrites with the real invoice.
 
 `BusinessExpense` covers mailers, toploaders, postage, and the Card Ladder
 subscription — costs that hit the books and attach to no card. `category` and
@@ -238,7 +282,8 @@ The simulator cannot type or tap for a script, so debug builds read these on lau
 | `CT_SELECT_ALL=1` | Enters selection with every row ticked. |
 | `CT_SLAB_NEWEST="psa\|12345678\|10"` | Stamps that grader, cert, and grade on the newest card, so it renders as a slab. |
 | `CT_PROJECT_NEWEST="psa\|12000,4000,2500"` | Tags the newest card "at PSA" and fills its top comps in cents, so its price shows as a range. |
-| `CT_OPEN_LEDGER` | `1` for the ledger, `summary` for the Summary tab, `in` or `out` for one side of Activity, `add` for the add sheet, `sale`, `purchase`, or `expense` for the newest of each. |
+| `CT_OPEN_LEDGER` | `1` for the ledger, `summary` for the Summary tab, `outlook` for Summary scrolled to the grading outlook, `in` or `out` for one side of Activity, `add` for the add sheet, `sale`, `purchase`, or `expense` for the newest of each. |
+| `CT_GRADE` | `10`, `9`, `8`, or `Low` — which segment the grading outlook opens on. |
 | `CT_IMPORT_FILE=<path>` | Merges a collection file, so a simulator can hold his real books without the file picker. |
 | `CT_OPEN_INVENTORY=1` | Deprecated. Inventory is the landing screen, so this only clears the query and pops to the root. |
 

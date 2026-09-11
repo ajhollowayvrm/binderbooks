@@ -88,6 +88,9 @@ struct SendToGraderSheet: View {
             modelContext.insert(GradingEntry(submission: submission, card: card))
         }
         Allocation.allocate(submission)
+        // The fee lands on the cards now, not when they come back. The return
+        // sheet re-allocates and overwrites these with the real invoice.
+        Allocation.capitalise(submission)
         CardTagEditor(context: modelContext).add(ReservedTag.atGrader(grader), to: cards)
         try? modelContext.save()
         onSent()

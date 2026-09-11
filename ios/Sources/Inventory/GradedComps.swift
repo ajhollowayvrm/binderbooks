@@ -26,6 +26,31 @@ enum GradedComps {
         return low...high
     }
 
+    /// The best figure he has for that grader at that grade number.
+    ///
+    /// "CGC Pristine 10" and "CGC 10" are both grade 10, so the better of the
+    /// two wins. That is what "everything 10s or Pristines" means, and it is why
+    /// this matches on the parsed number rather than on a key from `cgcGrades`:
+    /// no card in his store carries a "CGC Pristine 10" figure, so a lookup
+    /// keyed on the head of that ladder would answer nil for every CGC card.
+    ///
+    /// Nil when he has entered nothing at that grade. A caller must count that
+    /// card as unpriced, never fall back to the raw print's price — a slab
+    /// projection and an ungraded catalogue price are not the same number.
+    static func value(at grade: Double, for grader: String, in comps: [String: Int]) -> Int? {
+        let prefix = grader.lowercased() + " "
+        return comps.compactMap { key, cents -> Int? in
+            guard key.lowercased().hasPrefix(prefix), gradeNumber(key) == grade else { return nil }
+            return cents
+        }.max()
+    }
+
+    /// His lowest figure for that grader, whatever grade it hangs off. The
+    /// worst case he has actually priced.
+    static func lowest(for grader: String, in comps: [String: Int]) -> Int? {
+        values(for: grader, in: comps).min()
+    }
+
     /// The comps key for a grade a card actually carries: "cgc" and
     /// "Pristine 10" name the "CGC Pristine 10" figure.
     static func compKey(grader: String, grade: String) -> String {
