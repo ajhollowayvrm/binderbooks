@@ -16,7 +16,31 @@ struct ScanObservation: Equatable, Sendable {
     /// From a slab label barcode. Set alone; slabs are read by barcode, not OCR.
     var certNumber: String?
     var grader: String?
+    /// True when the frame held Japanese script.
+    ///
+    /// The catalog files a Japanese card under its English name, so the name
+    /// printed on the card can never agree with it. The script is therefore the
+    /// only thing that says "this card is Japanese", and the matcher needs that:
+    /// 034/190 is a card in the English catalogue and a different card in the
+    /// Japanese one.
+    var sawJapaneseText = false
+    /// The artwork signature of the card in the frame.
+    ///
+    /// Set when the rectifier found a card and Vision could sign it. The
+    /// matcher compares it against the artwork of each candidate, which is the
+    /// only signal that separates two cards holding one number, and the only
+    /// one that sees the foil pattern.
+    var artDescriptor: [Int8]?
+    /// How sharp the frame was that the signature came from.
+    ///
+    /// Kept beside the signature because the accumulator has to choose between
+    /// several: over a second of frames the card is in focus for some of them
+    /// and not others, and the sharpest is the one worth comparing. Blur is the
+    /// only thing that measurably costs artwork accuracy.
+    var artSharpness: Double = 0
 
+    /// Text is still what makes an observation worth logging. A frame that held
+    /// a card but no readable text has nothing to look the card up by yet.
     var isEmpty: Bool { number == nil && name == nil && certNumber == nil }
 }
 
@@ -76,7 +100,25 @@ enum FrameInterpreter {
 
         observation.nameCandidates = nameCandidates(items, excluding: numberID)
         observation.name = observation.nameCandidates.first
+        observation.sawJapaneseText = transcripts.contains(where: isJapanese)
         return (observation, numberID)
+    }
+
+    /// True when the text holds kana or a CJK ideograph. An English card prints
+    /// none of them, so one is proof the card is Japanese.
+    static func isJapanese(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x3040...0x309F,   // hiragana
+                 0x30A0...0x30FF,   // katakana
+                 0x3400...0x4DBF,   // CJK extension A
+                 0x4E00...0x9FFF,   // CJK unified ideographs
+                 0xFF66...0xFF9D:   // half-width katakana
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     /// The name shares its line with the HP on a Pokémon card, and VisionKit

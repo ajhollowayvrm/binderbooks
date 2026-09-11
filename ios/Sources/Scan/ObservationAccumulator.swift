@@ -19,7 +19,10 @@ struct ObservationAccumulator {
     private var readings: [(observation: ScanObservation, at: Date)] = []
 
     mutating func add(_ observation: ScanObservation, now: Date = Date()) {
-        guard !observation.isEmpty else { return }
+        // A frame that only signed the artwork still counts. Text runs on its
+        // own slower cadence, so most frames carry a signature and no words,
+        // and dropping them would throw away every sharp look at the card.
+        guard !observation.isEmpty || observation.artDescriptor != nil else { return }
         readings.append((observation, now))
         prune(now: now)
     }
@@ -59,6 +62,20 @@ struct ObservationAccumulator {
             .prefix(FrameInterpreter.nameCandidateLimit)
             .map { $0 }
         merged.name = merged.nameCandidates.first
+        // One frame is enough. Japanese script is never a misread of an English
+        // card, and glare hides the kana far more often than it invents it.
+        merged.sawJapaneseText = live.contains { $0.observation.sawJapaneseText }
+
+        // The sharpest signature in the window, not the most recent and not the
+        // most agreed. Signatures are not votes: a blurred frame and a sharp
+        // one do not average into a better reading of the artwork, and the
+        // sharp one is simply the right answer.
+        if let sharpest = live
+            .filter({ $0.observation.artDescriptor != nil })
+            .max(by: { $0.observation.artSharpness < $1.observation.artSharpness }) {
+            merged.artDescriptor = sharpest.observation.artDescriptor
+            merged.artSharpness = sharpest.observation.artSharpness
+        }
         return merged
     }
 

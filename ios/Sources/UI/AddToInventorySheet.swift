@@ -37,9 +37,10 @@ struct AddToInventorySheet: View {
     private var costCents: Int? { Money.cents(from: costText) }
     private var printings: [String] { detail.prices.map(\.subTypeName) }
 
+    /// Only the quantity is required. A vendor, a date, and a cost are all
+    /// optional, because he adds cards he was given as often as cards he bought.
     private var canSave: Bool {
-        if case .new = choice, vendor.trimmingCharacters(in: .whitespaces).isEmpty { return false }
-        return quantity > 0
+        quantity > 0 && (costText.isEmpty || costCents != nil)
     }
 
     var body: some View {
@@ -68,7 +69,7 @@ struct AddToInventorySheet: View {
                         }
                     }
                     if case .new = choice {
-                        TextField("Vendor, e.g. Walmart", text: $vendor)
+                        TextField("Vendor, e.g. Walmart — optional", text: $vendor)
                             .textInputAutocapitalization(.words)
                         DatePicker("Bought", selection: $date, displayedComponents: .date)
                     }

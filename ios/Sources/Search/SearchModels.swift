@@ -90,6 +90,12 @@ struct SearchHit: Identifiable, Hashable, Sendable {
     var priceLabel: String? { topMarketCents?.asCurrency }
 }
 
+/// TCGplayer's category ids. The source fixes them, so the app may name them.
+enum TCGCategory {
+    static let pokemon = 3
+    static let pokemonJapan = 85
+}
+
 struct SetSummary: Identifiable, Hashable, Sendable {
     var groupId: Int
     var categoryId: Int

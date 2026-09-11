@@ -36,6 +36,64 @@ jobs:
         env:
           CATALOG_RELEASE_URL: https://github.com/${{ github.repository }}/releases/download/catalog-latest/catalog.sqlite.gz
 
+      - name: Hand the unsigned catalog to the signing job
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog-unsigned
+          # The raw database only. The signing job changes it, so the gzip
+          # built here would be thrown away; it repacks at the end.
+          path: |
+            build/catalog.sqlite
+            build/catalog-manifest.json
+            build/build-report.md
+          retention-days: 1
+
+  # Artwork signatures, which is how the scanner tells two cards with one number
+  # apart, reads a Japanese card whose name the catalog files in English, and
+  # sees the foil pattern. Vision's feature print needs the neural engine, so
+  # this half cannot run on the Linux runner.
+  sign:
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: catalog-unsigned
+          path: build
+
+      - name: Carry yesterday's signatures forward
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Only what is new has to be signed. A full build is over an hour; a
+          # night's new products are a few minutes.
+          if gh release download catalog-latest --repo "$GITHUB_REPOSITORY" \
+               --pattern catalog.sqlite.gz --dir previous 2>/dev/null; then
+            gunzip previous/catalog.sqlite.gz
+            python3 catalog/merge_descriptors.py --new build/catalog.sqlite --old previous/catalog.sqlite
+          else
+            echo "no previous catalog, so every product is new"
+          fi
+
+      - name: Build the signing tool
+        run: |
+          swiftc -O catalog/build_descriptors.swift ios/Sources/Scan/CardArtDescriptor.swift \
+            -o build/build-descriptors
+
+      - name: Sign the new products
+        run: ./build/build-descriptors --catalog build/catalog.sqlite --workers 12
+
+      - name: Repack
+        run: |
+          set -euo pipefail
+          # The manifest carries the checksum the app verifies, so it is
+          # rewritten against the file that is actually published.
+          gzip -9 -k -f build/catalog.sqlite
+          python3 catalog/build_catalog.py --out build --restamp
+
       - name: Publish to release catalog-latest
         env:
           GH_TOKEN: ${{ github.token }}

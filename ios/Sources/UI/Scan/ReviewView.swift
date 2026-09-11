@@ -53,17 +53,28 @@ struct ReviewView: View {
             }
             ToolbarItemGroup(placement: .bottomBar) {
                 if editMode.isEditing {
-                    Button("Condition") { action = .condition }.disabled(selection.isEmpty)
-                    Button("Printing") { action = .printing }.disabled(selection.isEmpty)
-                    Button("Set") { action = .set }.disabled(selection.isEmpty)
-                    Button("Cost") { action = .cost }.disabled(selection.isEmpty)
-                    Button("Tag") { tagTarget = TagSheetTarget(cards: selectedCards) }.disabled(selection.isEmpty)
-                    Menu("More") {
+                    // Icons, not words. Five titles and a menu were wider than
+                    // the bar, and the bar clipped the last of them.
+                    bulkButton("Condition", "checkmark.seal") { action = .condition }
+                    bulkButton("Printing", "sparkles") { action = .printing }
+                    bulkButton("Set", "rectangle.stack") { action = .set }
+                    bulkButton("Cost", "dollarsign.circle") { action = .cost }
+                    bulkButton("Tag", "tag") { tagTarget = TagSheetTarget(cards: selectedCards) }
+                    Menu {
                         Button("Mark bulk") { model.setBulk(true, for: selectedCards) }
                         Button("Unmark bulk") { model.setBulk(false, for: selectedCards) }
                         Button("Delete", role: .destructive) { action = .delete }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                     }
                     .disabled(selection.isEmpty)
+                    Spacer()
+                    Text("\(selection.count) selected")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        // The bar squeezes the middle item first, and "3 se…"
+                        // is not a count.
+                        .fixedSize()
                 } else {
                     Button("Discard session", role: .destructive) { showDiscard = true }
                     Spacer()
@@ -101,6 +112,17 @@ struct ReviewView: View {
         } message: {
             Text("\(reassignMissed) cards have no matching number in that set.")
         }
+    }
+
+    /// One bulk action in the bottom bar. The title stays as the accessibility
+    /// label and as the long-press tooltip, so the icon is not the only clue.
+    private func bulkButton(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+        }
+        .accessibilityLabel(title)
+        .help(title)
+        .disabled(selection.isEmpty)
     }
 
     private var filterRow: some View {

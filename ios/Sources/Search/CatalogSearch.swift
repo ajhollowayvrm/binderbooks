@@ -144,6 +144,45 @@ struct CatalogSearch: Sendable {
         }
     }
 
+    /// Artwork signatures for the given products, keyed by productId.
+    ///
+    /// An id that comes back missing has no artwork, which is ordinary:
+    /// TCGplayer serves no image for about one product in forty, and for most
+    /// of the pattern printings. The matcher treats a missing signature as no
+    /// evidence rather than as evidence against.
+    func artDescriptors(for ids: [Int]) async throws -> [Int: [Int8]] {
+        guard !ids.isEmpty else { return [:] }
+        return try await database.asyncRead { db in
+            try Self.artDescriptors(db, ids: ids)
+        }
+    }
+
+    static func artDescriptors(_ db: Database, ids: [Int]) throws -> [Int: [Int8]] {
+        guard !ids.isEmpty, try hasArtwork(db) else { return [:] }
+        let placeholders = ids.map { String($0) }.joined(separator: ",")
+        var out: [Int: [Int8]] = [:]
+        for row in try Row.fetchAll(db, sql: "SELECT productId, descriptor FROM productArt WHERE productId IN (\(placeholders))") {
+            let data: Data = row["descriptor"]
+            if let descriptor = CardArtDescriptor.descriptor(from: data) {
+                out[row["productId"]] = descriptor
+            }
+        }
+        return out
+    }
+
+    /// True when this catalog carries artwork the app can actually compare.
+    ///
+    /// A catalog built before the signatures existed has no table, and one
+    /// built by a different version of the arithmetic has signatures that mean
+    /// something else. Both answer false, and the scan falls back to its text
+    /// rather than comparing two unlike things.
+    static func hasArtwork(_ db: Database) throws -> Bool {
+        let exists = try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'productArt')") ?? false
+        guard exists else { return false }
+        let version = try String.fetchOne(db, sql: "SELECT value FROM meta WHERE key = 'artFormatVersion'")
+        return version.flatMap(Int.init) == CardArtDescriptor.formatVersion
+    }
+
     /// Every price row for the given products, keyed by productId.
     func prices(for ids: [Int]) async throws -> [Int: [ProductPrice]] {
         guard !ids.isEmpty else { return [:] }

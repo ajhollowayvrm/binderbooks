@@ -110,8 +110,8 @@ struct ScanSessionView: View {
     private func viewfinder(_ model: ScanSessionModel) -> some View {
         ZStack(alignment: .bottom) {
             #if os(iOS)
-            if ScannerView.isSupported {
-                ScannerView(
+            if CameraScannerView.isSupported {
+                CameraScannerView(
                     isActive: correcting == nil && !showReview,
                     mode: scanMode,
                     captureCount: captureCount,

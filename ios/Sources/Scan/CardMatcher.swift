@@ -43,6 +43,19 @@ struct CardMatcher: Sendable {
     static let agreementBonus = 0.2
     static let olderBias = 0.15
     static let candidateCap = 12
+    /// What artwork agreement is worth against a name. Roughly the same, by
+    /// design: neither signal is allowed to overrule the other on its own.
+    static let artWeight = 1.2
+    /// How much nearer one pattern printing must be than its sibling before the
+    /// scanner picks for him instead of asking. The printings sit about 0.5
+    /// apart at the reference, so a real capture clears this comfortably or the
+    /// light was too poor to judge.
+    static let artFamilyGap: Float = 0.15
+    /// The bar for asserting *which printing*, as against which card. Tighter
+    /// than `sameCard` on purpose: the printings of one card sit about 0.5
+    /// apart, so a distance that comfortably says "this is a Snivy" says
+    /// nothing at all about which of the three Snivys it is.
+    static let artSamePrinting: Float = 0.40
 
     func match(_ observation: ScanObservation, session bias: [Int], defaultPrinting: String?) async throws -> MatchResult {
         try await database.asyncRead { db in
@@ -66,12 +79,44 @@ struct CardMatcher: Sendable {
         for hit in nameHits where !numberIds.contains(hit.productId) {
             merged.append(hit)
         }
+
+        // He is holding a Japanese card, so only a Japanese product can be the
+        // answer. Without this the number decides alone, and 034/190 is a
+        // Feebas in the Japanese catalogue and a different card in the English
+        // one. The reverse rule is unsafe and is not applied: glare can hide
+        // every kana on the card, and then only the number survives.
+        if observation.sawJapaneseText {
+            let japanese = merged.filter { $0.categoryId == TCGCategory.pokemonJapan }
+            if !japanese.isEmpty { merged = japanese }
+        }
+
         guard !merged.isEmpty else {
             return MatchResult(productId: nil, confidence: .uncertain, candidates: [], printing: defaultPrinting ?? "", printingGuessed: false)
         }
 
+        // What the card in the frame looks like, against what each candidate is
+        // supposed to look like. This is the signal text cannot give: two cards
+        // can carry one number, a Japanese name is never the name the catalog
+        // holds, and the pattern printings differ only in the foil across them.
+        let references = observation.artDescriptor == nil
+            ? [:]
+            : try CatalogSearch.artDescriptors(db, ids: merged.map(\.productId))
+
+        func artDistance(of hit: SearchHit) -> Float? {
+            guard let seen = observation.artDescriptor, let reference = references[hit.productId] else { return nil }
+            return CardArtDescriptor.distance(seen, reference)
+        }
+
         let scored = merged.map { hit -> Candidate in
-            let similarity = cleanedName.map { Similarity.dice($0, hit.cleanName) } ?? 0
+            // Against the catalog's name, and against the name actually printed
+            // on the card. They differ for a variant: the card says "Snivy" and
+            // the catalog says "Snivy (Poke Ball Pattern)". Scoring only the
+            // catalog's name punished every variant for a qualifier that is not
+            // printed anywhere on it, which handed the plain card a win the
+            // camera had not given it.
+            let similarity = cleanedName.map { name in
+                max(Similarity.dice(name, hit.cleanName), Similarity.dice(name, printedName(of: hit)))
+            } ?? 0
             var score = similarity
             if let index = bias.firstIndex(of: hit.groupId) {
                 score += index < 3 ? recentBias : olderBias
@@ -86,11 +131,31 @@ struct CardMatcher: Sendable {
             let fromNumber = numberIds.contains(hit.productId)
             let fromName = nameIds.contains(hit.productId)
             if fromNumber, fromName { score += agreementBonus }
-            return Candidate(hit: hit, score: score, similarity: similarity, fromNumber: fromNumber, fromName: fromName)
+
+            // Artwork agreement, worth about what a name is worth. A candidate
+            // with no reference image scores nothing here and is neither helped
+            // nor punished: one product in forty has no image, and "we cannot
+            // see it" is not "it is wrong".
+            let distance = artDistance(of: hit)
+            if let distance {
+                score += Double(max(0, CardArtDescriptor.plausible - distance)) * artWeight
+            }
+            return Candidate(
+                hit: hit, score: score, similarity: similarity,
+                fromNumber: fromNumber, fromName: fromName, artDistance: distance
+            )
         }.sorted { $0.score > $1.score }
 
         let ordered = scored.map(\.hit)
         let top = scored[0]
+
+        // Artwork can rescue a card whose text is a mess. When the camera
+        // agrees with exactly one candidate, and with no other, the misread
+        // name and the ambiguous number stop deciding anything. This is the
+        // Japanese card whose name the catalog files in English, and the card
+        // photographed through glare that read as nonsense.
+        let agreeing = scored.filter { ($0.artDistance ?? .greatestFiniteMagnitude) <= CardArtDescriptor.sameCard }
+        let artIsDecisive = agreeing.count == 1 && agreeing[0].hit.productId == top.hit.productId
 
         // A weak name must never beat the number.
         //
@@ -100,7 +165,7 @@ struct CardMatcher: Sendable {
         // came back as a Japanese trainer. docs/03: a name the catalog does not
         // hold cannot overrule the number, because glare and attack text
         // produce readings like that and the number is still right.
-        if cleanedName != nil, !top.fromNumber, top.similarity < nameOnlyAgreement {
+        if cleanedName != nil, !top.fromNumber, top.similarity < nameOnlyAgreement, !artIsDecisive {
             // The number's cards lead the chip. He is far likelier to want one
             // of those than the card a misread name dragged in.
             let byNumber = scored.filter(\.fromNumber)
@@ -124,7 +189,7 @@ struct CardMatcher: Sendable {
         // Nothing he read agrees with anything on offer. Assign no product and
         // let the chip ask. A wrong card that looks confident is worse than a
         // card marked unknown.
-        if cleanedName != nil, scored.count > 1, top.similarity < nameAgreement {
+        if cleanedName != nil, scored.count > 1, top.similarity < nameAgreement, !artIsDecisive {
             return MatchResult(
                 productId: nil,
                 confidence: .uncertain,
@@ -160,6 +225,48 @@ struct CardMatcher: Sendable {
         }
 
         let product = top.hit
+
+        // The pattern variants. Black Bolt prints Snivy three times at 001/086:
+        // plain, Poké Ball pattern, and Master Ball pattern. The three carry the
+        // same name and the same number, and only the artwork behind them
+        // differs, which no reading of the text can see. The plain card wins the
+        // name every time, so a pattern card was logged as the plain one and
+        // looked certain doing it. Ask instead, and lead the chip with the
+        // family so the answer is one tap away.
+        let family = scored.filter { isVariantSibling($0.hit, of: product) }
+        var chipOrder = ordered
+        if family.count > 1 {
+            // Artwork is the one thing that can separate these, and it can: the
+            // Poké Ball printing is stamped across the whole card and reads as a
+            // different picture, not a different word. When every sibling has a
+            // reference image and the nearest is clearly nearer, that is the
+            // answer and he is not asked.
+            //
+            // When it is not clearly nearer, ask. That covers poor light, and it
+            // covers the common case where TCGplayer holds no image for the
+            // pattern printing at all — most of them have none.
+            // A positive identification, not merely the least unlike. The
+            // printings of one card sit about 0.5 apart, so "nearest" is a
+            // coin toss between two cards that are both far away — which is
+            // what a Master Ball scan looks like when only the plain card has
+            // a reference. The top must be much nearer than that, and every
+            // sibling that *has* a reference must be clearly further. A sibling
+            // with no reference is ignored: we cannot see it, and that is not
+            // evidence against it, which is why the bar to its left is tight.
+            let rivals = family.dropFirst().compactMap(\.artDistance)
+            let separated = (top.artDistance ?? .greatestFiniteMagnitude) <= artSamePrinting
+                && rivals.allSatisfy { $0 - (top.artDistance ?? 0) >= artFamilyGap }
+            if separated {
+                // The camera has answered the only question this family raises,
+                // and answered it better than any reading of the text could.
+                if top.fromNumber { confidence = .certain }
+            } else {
+                confidence = .uncertain
+            }
+            let familyIds = Set(family.map(\.hit.productId))
+            chipOrder = family.map(\.hit) + ordered.filter { !familyIds.contains($0.productId) }
+        }
+
         let printings = try availablePrintings(db, productId: product.productId)
         let choice = PrintingRules.choose(available: printings, rarity: product.rarity, sessionDefault: defaultPrinting)
         if choice.guessed && confidence != .uncertain {
@@ -169,10 +276,27 @@ struct CardMatcher: Sendable {
         return MatchResult(
             productId: product.productId,
             confidence: confidence,
-            candidates: Array(ordered.prefix(candidateCap)),
+            candidates: Array(chipOrder.prefix(candidateCap)),
             printing: choice.printing,
             printingGuessed: choice.guessed
         )
+    }
+
+    /// The card's name with any parenthetical qualifier dropped, cleaned the
+    /// same way the catalog's own names are. "Snivy (Poke Ball Pattern)" is
+    /// printed "Snivy", and that is what the camera reads.
+    static func printedName(of hit: SearchHit) -> String {
+        guard let open = hit.name.firstIndex(of: "(") else { return hit.cleanName }
+        return NameCleaner.clean(String(hit.name[hit.name.startIndex..<open]))
+    }
+
+    /// True when two products are the same card printed twice in one set: the
+    /// same set, the same number, and a name that is the other's name plus a
+    /// qualifier. "Snivy" and "Snivy (Poké Ball Pattern)" are such a pair.
+    static func isVariantSibling(_ a: SearchHit, of b: SearchHit) -> Bool {
+        guard a.groupId == b.groupId, let number = a.numberNum, number == b.numberNum else { return false }
+        if a.cleanName == b.cleanName { return true }
+        return a.cleanName.hasPrefix(b.cleanName + " ") || b.cleanName.hasPrefix(a.cleanName + " ")
     }
 
     /// The line that reads best as a card name, and what it found.
@@ -183,9 +307,15 @@ struct CardMatcher: Sendable {
     /// line that names a real card. A line agreeing with the number wins
     /// outright, because that is two signals pointing the same way.
     static func readName(_ db: Database, observation: ScanObservation, numberHits: [SearchHit]) throws -> (String?, [SearchHit]) {
-        let lines = observation.nameCandidates.isEmpty
+        let read = observation.nameCandidates.isEmpty
             ? [observation.name].compactMap { $0 }
             : observation.nameCandidates
+        // A name printed in Japanese cannot match the catalog, which files the
+        // card under its English name. Such a line is not a weak signal, it is
+        // no signal, and scoring it dragged every Japanese card down to
+        // "nothing agrees" and assigned it no product at all. Drop the line and
+        // let the number decide.
+        let lines = read.filter { !FrameInterpreter.isJapanese($0) }
         guard !lines.isEmpty else { return (nil, []) }
 
         // The catalog holds every card name there is, so membership settles it
@@ -229,6 +359,9 @@ struct CardMatcher: Sendable {
         var similarity: Double
         var fromNumber: Bool
         var fromName: Bool
+        /// How far the card in the frame is from this candidate's artwork. Nil
+        /// when the frame held no card, or the catalog holds no image for it.
+        var artDistance: Float?
     }
 
     /// Re-resolve a card inside one set by its number. Used by review's

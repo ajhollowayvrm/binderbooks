@@ -36,6 +36,14 @@ enum Fixture {
         // "promo" but nothing else. A query for a promo card by name must not
         // pull this in just because path A came back thin.
         Product(id: 12, groupId: 106, categoryId: 3, name: "Professional Grade Toploader", number: nil, rarity: nil, sealed: true, prices: [("Normal", 199)]),
+        // The pattern variants. One set prints Snivy three times at the same
+        // number, and the three carry the same printed name.
+        Product(id: 13, groupId: 107, categoryId: 3, name: "Snivy", number: "001/086", rarity: "Common", sealed: false, prices: [("Normal", 30)]),
+        Product(id: 14, groupId: 107, categoryId: 3, name: "Snivy (Poke Ball Pattern)", number: "001/086", rarity: "Common", sealed: false, prices: [("Normal", 250)]),
+        Product(id: 15, groupId: 107, categoryId: 3, name: "Snivy (Master Ball Pattern)", number: "001/086", rarity: "Common", sealed: false, prices: [("Normal", 1_800)]),
+        // An English card holding the number the Japanese Umbreon holds. Only
+        // the script on the card can tell the two apart.
+        Product(id: 16, groupId: 108, categoryId: 3, name: "Tandemaus", number: "020/076", rarity: "Common", sealed: false, prices: [("Normal", 20)]),
     ]
 
     static func make() throws -> DatabaseQueue {
@@ -59,11 +67,14 @@ enum Fixture {
                 (101, 3, 'Base Set', 'BS', '1999-01-09T00:00:00'),
                 (102, 3, 'SWSH: Sword & Shield Promo Cards', 'PR-SW', '2020-02-07T00:00:00'),
                 (103, 85, 'M6: Storm Emeralda', 'M6', '2026-08-01T00:00:00'),
-                (104, 63, 'Timeless Bonds', 'BT-26', '2026-07-01T00:00:00');
+                (104, 63, 'Timeless Bonds', 'BT-26', '2026-07-01T00:00:00'),
+                (107, 3, 'SV: Black Bolt', 'BLK', '2025-07-18T00:00:00'),
+                (108, 3, 'SV: Prismatic Evolutions', 'PRE', '2025-01-17T00:00:00');
             """)
             let setNames = [
             100: "SV03: Obsidian Flames", 101: "Base Set", 102: "SWSH: Sword & Shield Promo Cards",
             103: "M6: Storm Emeralda", 104: "Timeless Bonds", 105: "SV04: Paradox Rift", 106: "SV08: Surging Sparks",
+            107: "SV: Black Bolt", 108: "SV: Prismatic Evolutions",
         ]
             for p in products {
                 let parsed = CollectorNumber.parse(p.number)
@@ -77,9 +88,61 @@ enum Fixture {
                     try db.execute(sql: "INSERT INTO price VALUES (?, ?, ?, ?, ?, ?, NULL, '2026-09-10')", arguments: [p.id, subType, cents, cents, cents, cents])
                 }
             }
+
+            // Artwork signatures. Only some products get one, the way only some
+            // products have an image on TCGplayer.
+            try db.execute(sql: "CREATE TABLE productArt (productId INTEGER PRIMARY KEY, descriptor BLOB NOT NULL);")
+            try db.execute(sql: "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            try db.execute(
+                sql: "INSERT INTO meta (key, value) VALUES ('artFormatVersion', ?)",
+                arguments: [String(CardArtDescriptor.formatVersion)]
+            )
+            for (productId, descriptor) in artwork {
+                try db.execute(
+                    sql: "INSERT INTO productArt VALUES (?, ?)",
+                    arguments: [productId, CardArtDescriptor.data(from: descriptor)]
+                )
+            }
         }
         return queue
     }
+
+    // MARK: - Artwork
+
+    /// A signature, built so the distance to another one is known in advance.
+    ///
+    /// `CardArtDescriptor.distance` is derived from the cosine, so flipping a
+    /// fraction f of the signs puts two vectors 2 * sqrt(f) apart. That makes a
+    /// test able to say "this printing is 1.0 away" instead of hoping.
+    static func artDescriptor(seed: UInt64) -> [Int8] {
+        var rng = SplitMix64(state: seed)
+        return (0..<CardArtDescriptor.dimensions).map { _ in
+            Int8(truncatingIfNeeded: Int(rng.next() % 127) + 1) * ((rng.next() & 1) == 0 ? 1 : -1)
+        }
+    }
+
+    /// The same artwork, moved a known distance away: 2 * sqrt(fraction).
+    static func artDescriptor(_ base: [Int8], movedBy fraction: Double) -> [Int8] {
+        let flips = Int((Double(base.count) * fraction).rounded())
+        return base.enumerated().map { index, value in
+            index < flips ? Int8(clamping: -Int(value)) : value
+        }
+    }
+
+    /// Snivy is printed three times at 001/086 and the three share a name and a
+    /// number, so only the artwork tells them apart. The plain card and the
+    /// Poké Ball printing sit 1.0 apart here, which is what the real thumbnails
+    /// do. The Master Ball printing has no signature at all, because TCGplayer
+    /// serves no image for most of them.
+    static let snivyPlainArt = artDescriptor(seed: 0xA11CE)
+    static let snivyPokeBallArt = artDescriptor(snivyPlainArt, movedBy: 0.25)
+
+    static let artwork: [Int: [Int8]] = [
+        13: snivyPlainArt,
+        14: snivyPokeBallArt,
+        7: artDescriptor(seed: 0xB0B),
+        16: artDescriptor(seed: 0xCAFE),
+    ]
 
     static func search(_ text: String, context: SearchContext = .browsing, filter: SearchFilter = SearchFilter()) throws -> [SearchHit] {
         let queue = try make()

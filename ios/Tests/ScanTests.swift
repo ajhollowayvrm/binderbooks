@@ -89,6 +89,17 @@ import Testing
         #expect(FrameInterpreter.interpret(items).observation.name == "Leafeon V")
     }
 
+    @Test func japaneseScriptIsReported() {
+        let items = [
+            item("ブラッキー", top: 0.05, height: 0.05),
+            item("020/076", top: 0.93, height: 0.02),
+        ]
+        let (observation, _) = FrameInterpreter.interpret(items)
+        #expect(observation.sawJapaneseText)
+        #expect(observation.number == "020/076")
+        #expect(!FrameInterpreter.interpret([item("Charizard", top: 0.05, height: 0.05)]).observation.sawJapaneseText)
+    }
+
     @Test func certFromBarcodes() {
         #expect(FrameInterpreter.cert(fromBarcode: "https://www.psacard.com/cert/12345678")?.cert == "12345678")
         #expect(FrameInterpreter.cert(fromBarcode: "https://www.psacard.com/cert/12345678")?.grader == "psa")
@@ -270,6 +281,115 @@ import Testing
     @Test func nothingReadableIsUncertainWithNoProduct() throws {
         let result = try match(ScanObservation(number: nil, name: "Zzzzqq"))
         #expect(result.productId == nil)
+        #expect(result.confidence == .uncertain)
+    }
+
+    /// His report: the scan did badly on the pattern variants. Black Bolt
+    /// prints Snivy three times at 001/086, and all three print the same name,
+    /// so the plain card won the name every time and looked certain doing it.
+    /// Only the artwork differs, and no reading of the text can see artwork.
+    @Test func patternVariantsAskInsteadOfAssertingThePlainCard() throws {
+        let result = try match(ScanObservation(number: "001/086", name: "Snivy"))
+        #expect(result.confidence == .uncertain)
+        // The whole family leads the chip, so the answer is one tap away.
+        #expect(Set(result.candidates.prefix(3).map(\.productId)) == [13, 14, 15])
+    }
+
+    /// A card with no variant sibling is untouched by the rule.
+    @Test func aCardPrintedOnceStaysCertain() throws {
+        let result = try match(ScanObservation(number: "125/197", name: "Charizard ex"))
+        #expect(result.confidence == .certain)
+    }
+
+    /// His report: the scan did badly on Japanese cards. The catalog files a
+    /// Japanese card under its English name, so the name on the card can never
+    /// agree, and the disagreement threw the match away. The script itself says
+    /// the card is Japanese, and 020/076 is one card in that catalogue and
+    /// another card in the English one.
+    @Test func japaneseScriptKeepsTheMatchInTheJapaneseCatalogue() throws {
+        var observation = ScanObservation(number: "020/076", name: "ブラッキー")
+        observation.sawJapaneseText = true
+        let result = try match(observation)
+        #expect(result.productId == 7)
+        #expect(result.confidence == .certain)
+    }
+
+    /// The rule runs one way only. Glare can hide every kana on the card, and
+    /// then the number is all that is left, so a frame with no Japanese in it
+    /// must not rule the Japanese catalogue out.
+    @Test func noJapaneseScriptStillOffersTheJapaneseCard() throws {
+        let result = try match(ScanObservation(number: "020/076"))
+        #expect(result.confidence == .uncertain)
+        #expect(Set(result.candidates.map(\.productId)) == [7, 16])
+    }
+
+    // MARK: - Artwork
+
+    /// The fix for his report. The camera sees the Poké Ball pattern stamped
+    /// across the card, and the catalog knows what that printing looks like, so
+    /// the scanner picks it instead of the plain card and does not ask.
+    @Test func artworkPicksThePatternPrinting() throws {
+        var observation = ScanObservation(number: "001/086", name: "Snivy")
+        observation.artDescriptor = Fixture.snivyPokeBallArt
+        let result = try match(observation)
+        #expect(result.productId == 14)
+        #expect(result.confidence == .certain)
+    }
+
+    /// And the other way. The plain card must not be dragged to the printing
+    /// just because the printing is worth sixty times as much.
+    @Test func artworkPicksThePlainCard() throws {
+        var observation = ScanObservation(number: "001/086", name: "Snivy")
+        observation.artDescriptor = Fixture.snivyPlainArt
+        let result = try match(observation)
+        #expect(result.productId == 13)
+        #expect(result.confidence == .certain)
+    }
+
+    /// TCGplayer has no image for most pattern printings, so for most of them
+    /// the artwork cannot decide. It must still ask rather than guess: the
+    /// Master Ball printing here has no signature.
+    @Test func withoutAReferenceThePatternStillAsks() throws {
+        var observation = ScanObservation(number: "001/086", name: "Snivy")
+        observation.artDescriptor = Fixture.artDescriptor(seed: 0xDEAD)
+        let result = try match(observation)
+        #expect(result.confidence == .uncertain)
+        #expect(Set(result.candidates.prefix(3).map(\.productId)) == [13, 14, 15])
+    }
+
+    /// A Japanese card, where the name on the card can never match the English
+    /// name the catalog holds. Artwork is the whole of the evidence, and it is
+    /// enough.
+    @Test func artworkIdentifiesACardWhoseNameCannotMatch() throws {
+        var observation = ScanObservation(number: "020/076", name: "ブラッキー")
+        observation.sawJapaneseText = true
+        observation.artDescriptor = Fixture.artwork[7]
+        let result = try match(observation)
+        #expect(result.productId == 7)
+        #expect(result.confidence == .certain)
+    }
+
+    /// Artwork that agrees with nothing decides nothing. A card in a sleeve
+    /// under bad light must not be dragged to whichever candidate happens to be
+    /// least unlike it.
+    @Test func artworkThatAgreesWithNothingChangesNothing() throws {
+        var observation = ScanObservation(number: "020/076")
+        observation.artDescriptor = Fixture.artDescriptor(seed: 0xFACE)
+        let result = try match(observation)
+        #expect(result.confidence == .uncertain)
+        #expect(Set(result.candidates.map(\.productId)) == [7, 16])
+    }
+
+    /// A catalog built before the signatures existed, or by a different version
+    /// of the arithmetic, must be ignored rather than compared against.
+    @Test func aCatalogWithNoArtworkIsHarmless() throws {
+        let queue = try Fixture.make()
+        try queue.write { db in try db.execute(sql: "UPDATE meta SET value = '99' WHERE key = 'artFormatVersion'") }
+        var observation = ScanObservation(number: "001/086", name: "Snivy")
+        observation.artDescriptor = Fixture.snivyPokeBallArt
+        let result = try queue.read { db in
+            try CardMatcher.match(db, observation: observation, bias: [], defaultPrinting: nil)
+        }
         #expect(result.confidence == .uncertain)
     }
 

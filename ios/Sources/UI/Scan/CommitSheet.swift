@@ -4,6 +4,11 @@ import SwiftUI
 /// Attach the session to a purchase. Pick a recent one, or create one inline:
 /// vendor, date, total, note. That is the whole form.
 ///
+/// Every field is optional. A blank form commits the cards with no purchase at
+/// all, because he logs cards he was given, cards he traded for, and cards
+/// whose cost he does not want to type tonight. A vendor with no total records
+/// the purchase at zero, and he can set the total later in the ledger.
+///
 /// A session started from a purchase arrives with that purchase already chosen,
 /// because he opened the pack from it and there is nothing left to ask.
 struct CommitSheet: View {
@@ -41,8 +46,24 @@ struct CommitSheet: View {
         }
         return "\(manual.asCurrency) is already set on \(model.pricedCardCount) cards. The remaining \((total - manual).asCurrency) splits over \(unpricedCount)."
     }
+    /// True when he typed something that describes a purchase. A blank form
+    /// makes no purchase, so the cards commit on their own.
+    private var makesPurchase: Bool {
+        !vendor.trimmingCharacters(in: .whitespaces).isEmpty
+            || !note.trimmingCharacters(in: .whitespaces).isEmpty
+            || !totalText.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// The only thing that can block a commit is a total he typed wrong.
     private var canCommit: Bool {
-        existing != nil || (!vendor.trimmingCharacters(in: .whitespaces).isEmpty && totalCents != nil)
+        existing != nil || totalText.isEmpty || totalCents != nil
+    }
+
+    private var commitNote: String {
+        if existing != nil { return "The cards join that purchase." }
+        if !makesPurchase { return "No purchase. The cards join the inventory with no cost, and the ledger does not change." }
+        if totalCents == nil { return "A purchase at \(0.asCurrency). Set the total later in the ledger." }
+        return splitNote
     }
 
     var body: some View {
@@ -76,9 +97,9 @@ struct CommitSheet: View {
                     TextField("Note", text: $note, axis: .vertical)
                         .disabled(existing != nil)
                 } header: {
-                    Text("New purchase")
+                    Text("New purchase — optional")
                 } footer: {
-                    if model.pricedCardCount > 0 { Text(splitNote) }
+                    Text(commitNote)
                 }
 
                 if !purchases.isEmpty {
@@ -123,13 +144,20 @@ struct CommitSheet: View {
     }
 
     private func commit() {
-        let purchase: Purchase
+        let purchase: Purchase?
         if let existing {
             purchase = existing
+        } else if makesPurchase {
+            let created = Purchase(
+                date: date,
+                vendor: vendor.trimmingCharacters(in: .whitespaces),
+                note: note,
+                itemCostCents: totalCents ?? 0
+            )
+            modelContext.insert(created)
+            purchase = created
         } else {
-            guard let cents = totalCents else { return }
-            purchase = Purchase(date: date, vendor: vendor.trimmingCharacters(in: .whitespaces), note: note, itemCostCents: cents)
-            modelContext.insert(purchase)
+            purchase = nil
         }
         model.commit(to: purchase)
         onDone()

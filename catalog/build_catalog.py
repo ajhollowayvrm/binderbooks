@@ -520,6 +520,32 @@ def gzip_file(src: Path, dst: Path) -> None:
         shutil.copyfileobj(fin, fout)
 
 
+def restamp(out: Path) -> int:
+    """Recompute the manifest's size and checksum for the file on disk.
+
+    The artwork signatures are added after this job runs, on a macOS runner,
+    because Vision's feature print needs the neural engine. That changes the
+    SQLite file and so the gzip, and the app refuses a download whose checksum
+    does not match the manifest. Everything else the manifest says — the product
+    count, the categories, the build time — is still true.
+    """
+    gz_path = out / "catalog.sqlite.gz"
+    manifest_path = out / "catalog-manifest.json"
+    if not gz_path.exists():
+        print(f"no catalog at {gz_path}", file=sys.stderr)
+        return 1
+    if not manifest_path.exists():
+        print(f"no manifest at {manifest_path}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_path.read_text())
+    manifest["sizeBytes"] = gz_path.stat().st_size
+    manifest["sha256"] = sha256_of(gz_path)
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"restamped: {manifest['sizeBytes'] / 1e6:.1f} MB, sha256 {manifest['sha256'][:12]}…")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default="build", help="output directory")
@@ -528,9 +554,17 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("CATALOG_RELEASE_URL", ""),
         help="download URL written into the manifest",
     )
+    ap.add_argument(
+        "--restamp",
+        action="store_true",
+        help="only recompute the manifest's size and checksum for the file on disk",
+    )
     args = ap.parse_args(argv)
 
     out = Path(args.out)
+    if args.restamp:
+        return restamp(out)
+
     out.mkdir(parents=True, exist_ok=True)
     report: list[str] = []
 
