@@ -89,6 +89,33 @@ enum GradeAssumption: String, CaseIterable, Identifiable {
 /// comps and his own fee rate. Nothing here is a forecast — it is arithmetic on
 /// figures he typed.
 struct GradingOutlook: Equatable {
+    /// One card's part of the outlook.
+    ///
+    /// A total he cannot take apart is a total he cannot act on, so the lines
+    /// show which cards carry it and which pull it down. They add up to the
+    /// cent: the selling cost splits over the priced cards by value, so the
+    /// nets sum to `netCents` and the contributions to
+    /// `profitAfterCents − profitTodayCents`.
+    struct Line: Equatable, Identifiable {
+        var cardId: UUID
+        var productId: Int
+        /// Nil when the card's label names no grader the app knows.
+        var grader: String?
+        /// The comp the line priced at, as he keyed it: "PSA 10". Nil when the
+        /// card has no figure at this grade.
+        var compKey: String?
+        var costCents: Int
+        var grossCents: Int?
+        var feeCents = 0
+
+        var id: UUID { cardId }
+        var isPriced: Bool { grossCents != nil }
+        var netCents: Int? { grossCents.map { $0 - feeCents } }
+        /// What the card does to profit after: its net, less what it cost. An
+        /// unpriced card counts as nothing, so it takes away its whole cost.
+        var contributionCents: Int { (netCents ?? 0) - costCents }
+    }
+
     var assumption: GradeAssumption = .ten
     var cardCount = 0
     /// How many of those carry a figure at this grade. It moves with the grade,
@@ -99,6 +126,8 @@ struct GradingOutlook: Equatable {
     var grossCents = 0
     var netCents = 0
     var profitTodayCents = 0
+    /// Every card at the grader, worst contribution first.
+    var lines: [Line] = []
 
     var unpricedCount: Int { cardCount - pricedCount }
     var feeCents: Int { grossCents - netCents }
@@ -123,6 +152,7 @@ extension LedgerSummary {
         costs: SellingCosts
     ) -> GradingOutlook {
         var out = GradingOutlook(assumption: assumption, profitTodayCents: profitTodayCents)
+        var lines: [GradingOutlook.Line] = []
 
         for card in atGrader {
             out.cardCount += 1
@@ -130,17 +160,36 @@ extension LedgerSummary {
 
             // The grader comes from the card's label. `graderRaw` is only set
             // when a card comes back, and these have not.
-            guard let grader = GradedComps.graderAtGrader(tags: card.tags) else { continue }
-            let comps = card.effectiveCompCents
-            let value = assumption.gradeNumber.map { GradedComps.value(at: $0, for: grader, in: comps) }
-                ?? GradedComps.lowest(for: grader, in: comps)
-            guard let value else { continue }
-
-            out.pricedCount += 1
-            out.grossCents += value
+            let grader = GradedComps.graderAtGrader(tags: card.tags)
+            var line = GradingOutlook.Line(cardId: card.id, productId: card.productId, grader: grader, costCents: card.totalBasisCents)
+            if let grader {
+                let comps = card.effectiveCompCents
+                let comp = assumption.gradeNumber.map { GradedComps.comp(at: $0, for: grader, in: comps) }
+                    ?? GradedComps.lowestComp(for: grader, in: comps)
+                if let comp {
+                    line.compKey = comp.key
+                    line.grossCents = comp.cents
+                    out.pricedCount += 1
+                    out.grossCents += comp.cents
+                }
+            }
+            lines.append(line)
         }
 
         out.netCents = costs.net(out.grossCents)
+
+        // The total fee, split over the priced cards by value, so the lines
+        // sum to the section to the cent.
+        let priced = lines.indices.filter { lines[$0].isPriced }
+        let fees = Allocation.splitByWeight(out.feeCents, weights: priced.map { lines[$0].grossCents ?? 0 })
+        for (index, fee) in zip(priced, fees) {
+            lines[index].feeCents = fee
+        }
+        out.lines = lines.sorted {
+            $0.contributionCents == $1.contributionCents
+                ? $0.cardId.uuidString < $1.cardId.uuidString
+                : $0.contributionCents < $1.contributionCents
+        }
         return out
     }
 }
@@ -162,10 +211,16 @@ extension LedgerSummary {
     }
 
     /// A card out at a grader, by either signal, for the same reason.
+    ///
+    /// The label wins. The status is the older signal, and an imported card
+    /// kept `statusRaw` at `atGrader` after "Mark graded" took its label off.
+    /// So the status counts only for a card with no sign it came back: no
+    /// "graded" label and no grade. A slab sent back for a regrade wears the
+    /// label again, so the label check still finds it.
     static func isAtGrader(_ card: OwnedCard) -> Bool {
-        if card.status == .atGrader { return true }
-        return [ReservedTag.atGrader, ReservedTag.atPSA, ReservedTag.atCGC]
-            .contains { CardTagIndex.has($0, on: card) }
+        if ReservedTag.allAtGrader.contains(where: { CardTagIndex.has($0, on: card) }) { return true }
+        guard card.status == .atGrader else { return false }
+        return !CardTagIndex.has(ReservedTag.graded, on: card) && card.gradeLabel == nil
     }
 
     /// Cash and profit, from the money rows alone.

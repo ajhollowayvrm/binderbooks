@@ -12,6 +12,25 @@ enum Allocation {
         return (0..<count).map { $0 < remainder ? base + 1 : base }
     }
 
+    /// Splits `totalCents` in proportion to `weights`, and the shares sum to
+    /// exactly `totalCents`. The cents that rounding leaves go to the largest
+    /// remainders, then to the earliest index. Weights that sum to zero split
+    /// equally. `splitByWeight(100, weights: [1, 1, 1])` is `[34, 33, 33]`.
+    /// `totalCents` must not be negative.
+    static func splitByWeight(_ totalCents: Int, weights: [Int]) -> [Int] {
+        let sum = weights.reduce(0) { $0 + max(0, $1) }
+        guard sum > 0 else { return splitEqually(totalCents, into: weights.count) }
+        var shares = weights.map { totalCents * max(0, $0) / sum }
+        let left = totalCents - shares.reduce(0, +)
+        let order = weights.indices.sorted { a, b in
+            let ra = totalCents * max(0, weights[a]) % sum
+            let rb = totalCents * max(0, weights[b]) % sum
+            return ra == rb ? a < b : ra > rb
+        }
+        for index in order.prefix(max(0, left)) { shares[index] += 1 }
+        return shares
+    }
+
     /// Equal split across a purchase's billable units. A line of 4 copies is 4
     /// shares. Bulk lines are excluded from the denominator.
     ///

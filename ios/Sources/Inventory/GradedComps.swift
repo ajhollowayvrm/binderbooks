@@ -38,17 +38,32 @@ enum GradedComps {
     /// card as unpriced, never fall back to the raw print's price — a slab
     /// projection and an ungraded catalogue price are not the same number.
     static func value(at grade: Double, for grader: String, in comps: [String: Int]) -> Int? {
+        comp(at: grade, for: grader, in: comps)?.cents
+    }
+
+    /// The same figure with the key it came from, so a row can say which comp
+    /// it priced at. On a tie the key that sorts first wins, so two reads of
+    /// the same comps give the same answer.
+    static func comp(at grade: Double, for grader: String, in comps: [String: Int]) -> (key: String, cents: Int)? {
         let prefix = grader.lowercased() + " "
-        return comps.compactMap { key, cents -> Int? in
-            guard key.lowercased().hasPrefix(prefix), gradeNumber(key) == grade else { return nil }
-            return cents
-        }.max()
+        return comps
+            .filter { $0.key.lowercased().hasPrefix(prefix) && gradeNumber($0.key) == grade }
+            .min { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+            .map { (key: $0.key, cents: $0.value) }
     }
 
     /// His lowest figure for that grader, whatever grade it hangs off. The
     /// worst case he has actually priced.
     static func lowest(for grader: String, in comps: [String: Int]) -> Int? {
-        values(for: grader, in: comps).min()
+        lowestComp(for: grader, in: comps)?.cents
+    }
+
+    static func lowestComp(for grader: String, in comps: [String: Int]) -> (key: String, cents: Int)? {
+        let prefix = grader.lowercased() + " "
+        return comps
+            .filter { $0.key.lowercased().hasPrefix(prefix) }
+            .min { $0.value == $1.value ? $0.key < $1.key : $0.value < $1.value }
+            .map { (key: $0.key, cents: $0.value) }
     }
 
     /// The comps key for a grade a card actually carries: "cgc" and

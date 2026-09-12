@@ -189,7 +189,48 @@ struct LedgerSummaryView: View {
                 Text(outlookFootnote(o))
             }
             .id(Self.outlookAnchor)
+
+            Section {
+                DisclosureGroup("Card by card") {
+                    ForEach(o.lines) { line in
+                        NavigationLink(value: AppRoute.ownedCard(line.cardId)) {
+                            outlookRow(line)
+                        }
+                    }
+                }
+            } footer: {
+                Text("Worst first. Each line is what the card nets at this grade, less what it cost. The lines add up to profit after, less profit today. Tap a card to enter its comps.")
+            }
         }
+    }
+
+    private func outlookRow(_ line: GradingOutlook.Line) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(inventory.hits[line.productId]?.name ?? "Unknown")
+                    .lineLimit(1)
+                Text(outlookDetail(line))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(line.isPriced ? Color.secondary : Color.orange)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Text((line.contributionCents >= 0 ? "+" : "−") + abs(line.contributionCents).asCurrency)
+                .font(.body.monospacedDigit())
+                .foregroundStyle(line.contributionCents >= 0 ? Color.green : Color.red)
+        }
+    }
+
+    /// "PSA 10 $120.00 − fees $16.36 · cost $30.00", or why the card counts as
+    /// nothing.
+    private func outlookDetail(_ line: GradingOutlook.Line) -> String {
+        let cost = "cost \(line.costCents.asCurrency)"
+        guard let gross = line.grossCents, let key = line.compKey else {
+            guard let grader = line.grader else { return "No grader on its label, so it counts as $0 · \(cost)" }
+            let wanted = assumption.gradeNumber.map { "\(grader.uppercased()) \(GradingReturnSheet.gradeText($0))" } ?? grader.uppercased()
+            return "No \(wanted) comp, so it counts as $0 · \(cost)"
+        }
+        return "\(key) \(gross.asCurrency) − fees \(line.feeCents.asCurrency) · \(cost)"
     }
 
     private func outlookFootnote(_ o: GradingOutlook) -> String {

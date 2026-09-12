@@ -162,7 +162,17 @@ struct GradingDetailView: View {
         List {
             if let submission = submissions.first {
                 Section {
-                    LabeledContent("Grader", value: submission.graderRaw.uppercased())
+                    Picker("Grader", selection: Binding(
+                        get: { submission.graderRaw.lowercased() },
+                        set: { grader in
+                            GraderCorrection.change(submission, to: grader, context: modelContext)
+                            inventory.invalidateHaystacks()
+                        }
+                    )) {
+                        ForEach(graderChoices(submission), id: \.self) { grader in
+                            Text(grader.isEmpty ? "Unknown" : grader.uppercased()).tag(grader)
+                        }
+                    }
                     if let shipped = submission.shippedAt {
                         LabeledContent("Shipped", value: shipped.formatted(date: .abbreviated, time: .omitted))
                     }
@@ -171,6 +181,10 @@ struct GradingDetailView: View {
                     }
                     if !submission.submissionNumber.isEmpty {
                         LabeledContent("Submission", value: submission.submissionNumber)
+                    }
+                } footer: {
+                    if submission.entries.contains(where: { $0.card != nil }) {
+                        Text("A new grader moves the cards with it: a card still out changes its label, and a returned slab changes its grader.")
                     }
                 }
 
@@ -241,6 +255,13 @@ struct GradingDetailView: View {
         }
     }
 
+    /// The graders a send offers, plus whatever an imported charge already
+    /// names, so the picker always holds the current value.
+    private func graderChoices(_ submission: GradingSubmission) -> [String] {
+        let current = submission.graderRaw.lowercased()
+        return SendToGraderSheet.graders.contains(current) ? SendToGraderSheet.graders : [current] + SendToGraderSheet.graders
+    }
+
     private func gradeText(_ entry: GradingEntry) -> String {
         if entry.noGrade { return "no grade" }
         guard let grade = entry.grade else { return "not back" }
@@ -254,6 +275,7 @@ struct GradingDetailView: View {
         if let card = entry.card {
             let editor = CardTagEditor(context: modelContext)
             for label in ReservedTag.allAtGrader { editor.remove(label, from: [card]) }
+            if card.status == .atGrader { card.status = .owned }
             if card.gradingBasisCents == entry.allocatedFeeCents { card.gradingBasisCents = 0 }
         }
         modelContext.delete(entry)

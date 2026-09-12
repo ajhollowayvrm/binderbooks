@@ -108,6 +108,9 @@ struct MarkGradedSheet: View {
             card.gradeLabel = grade
             card.certNumber = cert.isEmpty ? nil : cert
             for label in ReservedTag.allAtGrader { editor.remove(label, from: [card]) }
+            // An imported card still carries the old status. Clear it too, or
+            // the Summary tab keeps counting the card as out.
+            if card.status == .atGrader { card.status = .gradedReturned }
             editor.add(ReservedTag.graded, to: [card])
         }
         try? modelContext.save()

@@ -209,6 +209,34 @@ import Testing
         #expect(s.atGraderCount == 1)
     }
 
+    /// An imported card keeps `statusRaw` at `atGrader`. "Mark graded" used to
+    /// take off only the label, so the outlook still counted the card and
+    /// showed "No grader on its label" on a card he had graded PSA 10.
+    @Test @MainActor func aCardMarkedGradedIsNoLongerAtTheGrader() throws {
+        let container = try store()
+        let context = container.mainContext
+
+        let card = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .manual)
+        card.status = .atGrader
+        context.insert(card)
+        try context.save()
+        #expect(LedgerSummary.isAtGrader(card))
+
+        // What the store already holds: a grade and the "graded" label, with
+        // the old status left behind.
+        card.graderRaw = "psa"
+        card.gradeLabel = "10"
+        CardTagEditor(context: context).add(ReservedTag.graded, to: [card])
+        try context.save()
+
+        #expect(card.status == .atGrader)
+        #expect(!LedgerSummary.isAtGrader(card))
+
+        // A slab sent back for a regrade wears the label again, and counts.
+        CardTagEditor(context: context).add(ReservedTag.atPSA, to: [card])
+        #expect(LedgerSummary.isAtGrader(card))
+    }
+
     /// `SellSheet` writes the `sold` label and never touches `statusRaw`, so a
     /// card sold in the app still reads `owned` there. A held filter that
     /// trusted the status would count every one of them as inventory.
@@ -537,6 +565,98 @@ import Testing
         #expect(s.profitCents == 10_000)
     }
 
+    /// He sent two cards as PSA, and they went to CGC. The fix must reach the
+    /// label the projection reads and the slab, not only the ledger row.
+    @Test @MainActor func aSubmissionMovedToAnotherGraderTakesItsCards() throws {
+        let container = try store()
+        let context = container.mainContext
+
+        let out = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .manual)
+        out.tags = ["at PSA", "binder 3"]
+        out.gradedCompCents = ["PSA 10": 20_000]
+        context.insert(out)
+        let back = OwnedCard(productId: 2, printing: "Normal", condition: "Near Mint", confidence: .manual)
+        back.graderRaw = "psa"
+        back.gradeLabel = "10"
+        back.tags = ["graded"]
+        context.insert(back)
+        let elsewhere = OwnedCard(productId: 3, printing: "Normal", condition: "Near Mint", confidence: .manual)
+        elsewhere.tags = ["at PSA"]
+        context.insert(elsewhere)
+
+        let submission = GradingSubmission(graderRaw: "psa", shippedAt: day("2026-09-01"), gradingFeesCents: 4_000)
+        context.insert(submission)
+        for card in [out, back] {
+            context.insert(GradingEntry(submission: submission, card: card))
+        }
+        try context.save()
+
+        GraderCorrection.change(submission, to: "CGC", context: context)
+
+        #expect(submission.graderRaw == "cgc")
+        #expect(LedgerEntry.entries(purchases: [], grading: [submission], sales: []).first?.title == "CGC grading")
+        #expect(out.tags == ["at CGC", "binder 3"])
+        #expect(GradedComps.graderAtGrader(tags: out.tags) == "cgc")
+        // A PSA price is not a CGC price, so his figure stays where he typed it.
+        #expect(out.gradedCompCents == ["PSA 10": 20_000])
+        #expect(back.graderRaw == "cgc")
+        #expect(back.tags == ["graded"])
+        #expect(elsewhere.tags == ["at PSA"])
+
+        // The same grader, in any case, and an empty one change nothing.
+        GraderCorrection.change(submission, to: " cgc ", context: context)
+        GraderCorrection.change(submission, to: "", context: context)
+        #expect(submission.graderRaw == "cgc")
+        #expect(out.tags == ["at CGC", "binder 3"])
+
+        // And back again, for a wrong tap.
+        GraderCorrection.change(submission, to: "psa", context: context)
+        #expect(out.tags == ["at PSA", "binder 3"])
+        #expect(back.graderRaw == "psa")
+    }
+
+    /// A total he cannot take apart is a total he cannot act on. The lines show
+    /// which card did what, worst first, and they add up to the cent.
+    @Test @MainActor func theOutlookShowsEachCardAndAddsUp() throws {
+        let container = try store()
+        let context = container.mainContext
+        let hit = atGrader(context, grader: "psa", basis: 3_000, comps: ["PSA 10": 50_001, "PSA 9": 9_000])
+        let weak = atGrader(context, grader: "psa", basis: 2_000, comps: ["PSA 10": 1_999])
+        let bare = atGrader(context, grader: "cgc", basis: 1_500, comps: [:])
+
+        let o = LedgerSummary.outlook(
+            assumption: .ten, atGrader: [hit, weak, bare],
+            profitTodayCents: -10_000, costs: SellingCosts(rateBasisPoints: 1_363)
+        )
+
+        // $520.00 gross nets $449.12, so $70.88 of fees split by value.
+        #expect(o.feeCents == 7_088)
+        #expect(o.lines.map(\.cardId) == [bare.id, weak.id, hit.id])
+        #expect(o.lines.map(\.feeCents) == [0, 272, 6_816])
+        #expect(o.lines.reduce(0) { $0 + $1.feeCents } == o.feeCents)
+        #expect(o.lines.reduce(0) { $0 + ($1.netCents ?? 0) } == o.netCents)
+        #expect(o.lines.reduce(0) { $0 + $1.contributionCents } == o.profitAfterCents - o.profitTodayCents)
+
+        let unpriced = try #require(o.lines.first)
+        #expect(unpriced.compKey == nil)
+        #expect(unpriced.grossCents == nil)
+        #expect(unpriced.contributionCents == -1_500)
+        #expect(o.lines.last?.compKey == "PSA 10")
+        #expect(o.lines.last?.contributionCents == 40_185)
+
+        // Low prices a card at its worst figure, and says which one.
+        let low = LedgerSummary.outlook(assumption: .low, atGrader: [hit], profitTodayCents: 0, costs: SellingCosts(rateBasisPoints: 0))
+        #expect(low.lines.first?.compKey == "PSA 9")
+        #expect(low.lines.first?.grossCents == 9_000)
+    }
+
+    @Test func aWeightedSplitSumsBackExactly() {
+        #expect(Allocation.splitByWeight(100, weights: [1, 1, 1]) == [34, 33, 33])
+        #expect(Allocation.splitByWeight(7_088, weights: [50_001, 1_999]) == [6_816, 272])
+        #expect(Allocation.splitByWeight(10, weights: [0, 0]) == [5, 5])
+        #expect(Allocation.splitByWeight(0, weights: []) == [])
+    }
+
     /// An empty book must not report that selling is free.
     @Test func aStoreWithNoOrdersHasNoDerivedRate() {
         let rates = ChannelRates.derived(from: [])
@@ -656,6 +776,11 @@ import Testing
         #expect(net.netCents == 707_566)
         #expect(!net.breaksEven)
         #expect(net.profitAfterCents == -80_839)
+        // The card-by-card lines add up to the same totals on his real books.
+        #expect(net.lines.count == 40)
+        #expect(net.lines.filter(\.isPriced).count == 32)
+        #expect(net.lines.reduce(0) { $0 + ($1.netCents ?? 0) } == 707_566)
+        #expect(net.lines.reduce(0) { $0 + $1.contributionCents } == net.netCents - net.costCents)
 
         // The cliff at 9 is a gap in his comps, not a collapse in value: only 23
         // of the 40 carry a figure at that grade.
