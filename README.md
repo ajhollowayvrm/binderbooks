@@ -13,8 +13,8 @@ pipeline, the data model, the Phase 1 build spec, and the seed import plan.
 | `docs/` | The build brief and the design documents. |
 | `catalog/` | The daily catalog build. Python, standard library only. See `catalog/README.md`. |
 | `seed/` | The BinderBooks ledger for 2026-04-20 to 2026-09-05, the collection file converted from it, and the report of what did not convert. |
-| `scripts/` | `import_binderbooks.py` converts the ledger into a file the app imports. `ios-device.py` builds, signs and installs on the phone. |
-| `.github/workflows/build-catalog.yml` | Builds the catalog every day at 21:30 UTC and publishes it to the `catalog-latest` release. |
+| `scripts/` | `import_binderbooks.py` converts the ledger into a file the app imports. `ios-device.py` builds, signs and installs on the phone. `sign-catalog.sh` signs the catalog's artwork on the Mac and publishes it. |
+| `.github/workflows/build-catalog.yml` | Builds the catalog every day at 21:30 UTC, carries the published artwork signatures forward, and publishes it to the `catalog-latest` release. |
 | `ios/` | The SwiftUI app. The Xcode project is generated from `ios/project.yml`. See `ios/README.md`. |
 
 ## Status

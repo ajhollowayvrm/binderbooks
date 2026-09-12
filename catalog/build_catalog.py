@@ -523,8 +523,9 @@ def gzip_file(src: Path, dst: Path) -> None:
 def restamp(out: Path) -> int:
     """Recompute the manifest's size and checksum for the file on disk.
 
-    The artwork signatures are added after this job runs, on a macOS runner,
-    because Vision's feature print needs the neural engine. That changes the
+    The artwork signatures are added after the build: the nightly job copies the
+    published ones in, and scripts/sign-catalog.sh signs new ones on a Mac,
+    because Vision's feature print needs the neural engine. Both change the
     SQLite file and so the gzip, and the app refuses a download whose checksum
     does not match the manifest. Everything else the manifest says — the product
     count, the categories, the build time — is still true.

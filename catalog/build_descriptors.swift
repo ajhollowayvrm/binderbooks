@@ -10,14 +10,16 @@
 // uses. Two implementations of the same arithmetic would drift, and the day
 // they drifted every distance would quietly become noise.
 //
-// Runs on macOS, because Vision's feature print needs the neural engine.
+// Runs on AJ's Mac, because Vision's feature print needs the neural engine and a
+// macOS CI runner is several times slower. scripts/sign-catalog.sh builds it,
+// signs the published catalog, and publishes the result. To run it by hand:
 //
 //   swiftc -O catalog/build_descriptors.swift ios/Sources/Scan/CardArtDescriptor.swift \
 //     -o /tmp/build-descriptors
 //   /tmp/build-descriptors --catalog scripts/catalog.sqlite
 //
-// It is incremental: a product that already has a signature is skipped, so the
-// daily run only pays for the cards that are new.
+// It is incremental: a product that already has a signature is skipped, so a
+// run after the first only pays for the cards that are new.
 
 import Foundation
 import ImageIO
@@ -33,12 +35,10 @@ struct Options {
     var rebuild = false
     /// Stop after this long and let the caller publish what was signed.
     ///
-    /// The first full pass is 76,000 cards and over an hour, and a job that is
-    /// killed by its own timeout never reaches the publish step — so the work
-    /// is thrown away and the next run starts from nothing, for ever. Stopping
-    /// early is not a failure: signatures are written in batches as they are
-    /// made, the ones already in the file are published, and tomorrow's run
-    /// carries them forward and continues where this one stopped.
+    /// The first full pass is 76,000 cards. Stopping early is not a failure:
+    /// signatures are written in batches as they are made, so the ones already
+    /// in the file can be published, and the next run continues where this one
+    /// stopped.
     var deadlineMinutes: Double?
 }
 
@@ -365,7 +365,7 @@ struct Build {
 
         let elapsed = Date().timeIntervalSince(started)
         if stoppedEarly {
-            print("stopped at the deadline with \(rows.count - index) still to sign. Tomorrow's run continues from here.")
+            print("stopped at the deadline with \(rows.count - index) still to sign. The next run continues from here.")
         }
         print(String(format: """
         done in %.0f s

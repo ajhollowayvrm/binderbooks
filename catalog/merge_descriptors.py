@@ -2,9 +2,11 @@
 """Carry artwork signatures from yesterday's catalog into today's.
 
 The catalog is rebuilt from TCGCSV every night, but a signature costs an image
-download and a Vision pass, and 76,000 of them take over an hour. They do not
-change: a product's artwork is the same artwork tomorrow. So the nightly job
-copies every signature it already had and only signs what is new.
+download and a Vision pass, and 76,000 of them take over half an hour. They do
+not change: a product's artwork is the same artwork tomorrow. So the nightly job
+copies every published signature into the new catalog, and
+scripts/sign-catalog.sh on AJ's Mac only signs what is new. The script uses this
+same merge to keep its own unpublished work.
 
 A signature is dropped when its product is gone from the new catalog, and when
 the version of the arithmetic that made it no longer matches the app's. Both are

@@ -3,6 +3,10 @@ name: Build catalog
 # Builds catalog.sqlite from TCGCSV and publishes it to the public release
 # `catalog-latest`. The iOS app downloads it from there. See docs/01-catalog-pipeline.md
 # and catalog/README.md.
+#
+# This job does not sign artwork. AJ's Mac signs it with scripts/sign-catalog.sh,
+# because a macOS runner here is several times slower than the Mac. This job only
+# carries the published signatures forward, so a nightly rebuild does not delete them.
 
 on:
   schedule:
@@ -21,7 +25,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,69 +40,29 @@ jobs:
         env:
           CATALOG_RELEASE_URL: https://github.com/${{ github.repository }}/releases/download/catalog-latest/catalog.sqlite.gz
 
-      - name: Hand the unsigned catalog to the signing job
-        uses: actions/upload-artifact@v4
-        with:
-          name: catalog-unsigned
-          # The raw database only. The signing job changes it, so the gzip
-          # built here would be thrown away; it repacks at the end.
-          path: |
-            build/catalog.sqlite
-            build/catalog-manifest.json
-            build/build-report.md
-          retention-days: 1
-
-  # Artwork signatures, which is how the scanner tells two cards with one number
-  # apart, reads a Japanese card whose name the catalog files in English, and
-  # sees the foil pattern. Vision's feature print needs the neural engine, so
-  # this half cannot run on the Linux runner.
-  sign:
-    needs: build
-    runs-on: macos-15
-    # Generous, because the first pass signs all 76,000 cards. The tool stops
-    # itself well before this and the job publishes what it has, so the timeout
-    # is a backstop and not the plan.
-    timeout-minutes: 200
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: catalog-unsigned
-          path: build
-
-      - name: Carry yesterday's signatures forward
+      - name: Carry the published signatures forward
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Only what is new has to be signed. A full build is over an hour; a
-          # night's new products are a few minutes.
+          # The Mac signs artwork into the published catalog. Tonight's catalog is
+          # built from nothing, so it must copy those signatures, or the release
+          # loses them.
           if gh release download catalog-latest --repo "$GITHUB_REPOSITORY" \
                --pattern catalog.sqlite.gz --dir previous 2>/dev/null; then
             gunzip previous/catalog.sqlite.gz
-            python3 catalog/merge_descriptors.py --new build/catalog.sqlite --old previous/catalog.sqlite
+            python catalog/merge_descriptors.py --new build/catalog.sqlite --old previous/catalog.sqlite
           else
-            echo "no previous catalog, so every product is new"
+            echo "no previous catalog, so there are no signatures to carry"
           fi
-
-      - name: Build the signing tool
-        run: |
-          swiftc -O catalog/build_descriptors.swift ios/Sources/Scan/CardArtDescriptor.swift \
-            -o build/build-descriptors
-
-      - name: Sign the new products
-        # Stops at the deadline and lets the publish step run. Signatures are
-        # written as they are made, so a first pass too big for one job still
-        # makes progress: tomorrow carries these forward and continues.
-        run: ./build/build-descriptors --catalog build/catalog.sqlite --workers 12 --deadline-minutes 170
 
       - name: Repack
         run: |
           set -euo pipefail
-          # The manifest carries the checksum the app verifies, so it is
-          # rewritten against the file that is actually published.
+          # The merge changes the SQLite file. The manifest carries the checksum
+          # the app verifies, so it is rewritten against the file that is published.
           gzip -9 -k -f build/catalog.sqlite
-          python3 catalog/build_catalog.py --out build --restamp
+          python catalog/build_catalog.py --out build --restamp
 
       - name: Publish to release catalog-latest
         env:

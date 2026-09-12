@@ -227,6 +227,9 @@ Run `VACUUM;` and `PRAGMA optimize;` at the end so the shipped file is compact.
 - Be polite: modest concurrency, retry with backoff on 5xx, treat a 404 on an empty
   group as normal
 - Build `catalog.sqlite`, compress with gzip
+- Copy the artwork signatures from the published catalog into the new one. The
+  Action does not sign artwork. AJ's Mac signs it with `scripts/sign-catalog.sh`,
+  because a macOS runner is several times slower. Added 2026-09-11.
 - Publish two assets to a **public** release, tag `catalog-latest`, replacing prior
   assets:
   - `catalog.sqlite.gz`

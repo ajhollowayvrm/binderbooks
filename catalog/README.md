@@ -7,6 +7,11 @@ the public release `catalog-latest`:
 - `catalog.sqlite.gz`
 - `catalog-manifest.json`
 
+The Action does not sign artwork. It copies the signatures from the published
+catalog into the new one, and `merge_descriptors.py` does that copy. AJ's Mac signs
+the products that have no signature with `scripts/sign-catalog.sh`, then publishes
+the catalog again. A macOS runner does the same work several times slower.
+
 The design is in `docs/01-catalog-pipeline.md`. This file records what the live
 TCGCSV data looks like and where the build deviates from the design.
 
