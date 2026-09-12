@@ -146,7 +146,7 @@ struct ReviewView: View {
         } else {
             List(selection: $selection) {
                 ForEach(shown) { card in
-                    ReviewRow(card: card, hit: model.hit(for: card), marketCents: model.marketCents(for: card))
+                    ReviewRow(card: card, hit: model.hit(for: card), marketCents: model.marketCents(for: card), heldCount: model.heldCount(for: card))
                         .contentShape(Rectangle())
                         .onTapGesture {
                             if !editMode.isEditing { correcting = card }
@@ -215,6 +215,7 @@ private struct ReviewRow: View {
     let card: OwnedCard
     let hit: SearchHit?
     let marketCents: Int?
+    let heldCount: Int
 
     var body: some View {
         HStack(spacing: 12) {
@@ -235,6 +236,7 @@ private struct ReviewRow: View {
                     if !card.printing.isEmpty { Text(card.printing) }
                     Text(CardCondition(rawValue: card.condition)?.short ?? card.condition)
                     if card.isBulk { Text("Bulk") }
+                    if heldCount > 0 { Text("own \(heldCount)").foregroundStyle(.indigo) }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)

@@ -69,6 +69,7 @@ struct ScanSessionView: View {
                 let m = ScanSessionModel(session: session, context: modelContext, catalog: catalog)
                 model = m
                 catalog.beginExclusiveUse()
+                m.loadHeld()
                 await m.loadRows()
                 applyDebugScans(m)
             }
@@ -138,26 +139,35 @@ struct ScanSessionView: View {
             simulatorViewfinder(model)
             #endif
 
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(model.cards.count) cards")
-                        .font(.headline)
-                    Text(model.sessionTotalCents.asCurrency)
-                        .font(.subheadline.monospacedDigit())
-                    if model.inFlight > 0 {
-                        Text("matching…")
-                            .font(.caption)
+            VStack(alignment: .leading, spacing: 6) {
+                // The count he needs before he adds another copy.
+                if let newest = model.cards.first, let line = model.copiesLine(for: newest) {
+                    Label(line, systemImage: "square.stack.3d.up")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(model.cards.count) cards")
+                            .font(.headline)
+                        Text(model.sessionTotalCents.asCurrency)
+                            .font(.subheadline.monospacedDigit())
+                        if model.inFlight > 0 {
+                            Text("matching…")
+                                .font(.caption)
+                        }
                     }
+                    Spacer()
+                    Button {
+                        model.duplicateLast()
+                    } label: {
+                        Label("Same card again", systemImage: "plus.square.on.square")
+                            .font(.subheadline)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.cards.isEmpty)
                 }
-                Spacer()
-                Button {
-                    model.duplicateLast()
-                } label: {
-                    Label("Same card again", systemImage: "plus.square.on.square")
-                        .font(.subheadline)
-                }
-                .buttonStyle(.bordered)
-                .disabled(model.cards.isEmpty)
             }
             .padding(10)
             .background(.thinMaterial)
@@ -319,7 +329,7 @@ struct ScanSessionView: View {
                         Button {
                             correcting = card
                         } label: {
-                            ScannedSquare(card: card, hit: model.hit(for: card), marketCents: model.marketCents(for: card))
+                            ScannedSquare(card: card, hit: model.hit(for: card), marketCents: model.marketCents(for: card), heldCount: model.heldCount(for: card))
                                 .frame(width: 88)
                         }
                         .buttonStyle(.plain)

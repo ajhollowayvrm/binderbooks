@@ -16,6 +16,9 @@ final class ScanSessionModel {
     private(set) var prices: [Int: [ProductPrice]] = [:]
     private(set) var inFlight = 0
     private(set) var lastError: String?
+    /// Copies already in inventory, by productId, then printing. Read once when
+    /// the session opens: nothing commits or sells while he scans.
+    private(set) var held: [Int: [String: Int]] = [:]
 
     init(session: ScanSession, context: ModelContext, catalog: CatalogController) {
         self.session = session
@@ -45,6 +48,54 @@ final class ScanSessionModel {
             return exact
         }
         return rows.compactMap(\.marketCents).min()
+    }
+
+    // MARK: - Copies he already holds
+
+    /// Copies of this card's product in inventory, over every printing.
+    func heldCount(for card: OwnedCard) -> Int {
+        held[card.productId]?.values.reduce(0, +) ?? 0
+    }
+
+    /// Copies of this card's product in inventory, in this card's printing.
+    func heldCount(for card: OwnedCard, printing: String) -> Int {
+        held[card.productId]?[printing] ?? 0
+    }
+
+    /// Copies of this card's product scanned so far in this session.
+    func sessionCount(for card: OwnedCard) -> Int {
+        cards.filter { $0.productId == card.productId }.reduce(0) { $0 + max(1, $1.quantity) }
+    }
+
+    /// One line for the newest card, so he sees the count before he adds another.
+    /// "Charizard: 3 in inventory (1 Holofoil) · 2 in this scan"
+    func copiesLine(for card: OwnedCard) -> String? {
+        guard card.isIdentified else { return nil }
+        let name = hit(for: card)?.name ?? card.ocrName ?? "This card"
+        let total = heldCount(for: card)
+        var line = total == 0 ? "\(name): none in inventory" : "\(name): \(total) in inventory"
+        if total > 0, !card.printing.isEmpty {
+            let same = heldCount(for: card, printing: card.printing)
+            if same != total { line += " (\(same) \(card.printing))" }
+        }
+        let scanned = sessionCount(for: card)
+        if scanned > 1 { line += " · \(scanned) in this scan" }
+        return line
+    }
+
+    func loadHeld() {
+        let descriptor = FetchDescriptor<OwnedCard>(predicate: #Predicate { $0.productId > 0 })
+        held = Self.heldCounts((try? context.fetch(descriptor)) ?? [])
+    }
+
+    /// The inventory's own rule: committed and not sold. This session's cards
+    /// are not committed, so they never count twice.
+    static func heldCounts(_ cards: [OwnedCard]) -> [Int: [String: Int]] {
+        var counts: [Int: [String: Int]] = [:]
+        for card in cards where card.isIdentified && card.isCommitted && !card.isSealedSelf && !CardTagIndex.isSold(card) {
+            counts[card.productId, default: [:]][card.printing, default: 0] += max(1, card.quantity)
+        }
+        return counts
     }
 
     // MARK: - Intake

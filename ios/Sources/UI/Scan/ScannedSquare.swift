@@ -6,6 +6,8 @@ struct ScannedSquare: View {
     let card: OwnedCard
     let hit: SearchHit?
     let marketCents: Int?
+    /// Copies of this product already in inventory.
+    var heldCount: Int = 0
 
     var body: some View {
         VStack(spacing: 3) {
@@ -29,6 +31,19 @@ struct ScannedSquare: View {
                     }
                 ConfidenceMarker(confidence: card.matchConfidence, identified: card.isIdentified, isBulk: card.isBulk)
                     .padding(3)
+            }
+            .overlay(alignment: .topLeading) {
+                if heldCount > 0 {
+                    Text("own \(heldCount)")
+                        .font(.system(size: 9, weight: .bold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(.indigo, in: Capsule())
+                        .overlay(Capsule().stroke(.white, lineWidth: 1))
+                        .padding(3)
+                        .accessibilityLabel("\(heldCount) already in inventory")
+                }
             }
             Text(hit?.name ?? card.ocrName ?? (card.certNumber != nil ? "Slab" : "Unknown"))
                 .font(.system(size: 10))

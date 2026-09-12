@@ -760,6 +760,74 @@ import Testing
     }
 }
 
+@Suite @MainActor struct HeldCopiesTests {
+    private func card(_ productId: Int, _ printing: String = "Normal", in session: ScanSession? = nil, context: ModelContext) -> OwnedCard {
+        let card = OwnedCard(productId: productId, printing: printing, condition: "Near Mint", confidence: .certain)
+        card.scanSession = session
+        context.insert(card)
+        return card
+    }
+
+    /// The inventory's rule: committed and not sold. A copy in this session
+    /// is not inventory yet.
+    @Test func countsOnlyWhatTheInventoryHolds() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        let context = container.mainContext
+        let committed = ScanSession()
+        committed.committedAt = Date()
+        context.insert(committed)
+        let open = ScanSession()
+        context.insert(open)
+
+        _ = card(7, context: context)
+        _ = card(7, "Holofoil", in: committed, context: context)
+        let sold = card(7, context: context)
+        sold.tags = ["Sold"]
+        let bulk = card(7, context: context)
+        bulk.quantity = 3
+        let sealed = card(7, context: context)
+        sealed.isSealedSelf = true
+        _ = card(7, in: open, context: context)
+        _ = card(0, context: context)
+        try context.save()
+
+        let model = ScanSessionModel(session: open, context: context, catalog: CatalogController())
+        model.loadHeld()
+        let scanned = try #require(model.cards.first)
+
+        #expect(model.held == [7: ["Normal": 4, "Holofoil": 1]])
+        #expect(model.heldCount(for: scanned) == 5)
+        #expect(model.heldCount(for: scanned, printing: "Normal") == 4)
+        #expect(model.sessionCount(for: scanned) == 1)
+    }
+
+    @Test func theLineNamesThePrintingAndTheSessionCopies() throws {
+        let container = try CollectionStore.container(inMemory: true)
+        let context = container.mainContext
+        let open = ScanSession()
+        context.insert(open)
+        _ = card(7, "Holofoil", context: context)
+        _ = card(7, "Normal", context: context)
+        let scanned = card(7, "Holofoil", in: open, context: context)
+        scanned.ocrName = "Charizard"
+        try context.save()
+
+        let model = ScanSessionModel(session: open, context: context, catalog: CatalogController())
+        model.loadHeld()
+        #expect(model.copiesLine(for: scanned) == "Charizard: 2 in inventory (1 Holofoil)")
+
+        model.duplicateLast()
+        #expect(model.copiesLine(for: scanned) == "Charizard: 2 in inventory (1 Holofoil) · 2 in this scan")
+
+        let fresh = card(9, in: open, context: context)
+        fresh.ocrName = "Pikachu"
+        #expect(model.copiesLine(for: fresh) == "Pikachu: none in inventory")
+
+        let unknown = card(0, in: open, context: context)
+        #expect(model.copiesLine(for: unknown) == nil)
+    }
+}
+
 @Suite struct ScanSessionModelTests {
     /// Held by the suite so the context outlives every model the tests touch.
     let container: ModelContainer
