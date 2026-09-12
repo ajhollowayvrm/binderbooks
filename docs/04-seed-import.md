@@ -175,6 +175,10 @@ normalisation dropped it, so **every imported `Sale` has an empty
 `externalOrderId`**. A later TCGplayer or eBay order import has no dedupe key
 against these rows and will double-count. Fix that before building it.
 
+**Fixed 2026-09-12.** The sold-orders import (see `02`) matches these sales by money,
+date, and card names. It writes the order number onto each sale that it matches.
+After one import, the order number is the dedupe key.
+
 ---
 
 ## Mapping to the new model

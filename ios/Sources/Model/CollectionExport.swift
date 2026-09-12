@@ -19,7 +19,9 @@ enum CollectionExport {
     /// Version 5 added business expenses. Version 6 added `OwnedCardDTO.isSealedSelf`
     /// and `ScanSessionDTO.ripTargetId`, for ripping one sealed item from
     /// inventory directly instead of opening its whole purchase.
-    static let version = 6
+    /// Version 7 added `SaleDTO.costsEstimated`, for an order the sales import
+    /// brought in with no fees.
+    static let version = 7
 
     struct File: Codable, Equatable {
         var format: String = CollectionExport.format
@@ -151,6 +153,8 @@ enum CollectionExport {
         var otherFeesCents: Int
         var externalOrderId: String
         var sourceRef: String?
+        /// Optional, like `OwnedCardDTO.tags`: added in version 7.
+        var costsEstimated: Bool?
     }
 
     struct SaleLineDTO: Codable, Equatable {
@@ -299,7 +303,8 @@ enum CollectionExport {
                     id: $0.id, soldAt: $0.soldAt, channelRaw: $0.channelRaw, grossCents: $0.grossCents,
                     marketplaceFeesCents: $0.marketplaceFeesCents, salesTaxCents: $0.salesTaxCents,
                     shippingChargedCents: $0.shippingChargedCents, shippingCostCents: $0.shippingCostCents,
-                    otherFeesCents: $0.otherFeesCents, externalOrderId: $0.externalOrderId, sourceRef: $0.sourceRef
+                    otherFeesCents: $0.otherFeesCents, externalOrderId: $0.externalOrderId, sourceRef: $0.sourceRef,
+                    costsEstimated: $0.costsEstimated
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString },
             saleLines: saleLines.map {
@@ -535,6 +540,7 @@ enum CollectionExport {
             sale.shippingCostCents = dto.shippingCostCents
             sale.otherFeesCents = dto.otherFeesCents
             sale.externalOrderId = dto.externalOrderId
+            sale.costsEstimated = dto.costsEstimated ?? false
             sale.sourceRef = dto.sourceRef ?? ""
             report.sales += 1
         }

@@ -30,7 +30,7 @@ struct SaleDetailView: View {
                     }
                 }
 
-                Section("Money") {
+                Section {
                     LabeledContent("Gross", value: sale.grossCents.asCurrency)
                     if sale.shippingChargedCents > 0 {
                         LabeledContent("Shipping charged", value: sale.shippingChargedCents.asCurrency)
@@ -41,6 +41,12 @@ struct SaleDetailView: View {
                     deduction("Other fees", sale.otherFeesCents)
                     LabeledContent("Net") {
                         Text(sale.netCents.asCurrency).font(.body.weight(.semibold).monospacedDigit())
+                    }
+                } header: {
+                    Text("Money")
+                } footer: {
+                    if sale.costsEstimated {
+                        Text("The fees and the postage are estimates. The order file had no fees, so the app estimated them from your other orders on this channel.")
                     }
                 }
 

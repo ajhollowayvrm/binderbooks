@@ -415,6 +415,13 @@ final class Sale {
     /// export dropped it. See docs/04-seed-import.md.
     var externalOrderId: String = ""
 
+    /// True when the fees and the postage are the app's estimate, not what the
+    /// marketplace charged. The order import sets it: the sold-orders CSV has
+    /// no fee column, and he cannot get the fees. `ChannelRates` and
+    /// `FeeEstimate` leave these orders out, so an estimate never feeds the
+    /// figure it came from.
+    var costsEstimated: Bool = false
+
     @Relationship(deleteRule: .cascade, inverse: \SaleLine.sale)
     var lines: [SaleLine] = []
 

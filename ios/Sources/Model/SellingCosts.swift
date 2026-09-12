@@ -71,7 +71,9 @@ struct ChannelRates: Equatable {
         var shipping = 0
 
         for sale in sales {
-            guard sale.grossCents > 0 else { continue }
+            // An estimated order carries the rate back as its own fee. Reading
+            // it here would make the rate confirm itself.
+            guard sale.grossCents > 0, !sale.costsEstimated else { continue }
             let key = sale.channelRaw.isEmpty ? "unknown" : sale.channelRaw
             var row = byChannel[key] ?? (0, 0, 0)
             row.count += 1

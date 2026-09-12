@@ -16,6 +16,8 @@ struct SettingsView: View {
     @State private var importError: String?
     @State private var importReport: CollectionExport.Report?
     @State private var showListingExport = false
+    @State private var showSalesImporter = false
+    @State private var pendingSales: PendingSalesFile?
     @AppStorage("lastExportAt") private var lastExportAt: Double = 0
     @AppStorage(PPTKey.defaultsKey) private var pptKey = ""
     @AppStorage(SellingCostsKey.defaultsKey) private var costOverride = ""
@@ -56,6 +58,24 @@ struct SettingsView: View {
                 Text("TCGplayer")
             } footer: {
                 Text("Builds the CSV that Seller Portal imports, with each card at the cheapest live listing of its condition and printing.")
+            }
+
+            Section {
+                Button {
+                    showSalesImporter = true
+                } label: {
+                    Label("Import sold orders", systemImage: "cart.badge.plus")
+                }
+                .fileImporter(isPresented: $showSalesImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+                    handleSalesImport(result)
+                }
+                .sheet(item: $pendingSales) { file in
+                    SalesImportSheet(contents: file.contents)
+                }
+            } header: {
+                Text("Orders")
+            } footer: {
+                Text("Reads TCGplayer's Sold Items CSV, with or without eBay rows. You review every change before the app saves it.")
             }
 
             Section {
@@ -179,6 +199,19 @@ struct SettingsView: View {
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             let data = try Data(contentsOf: url)
             pendingImport = try CollectionExport.decode(data)
+        } catch {
+            importError = error.localizedDescription
+        }
+    }
+
+    private func handleSalesImport(_ result: Result<URL, Error>) {
+        importError = nil
+        do {
+            let url = try result.get()
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let text = try String(contentsOf: url, encoding: .utf8)
+            pendingSales = PendingSalesFile(contents: try SalesOrderCSV.read(text))
         } catch {
             importError = error.localizedDescription
         }

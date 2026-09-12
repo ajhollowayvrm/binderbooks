@@ -446,6 +446,9 @@ collection sometimes holds more value unopened than ripped.
     /// eBay orderId / TCGplayer order number. Dedupe key for later import.
     /// Empty on every imported row — see `04`.
     var externalOrderId: String
+    /// True when the fees and the postage are estimates. The sold-orders
+    /// import sets it. See "Sold-orders import" below.
+    var costsEstimated: Bool
 
     @Relationship(deleteRule: .cascade, inverse: \SaleLine.sale)
     var lines: [SaleLine]
@@ -564,6 +567,52 @@ AJ's rules:
   and sold cards. A card with no printing, on a product with several, is skipped too.
 - **He picks** which of the rest go in the file. A card tagged `listed` starts unticked.
   The import adds quantity, so a second upload of the same card lists it twice.
+
+### Sold-orders import
+
+**Built 2026-09-12.** Settings → Orders → Import sold orders reads TCGplayer's Sold
+Items CSV. It also reads the same file with eBay rows added. The code is in
+`ios/Sources/Model/SalesOrderCSV.swift` and `SalesOrderImport.swift`.
+
+The import works on the live store, not through a collection file.
+`CollectionExport.apply` cannot delete a row, and it overwrites every card that he
+edited on the phone. He reviews the plan first. The app saves nothing until he taps
+Import.
+
+What the file holds:
+
+- One row is one line of an order. The money columns belong to the order and repeat
+  on every line. The import reads them one time for each order.
+- The file has no fee columns.
+- An eBay row has no set, number, or SKU. The card is in the listing title, and the
+  grade is in "Condition".
+- The import never reads "Buyer Name".
+
+Each order goes to one of four places:
+
+| Place | Rule | What changes |
+|---|---|---|
+| Already on the books | A sale has the order number. | Nothing. |
+| Matched | A sale with no order number, dated 3 days before to 10 days after the order. TCGplayer: the same total to the cent; across channels the card names must also agree. eBay: the card names agree, and the amount is the item price or up to $6 more. | The sale takes the order number and the file's channel. Its money does not change. A sale with no cards gets the file's cards, with no link. |
+| New | No sale matches. | A new sale with `costsEstimated`. Each card links to his oldest unsold copy that fits the condition and printing, or the grader and grade, and gets the `sold` tag. |
+| To remove | A canceled order on the books, or a second sale with the same money on the same days as a settled order. | Nothing, unless he switches it on. A card on a removed sale goes back to inventory. |
+
+A slab takes an eBay sale before a copy that still carries "at CGC". A match to a
+sale with no cards adds lines with no link, because a link would take a copy he
+still holds.
+
+**Estimated costs.** `FeeEstimate` fits a fixed fee plus a rate for each channel, by
+least squares over his orders with real fees. Part of each fee is fixed: a $1.56
+TCGplayer order paid $0.51, and a rate alone gets that wrong. Postage is the median
+postage he recorded on the channel. A channel with fewer than 5 orders uses the fit
+over all channels. `ChannelRates` and `FeeEstimate` skip estimated sales, so an
+estimate never feeds itself. Export format version 7 carries the flag.
+
+**On his seed books, 2026-09-12:** 122 orders. 87 matched, and 2 of them moved from
+TCGplayer to eBay. 33 are new. The plan offers 1 canceled sale and 2 duplicates for
+removal. `RealSalesOrderImportTests` checks these numbers when
+`build/sales/sold-orders.csv` and `scripts/catalog.sqlite` are present. The CSV is
+his export with the buyer names removed. `build/` is never committed.
 
 ---
 
