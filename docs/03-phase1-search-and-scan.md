@@ -512,7 +512,7 @@ of the rest exists.
   decision 23 in `00-brief.md`. Still no charts, and still nothing sliced by
   vendor, set, product, or channel.
 - Do not add CloudKit, accounts, or sync. Free developer account; it isn't available.
-- Do not add AWS or any server. GitHub Actions and a public release asset cover it.
+- Do not add AWS or any server. A script on AJ's Mac and a public release asset cover it.
 - Do not bundle a catalog in the binary.
 - Do not use `Double` for money, anywhere, at any point.
 - Do not make him choose a set before scanning.

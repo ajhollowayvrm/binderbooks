@@ -11,8 +11,8 @@
 // they drifted every distance would quietly become noise.
 //
 // Runs on AJ's Mac, because Vision's feature print needs the neural engine and a
-// macOS CI runner is several times slower. scripts/sign-catalog.sh builds it,
-// signs the published catalog, and publishes the result. To run it by hand:
+// macOS CI runner is several times slower. scripts/publish-catalog.sh builds it,
+// signs the new catalog, and publishes the result. To run only this tool:
 //
 //   swiftc -O catalog/build_descriptors.swift ios/Sources/Scan/CardArtDescriptor.swift \
 //     -o /tmp/build-descriptors

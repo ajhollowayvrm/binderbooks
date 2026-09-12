@@ -1,6 +1,6 @@
 # 01 — Catalog Pipeline
 
-Builds the read-only catalog the app searches. Runs daily in GitHub Actions, publishes
+Builds the read-only catalog the app searches. Runs by hand on AJ's Mac, publishes
 a prepared SQLite file to a public release. No server, no AWS, no cost.
 
 ---
@@ -214,22 +214,22 @@ Run `VACUUM;` and `PRAGMA optimize;` at the end so the shipped file is compact.
 
 ---
 
-## The GitHub Action
+## The publish script
 
 ```
-.github/workflows/build-catalog.yml
+scripts/publish-catalog.sh
 ```
 
-- Schedule: daily, comfortably after 20:00 UTC (21:30 UTC is a reasonable margin),
-  plus `workflow_dispatch` for manual runs
+- No schedule. AJ runs it by hand on his Mac. Revised 2026-09-11, on AJ's call: this
+  was a daily GitHub Action, and its macOS runner took over 78 minutes to sign the
+  artwork that the Mac signs in 24. Run it after 20:00 UTC to get that day's TCGCSV data.
 - Fetch categories, resolve configured names to IDs, then walk groups → products →
   prices for each
 - Be polite: modest concurrency, retry with backoff on 5xx, treat a 404 on an empty
   group as normal
 - Build `catalog.sqlite`, compress with gzip
-- Copy the artwork signatures from the published catalog into the new one. The
-  Action does not sign artwork. AJ's Mac signs it with `scripts/sign-catalog.sh`,
-  because a macOS runner is several times slower. Added 2026-09-11.
+- Copy the artwork signatures from the published catalog into the new one, then
+  sign the products that have none (`catalog/build_descriptors.swift`)
 - Publish two assets to a **public** release, tag `catalog-latest`, replacing prior
   assets:
   - `catalog.sqlite.gz`

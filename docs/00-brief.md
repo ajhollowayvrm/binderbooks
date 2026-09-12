@@ -70,8 +70,9 @@ constraints) that only exist to serve a sync layer that isn't coming.
 
 ### No backend
 
-The daily catalog job runs in **GitHub Actions** and publishes to a **public**
-release asset. He has an AWS account but it should not be used — it adds a bill and
+The catalog job runs by hand on AJ's Mac (`scripts/publish-catalog.sh`) and publishes
+to a **public** release asset. Revised 2026-09-11, on AJ's call: it ran daily in
+GitHub Actions until the artwork signing made the runner too slow. He has an AWS account but it should not be used — it adds a bill and
 an ops surface for capability this app doesn't need. S3 as a mirror for the catalog
 artifact is acceptable; nothing may depend on it.
 
@@ -235,7 +236,7 @@ number-based matching works on them without recognizing any kanji.
 
 **Phase 1 — the only phase in scope right now.** Detailed in `03`.
 
-1. Catalog pipeline: GitHub Action, TCGCSV ingest, prepared SQLite, public release
+1. Catalog pipeline: publish script on the Mac, TCGCSV ingest, prepared SQLite, public release
 2. On-device catalog download, verification, and swap
 3. Search: FTS index, contextual ranking, the persistent field
 4. Scan: continuous session, matching, confidence, review, commit
