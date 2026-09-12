@@ -287,6 +287,7 @@ struct Build {
         var signatures: [(productId: Int, descriptor: Data)] = []
         var missing = 0
         var unreadable = 0
+        var signedThisRun = 0
         let started = Date()
 
         // Download *and* sign in the same task, so both run wide.
@@ -347,7 +348,9 @@ struct Build {
                 switch result {
                 case .noImage: missing += 1
                 case .unreadable: unreadable += 1
-                case let .signature(productId, data): signatures.append((productId, data))
+                case let .signature(productId, data):
+                    signatures.append((productId, data))
+                    signedThisRun += 1
                 }
             }
 
@@ -373,6 +376,6 @@ struct Build {
           no image      %d
           unreadable    %d
           in the table  %d
-        """, elapsed, catalog.count("productArt") , missing, unreadable, catalog.count("productArt")))
+        """, elapsed, signedThisRun, missing, unreadable, catalog.count("productArt")))
     }
 }

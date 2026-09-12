@@ -127,6 +127,19 @@ class CategoryTests(unittest.TestCase):
         self.assertEqual(bc.find_chinese_categories(self.LIVE), [])
 
 
+class SourceDateTests(unittest.TestCase):
+    def test_tcgcsv_stamp(self):
+        self.assertEqual(bc.parse_last_updated("2026-09-11T20:05:58+0000\n"), "2026-09-11")
+
+    def test_offset_is_converted_to_utc(self):
+        # 20:05 at UTC-6 is 02:05 the next day in UTC.
+        self.assertEqual(bc.parse_last_updated("2026-09-11T20:05:58-0600"), "2026-09-12")
+
+    def test_unreadable_stamp_fails(self):
+        with self.assertRaises(ValueError):
+            bc.parse_last_updated("<html>maintenance</html>")
+
+
 class BuildSqliteTests(unittest.TestCase):
     def test_end_to_end_on_fixture(self):
         cat = {"categoryId": 3, "name": "Pokemon", "displayName": "Pokemon"}

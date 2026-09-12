@@ -46,6 +46,9 @@ CHINESE_MARKERS = ("chinese", "china", "mandarin", "simplified", "traditional")
 # TCGCSV answers 401 to Python's default user agent. Send a descriptive one.
 USER_AGENT = "card-tracker-catalog-builder/1.0 (+https://github.com/ajhollowayvrm/binderbooks)"
 
+# The time of TCGCSV's last update, for example "2026-09-11T20:05:58+0000".
+LAST_UPDATED_URL = "https://tcgcsv.com/last-updated.txt"
+
 WORKERS = 6
 RETRIES = 5
 TIMEOUT_SECONDS = 60
@@ -244,6 +247,34 @@ def fetch_json(url: str, retries: int = RETRIES) -> dict[str, Any]:
             time.sleep(delay)
             delay = min(delay * 2, 30)
     raise FetchError(f"{url}: gave up after {retries} attempts: {last}")
+
+
+def parse_last_updated(text: str) -> str:
+    """The UTC date of a TCGCSV update stamp, as YYYY-MM-DD."""
+    stamp = datetime.strptime(text.strip(), "%Y-%m-%dT%H:%M:%S%z")
+    return stamp.astimezone(timezone.utc).strftime("%Y-%m-%d")
+
+
+def fetch_source_date(retries: int = RETRIES) -> str:
+    """The date of the TCGCSV data this build reads.
+
+    The build used to stamp the date it ran. A run after midnight UTC then gave
+    the previous day's data, and its prices, the next day's date. TCGCSV
+    publishes the time of its last update, and that is the date of the data.
+    """
+    delay = 1.0
+    last: Exception | None = None
+    for attempt in range(1, retries + 1):
+        req = urllib.request.Request(LAST_UPDATED_URL, headers={"User-Agent": USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS, context=_SSL) as resp:
+                return parse_last_updated(resp.read().decode("utf-8"))
+        except (OSError, ValueError) as err:
+            last = err
+        if attempt < retries:
+            time.sleep(delay)
+            delay = min(delay * 2, 30)
+    raise FetchError(f"{LAST_UPDATED_URL}: gave up after {retries} attempts: {last}")
 
 
 # ------------------------------------------------------------------------- model
@@ -576,7 +607,8 @@ def main(argv: list[str] | None = None) -> int:
     started = time.monotonic()
     now = datetime.now(timezone.utc)
     built_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    source_date = now.strftime("%Y-%m-%d")
+    source_date = fetch_source_date()
+    log(f"TCGCSV data is from {source_date}")
 
     all_categories = fetch_json(f"{BASE_URL}/categories")["results"]
     log(f"TCGCSV lists {len(all_categories)} categories")
