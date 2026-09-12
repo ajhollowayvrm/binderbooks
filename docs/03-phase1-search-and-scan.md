@@ -54,11 +54,30 @@ One index over **sealed and singles together**. Never separate pickers.
 
 Two paths:
 
-1. **`product_fts`** — token and prefix. Run first.
-2. **`product_trigram`** — typo tolerance. Run when path A returns fewer than ~5 hits.
-   Guard queries under 3 characters, since the trigram tokenizer needs three.
+1. **`product_fts`** — token and prefix. Run first. Every token must match, and a
+   token also matches the way the catalog spells it:
+   - a possessive typed with no apostrophe: `ns` also tries `n s`, because the index
+     splits `N's`
+   - a short form TCGplayer spells out: `etb`, `upc`, `pokeball`, `masterball`,
+     `farfetchd`, `sirfetchd`
+   - a one- or two-digit number, zero-padded: `25` also tries `025`
 
-Merge, dedupe by `productId`, rank.
+   The ranker only sees the candidates, and a broad query has thousands of matches
+   ("n" has 5,766). So path A takes three sets of candidates: the 200 best by
+   `bm25`, the 200 most valuable (value ranking only), and every exact `cleanName`
+   match. Without the second set, "rocket" lost a $2,400 card. Without the third,
+   "n" lost the card named N.
+2. **A printing word** — run when path A found nothing and the query holds "1st
+   edition", "first ed" or "unlimited". TCGplayer records a printing as a price row,
+   never in the name. Search the rest of the query, and keep the products with that
+   printing. A name that holds the words, "Booster Box [1st Edition]", is found by
+   path A first.
+3. **`product_trigram`** — typo tolerance. Run only when both paths above found
+   nothing. Guard queries under 3 characters, since the trigram tokenizer needs three.
+
+Merge, dedupe by `productId`, rank. Revised 2026-09-11 after a run of ambiguous
+queries against the real catalog; `ios/Tests/RealCatalogSearchTests.swift` holds each
+case.
 
 ### Ranking
 
@@ -66,18 +85,21 @@ In priority order:
 
 1. Exact `number` match, when the query parses as one
 2. Exact `cleanName` match
-3. **Context boost** — the caller passes a context, and the same index is reranked:
+3. **A number in a name** — "pikachu 25" or "mew 151". The number token equals the
+   card's collector number, or a word of its set's name. Both tie, and value decides
+   between them.
+4. **Context boost** — the caller passes a context, and the same index is reranked:
    - `.buying` → boost `isSealed = 1`
    - `.intake` / `.scanning` → boost `isSealed = 0`
    - `.browsing` → neutral
-4. **Market value, descending** — the top printing's market price
-5. FTS5 `bm25()`, weighting `name` above `setName`
-6. Recency — newer `cardSet.publishedOn` breaks ties, since new sets dominate his volume
+5. **Market value, descending** — the top printing's market price
+6. FTS5 `bm25()`, weighting `name` above `setName`
+7. Recency — newer `cardSet.publishedOn` breaks ties, since new sets dominate his volume
 
 Context is **never a mode the user picks**. Where he already is supplies it.
 
 Value outranks `bm25` because he reads a result list by price. Nine Charizards
-match "charizard", and the $3,000 one must lead. The three keys above value stay
+match "charizard", and the $3,000 one must lead. The four keys above value stay
 above it, because a query that names one product must return that product first:
 type `004/102` and you get that card, not the most expensive card that matched.
 A product with no market price sorts last.

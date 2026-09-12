@@ -48,10 +48,33 @@ import Testing
 
 @Suite struct QueryBuilderTests {
     @Test func ftsQuotesEveryTokenAsAPrefix() {
-        #expect(SearchQueryBuilder.ftsMatch("legendary warriors") == "\"legendary\"* \"warriors\"*")
+        #expect(SearchQueryBuilder.ftsMatch("legendary box") == "\"legendary\"* AND \"box\"*")
         #expect(SearchQueryBuilder.ftsMatch("  char ") == "\"char\"*")
-        #expect(SearchQueryBuilder.ftsMatch("farfetch'd \"quoted\"") == "\"farfetch'd\"* \"quoted\"*")
+        #expect(SearchQueryBuilder.ftsMatch("farfetch'd \"quoted\"") == "\"farfetch'd\"* AND \"quoted\"*")
         #expect(SearchQueryBuilder.ftsMatch("   ") == nil)
+    }
+
+    @Test func ftsOffersTheCatalogsSpellingOfAToken() {
+        // A possessive with no apostrophe. The index holds "N's" as "n" "s".
+        #expect(SearchQueryBuilder.ftsMatch("ns reshiram") == "(\"ns\"* OR \"n s\"*) AND \"reshiram\"*")
+        #expect(SearchQueryBuilder.ftsMatch("n's") == "\"n's\"*")
+        // A short form TCGplayer spells out.
+        #expect(SearchQueryBuilder.ftsMatch("ETB") == "(\"ETB\"* OR \"elite trainer box\"*)")
+        #expect(SearchQueryBuilder.ftsMatch("farfetchd") == "(\"farfetchd\"* OR \"farfetch d\"*)")
+        // A short number, which prints with leading zeros.
+        #expect(SearchQueryBuilder.ftsMatch("pikachu 25") == "\"pikachu\"* AND (\"25\"* OR \"025\"*)")
+        #expect(SearchQueryBuilder.ftsMatch("151") == "\"151\"*")
+    }
+
+    @Test func printingWordsSplitOffTheQuery() {
+        typealias Q = SearchQueryBuilder.PrintingQualifier
+        #expect(SearchQueryBuilder.printingQualifier("1st edition charizard") == Q(remainder: "charizard", printing: "1st Edition"))
+        #expect(SearchQueryBuilder.printingQualifier("First Ed Charizard") == Q(remainder: "Charizard", printing: "1st Edition"))
+        #expect(SearchQueryBuilder.printingQualifier("charizard unlimited") == Q(remainder: "charizard", printing: "Unlimited"))
+        // Nothing left to search, or no printing word at all.
+        #expect(SearchQueryBuilder.printingQualifier("1st edition") == nil)
+        #expect(SearchQueryBuilder.printingQualifier("charizard") == nil)
+        #expect(SearchQueryBuilder.printingQualifier("edition box") == nil)
     }
 
     @Test func trigramOrsTheQueryTrigrams() {
@@ -88,11 +111,11 @@ import Testing
 @Suite struct RankerTests {
     private func hit(
         _ id: Int, name: String, number: String? = nil, sealed: Bool = false,
-        published: String? = nil, market: Int? = nil
+        published: String? = nil, market: Int? = nil, set: String = ""
     ) -> SearchHit {
         let parsed = CollectorNumber.parse(number)
         return SearchHit(
-            productId: id, groupId: 0, categoryId: 3, name: name, cleanName: NameCleaner.clean(name), setName: "",
+            productId: id, groupId: 0, categoryId: 3, name: name, cleanName: NameCleaner.clean(name), setName: set,
             number: number, numberNum: parsed.numberNum, setTotal: parsed.setTotal, setCode: parsed.setCode,
             rarity: nil, isSealed: sealed, printingCount: 1, imageUrl: nil, publishedOn: published,
             minMarketCents: market, maxMarketCents: market
@@ -146,6 +169,29 @@ import Testing
         let byName = SearchRequest(text: "pikachu", context: .browsing, filter: SearchFilter())
         #expect(SearchRanker.rank([expensive, exact], request: byName).first?.productId == 1)
 
+    }
+
+    @Test func aNumberInANameOutranksValue() {
+        // "pikachu 25": the card numbered 25 beats a dearer card whose total is 025.
+        let numbered = SearchRanker.Candidate(hit: hit(1, name: "Pikachu", number: "025/165", market: 100), ftsRank: -1)
+        let byTotal = SearchRanker.Candidate(hit: hit(2, name: "_____'s Pikachu", number: "007/025", market: 19_500), ftsRank: -1)
+        let pikachu = SearchRequest(text: "pikachu 25", context: .browsing, filter: SearchFilter())
+        #expect(SearchRanker.rank([byTotal, numbered], request: pikachu).map(\.productId) == [1, 2])
+
+        // "mew 151": the number is the set's name, and a card from that set
+        // ties with a card numbered 151, so value decides between them. A
+        // dearer card that matches neither comes after both.
+        let fromTheSet = SearchRanker.Candidate(hit: hit(3, name: "Mew ex", number: "205/165", market: 21_000, set: "SV2a: Pokemon Card 151"), ftsRank: -1)
+        let number151 = SearchRanker.Candidate(hit: hit(4, name: "Mew ex", number: "151/165", market: 4_490, set: "Prize Pack Series Cards"), ftsRank: -1)
+        let neither = SearchRanker.Candidate(hit: hit(5, name: "Mew", number: "010/102", market: 50_000, set: "Base Set"), ftsRank: -1)
+        let mew = SearchRequest(text: "mew 151", context: .browsing, filter: SearchFilter())
+        #expect(SearchRanker.rank([neither, number151, fromTheSet], request: mew).map(\.productId) == [3, 4, 5])
+
+        // One token alone is a name or a number, never both. "pika", not
+        // "pikachu": hit 1 is named exactly Pikachu, and the exact-name tier
+        // would lift it for its own reason.
+        let bare = SearchRequest(text: "pika", context: .browsing, filter: SearchFilter())
+        #expect(SearchRanker.rank([numbered, byTotal], request: bare).map(\.productId) == [2, 1])
     }
 
     @Test func trigramOnlyHitsRankBelowFtsHits() {

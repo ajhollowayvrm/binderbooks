@@ -23,21 +23,24 @@ struct CatalogSearch: Sendable {
 
     /// Synchronous body, so the tests can call it on a fixture database.
     static func search(_ db: Database, request: SearchRequest) throws -> [SearchHit] {
-        let text = request.trimmed
-        var candidates: [Int: SearchRanker.Candidate] = [:]
+        var request = request
+        var candidates = try tokenCandidates(db, text: request.trimmed, ranking: request.ranking)
 
-        // Path A: token and prefix.
-        if let match = SearchQueryBuilder.ftsMatch(text) {
-            let rows = try Row.fetchAll(
-                db,
-                sql: "SELECT rowid, bm25(product_fts, 10.0, 5.0, 2.0) AS rank FROM product_fts WHERE product_fts MATCH ? ORDER BY rank LIMIT ?",
-                arguments: [match, candidateLimit]
-            )
-            for row in rows {
-                let id: Int = row["rowid"]
-                candidates[id] = .init(hit: placeholder(id), ftsRank: row["rank"])
+        // A printing word. TCGplayer records "1st Edition" as a price row,
+        // never in a name, so "1st edition charizard" matches no name at all.
+        // Search the rest, and keep the products that have that printing.
+        // Only when the whole query found nothing: "Gym Challenge Booster Box
+        // [1st Edition]" says it in the name, and must still be found by it.
+        var printing: String?
+        if candidates.isEmpty, let qualifier = SearchQueryBuilder.printingQualifier(request.trimmed) {
+            let rest = try tokenCandidates(db, text: qualifier.remainder, ranking: request.ranking)
+            if !rest.isEmpty {
+                candidates = rest
+                printing = qualifier.printing
+                request.text = qualifier.remainder
             }
         }
+        let text = request.trimmed
 
         // Path B: typo tolerance, only when A found nothing at all. A came
         // back with real, narrow matches means every typed word already hit
@@ -89,13 +92,60 @@ struct CatalogSearch: Sendable {
         }
 
         guard !candidates.isEmpty else { return [] }
-        let hits = try fetchHits(db, ids: Array(candidates.keys), filter: request.filter)
+        let hits = try fetchHits(db, ids: Array(candidates.keys), filter: request.filter, printing: printing)
         let ranked = hits.compactMap { hit -> SearchRanker.Candidate? in
             guard var candidate = candidates[hit.productId] else { return nil }
             candidate.hit = hit
             return candidate
         }
         return SearchRanker.rank(ranked, request: request)
+    }
+
+    /// Path A: token and prefix. Three reads, because a broad query has
+    /// thousands of matches and the ranker only sees the candidates.
+    private static func tokenCandidates(_ db: Database, text: String, ranking: SearchRanking) throws -> [Int: SearchRanker.Candidate] {
+        guard let match = SearchQueryBuilder.ftsMatch(text) else { return [:] }
+        var candidates: [Int: SearchRanker.Candidate] = [:]
+        func add(_ sql: String, _ arguments: StatementArguments) throws {
+            for row in try Row.fetchAll(db, sql: sql, arguments: arguments) {
+                let id: Int = row["rowid"]
+                if candidates[id] == nil {
+                    candidates[id] = .init(hit: placeholder(id), ftsRank: row["rank"])
+                }
+            }
+        }
+
+        // The closest matches.
+        try add(
+            "SELECT rowid, bm25(product_fts, 10.0, 5.0, 2.0) AS rank FROM product_fts WHERE product_fts MATCH ? ORDER BY rank LIMIT ?",
+            [match, candidateLimit]
+        )
+
+        // The most valuable matches. The list sorts by value, but the closest
+        // 200 are not the dearest 200: "rocket" lost a $2,400 Rocket's Mewtwo
+        // to 200 cheaper cards with a better bm25. The scanner sorts by
+        // relevance, so it does not need these.
+        if ranking == .byValue {
+            try add("""
+                SELECT f.rowid, f.rank FROM (
+                    SELECT rowid, bm25(product_fts, 10.0, 5.0, 2.0) AS rank FROM product_fts WHERE product_fts MATCH ?
+                ) f
+                ORDER BY (SELECT max(marketPriceCents) FROM price WHERE price.productId = f.rowid) DESC
+                LIMIT ?
+                """, [match, candidateLimit])
+        }
+
+        // The exact name. "n" prefix-matches 5,766 products, and the card named
+        // N was in neither list above, so the exact-name tier had nothing to lift.
+        let clean = NameCleaner.clean(text)
+        if !clean.isEmpty {
+            try add("""
+                SELECT rowid, bm25(product_fts, 10.0, 5.0, 2.0) AS rank FROM product_fts
+                WHERE product_fts MATCH ? AND rowid IN (SELECT productId FROM product WHERE cleanName = ?)
+                LIMIT ?
+                """, [match, clean, candidateLimit])
+        }
+        return candidates
     }
 
     /// Empty query with a filter: list the set, or the filtered categories.
@@ -254,10 +304,17 @@ struct CatalogSearch: Sendable {
         return []
     }
 
-    static func fetchHits(_ db: Database, ids: [Int], filter: SearchFilter) throws -> [SearchHit] {
+    /// `printing` keeps only products with a price row for that printing, by
+    /// the start of its name: "1st Edition" keeps "1st Edition Holofoil".
+    static func fetchHits(_ db: Database, ids: [Int], filter: SearchFilter, printing: String? = nil) throws -> [SearchHit] {
         let placeholders = ids.map { String($0) }.joined(separator: ",")
-        let sql = hitSelect + " WHERE p.productId IN (\(placeholders))" + filterClause(filter)
-        return try hits(db, sql: sql, arguments: filterArguments(filter))
+        var sql = hitSelect + " WHERE p.productId IN (\(placeholders))" + filterClause(filter)
+        var arguments = filterArguments(filter)
+        if let printing {
+            sql += " AND EXISTS (SELECT 1 FROM price WHERE price.productId = p.productId AND price.subTypeName LIKE ?)"
+            arguments += [printing + "%"]
+        }
+        return try hits(db, sql: sql, arguments: arguments)
     }
 
     private static func hits(_ db: Database, sql: String, arguments: StatementArguments) throws -> [SearchHit] {

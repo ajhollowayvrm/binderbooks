@@ -1,7 +1,8 @@
 import Foundation
 
 /// Orders candidates. Pure, so the tests can pin the priority order from
-/// docs/03: exact number, exact name, context, market value, bm25, recency.
+/// docs/03: exact number, exact name, a number in a name, context, market
+/// value, bm25, recency.
 ///
 /// `SearchRequest.ranking` drops the value tier for the scanner, which needs
 /// the closest name, not the dearest card.
@@ -23,6 +24,7 @@ enum SearchRanker {
 
     static let exactNumberBoost = 1_000.0
     static let exactNameBoost = 500.0
+    static let numberInNameBoost = 250.0
     static let contextBoost = 50.0
     static let trigramPenalty = 20.0
 
@@ -63,6 +65,10 @@ enum SearchRanker {
 
         if !query.isEmpty, hit.cleanName == NameCleaner.clean(query) {
             boost += exactNameBoost
+        }
+
+        if matchesNumberInName(hit, query: query) {
+            boost += numberInNameBoost
         }
 
         switch request.context {
@@ -112,6 +118,30 @@ enum SearchRanker {
         guard let n = parsed.numberNum, n == hit.numberNum else { return false }
         if let total = parsed.setTotal { return total == hit.setTotal }
         if let code = parsed.setCode { return code == hit.setCode }
+        return false
+    }
+
+    /// A name and a number, "pikachu 25" or "mew 151". The number is the card's
+    /// collector number, or a word of its set's name. Either one outranks a
+    /// card that only prefix-matches the digits somewhere: before this tier,
+    /// "pikachu 25" put a card numbered 007/025 first because it was dearer.
+    private static func matchesNumberInName(_ hit: SearchHit, query: String) -> Bool {
+        let tokens = query.split(whereSeparator: { $0.isWhitespace })
+        guard tokens.count >= 2 else { return false }
+        var setWords: Set<Substring>?
+        for token in tokens where token.first?.isNumber == true {
+            let parsed = CollectorNumber.parse(String(token))
+            guard let n = parsed.numberNum else { continue }
+            if n == hit.numberNum, parsed.setTotal == nil || parsed.setTotal == hit.setTotal {
+                return true
+            }
+            if setWords == nil {
+                setWords = Set(NameCleaner.clean(hit.setName).split(separator: " "))
+            }
+            if setWords?.contains(Substring(token.lowercased())) == true {
+                return true
+            }
+        }
         return false
     }
 
