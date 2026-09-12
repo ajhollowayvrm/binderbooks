@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var pendingImport: CollectionExport.File?
     @State private var importError: String?
     @State private var importReport: CollectionExport.Report?
+    @State private var showListingExport = false
     @AppStorage("lastExportAt") private var lastExportAt: Double = 0
     @AppStorage(PPTKey.defaultsKey) private var pptKey = ""
     @AppStorage(SellingCostsKey.defaultsKey) private var costOverride = ""
@@ -41,6 +42,21 @@ struct SettingsView: View {
             }
 
             feesSection
+
+            Section {
+                Button {
+                    showListingExport = true
+                } label: {
+                    Label("List inventory on TCGplayer", systemImage: "tablecells")
+                }
+                .sheet(isPresented: $showListingExport) {
+                    TCGplayerExportSheet()
+                }
+            } header: {
+                Text("TCGplayer")
+            } footer: {
+                Text("Builds the CSV that Seller Portal imports, with each card at the cheapest live listing of its condition and printing.")
+            }
 
             Section {
                 if let exportData {

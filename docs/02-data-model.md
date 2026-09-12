@@ -543,6 +543,28 @@ number from the calculation.
 - **Loss and damage** — write-offs.
 - **No trades.** His loop is buy / rip / sell.
 
+### TCGplayer listing export
+
+**Built 2026-09-11.** The app writes the CSV that TCGplayer's Seller Portal imports
+(Inventory → Import Inventory, Level 4 sellers only). Open it from Settings, or from
+the `…` menu in inventory selection. Nothing is stored: the export reads the cards and
+writes a file.
+
+The import matches each row on its SKU. The catalog has no SKUs, because TCGCSV has no
+SKU endpoint. So at export time the app asks TCGplayer's storefront endpoints, which
+need no key, for each SKU (`ios/Sources/Comps/TCGplayerMarketClient.swift`). This is
+the one place the app reads TCGplayer directly. TCGplayer does not document these
+endpoints. If they change, the export stops and the rest of the app is not affected.
+
+AJ's rules:
+
+- **Price:** the cheapest live listing of the same SKU, by price plus shipping, less
+  the shipping he charges. A SKU with no live listing takes the catalog market price.
+- **Skipped:** graded slabs, sealed products, personal collection, cards at a grader,
+  and sold cards. A card with no printing, on a product with several, is skipped too.
+- **He picks** which of the rest go in the file. A card tagged `listed` starts unticked.
+  The import adds quantity, so a second upload of the same card lists it twice.
+
 ---
 
 ## Calculators

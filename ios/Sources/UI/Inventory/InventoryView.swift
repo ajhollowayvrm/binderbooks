@@ -22,6 +22,7 @@ struct InventoryView: View {
     @State private var markGradedTarget: TagSheetTarget?
     @State private var sellTarget: TagSheetTarget?
     @State private var compsTarget: TagSheetTarget?
+    @State private var listTarget: TagSheetTarget?
     @State private var fetcher = CompsFetcher()
     @State private var compsMessage: String?
     @State private var isSelecting = false
@@ -117,6 +118,11 @@ struct InventoryView: View {
                             Label("Fetch comps from PPT", systemImage: "arrow.down.circle")
                         }
                         .disabled(!PPTKey.isSet)
+                        Button {
+                            listTarget = TagSheetTarget(cards: selectedCards(rows))
+                        } label: {
+                            Label("List on TCGplayer…", systemImage: "tablecells")
+                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -167,6 +173,11 @@ struct InventoryView: View {
             SellSheet(cards: target.cards, name: { model.hits[$0.productId]?.name ?? $0.ocrName ?? "" }) {
                 model.invalidateHaystacks()
                 endSelection()
+            }
+        }
+        .sheet(item: $listTarget) { target in
+            TCGplayerExportSheet(preselected: Set(target.cards.map(\.id))) {
+                model.invalidateHaystacks()
             }
         }
         // The count and the cost show before anything is spent. A run over
