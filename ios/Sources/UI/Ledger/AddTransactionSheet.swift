@@ -3,7 +3,10 @@ import SwiftUI
 
 /// Record money by hand: a purchase, an order, a grading charge, or an expense.
 ///
-/// This writes the money. An order can also take the cards that sold, picked
+/// This writes the money. A purchase can also take what came in it, found in
+/// the catalog: each product goes into inventory with its share of the total.
+/// A note alone is enough, for a purchase the catalog does not describe.
+/// An order can also take the cards that sold, picked
 /// from inventory: each card goes on the order with its cost and is tagged
 /// sold. An order with no cards reads "gain not known" — the same shape as the
 /// 35 imported orders that recorded a price and no lines.
@@ -39,6 +42,8 @@ struct AddTransactionSheet: View {
     @State private var saleCards: [OwnedCard] = []
     @State private var basisTexts: [UUID: String] = [:]
     @State private var picking = false
+    @State private var lines: [PurchaseIntake.Line] = []
+    @State private var searchingCatalog = false
 
     private var amountCents: Int? { Money.cents(from: amountText) }
     private var feesCents: Int { Money.cents(from: feesText) ?? 0 }
@@ -121,13 +126,31 @@ struct AddTransactionSheet: View {
                     }
                 }
 
+                if kind == .purchase {
+                    Section {
+                        ForEach($lines) { $line in
+                            PurchaseLineRow(line: $line)
+                        }
+                        .onDelete { lines.remove(atOffsets: $0) }
+                        Button {
+                            searchingCatalog = true
+                        } label: {
+                            Label(lines.isEmpty ? "Search the catalog" : "Add more", systemImage: "magnifyingglass")
+                        }
+                    } header: {
+                        Text("What was in it")
+                    } footer: {
+                        Text(lines.isEmpty
+                             ? "Find the sealed product or the cards. Each one goes into inventory with its share of the total."
+                             : "Each one goes into inventory with its share of the total. Swipe a row to take it off.")
+                    }
+                }
+
                 if kind == .purchase || kind == .expense {
                     Section {
                         TextField("What it was", text: $note, axis: .vertical)
                     } footer: {
-                        Text(kind == .expense
-                             ? "What you would write on a receipt. \"500 penny sleeves\"."
-                             : "What you would write on a receipt. \"6x Chaos Rising Booster Pack\".")
+                        Text(noteFooter)
                     }
                 }
 
@@ -157,6 +180,9 @@ struct AddTransactionSheet: View {
                     saleCards = cards
                     basisTexts = CardCostRows.seeded(cards, basisTexts)
                 }
+            }
+            .sheet(isPresented: $searchingCatalog) {
+                PurchaseCatalogSheet(lines: $lines)
             }
         }
     }
@@ -201,9 +227,22 @@ struct AddTransactionSheet: View {
         }
     }
 
+    private var noteFooter: String {
+        switch kind {
+        case .expense: return "What you would write on a receipt. \"500 penny sleeves\"."
+        default:
+            return lines.isEmpty
+                ? "Or write it in. What you would write on a receipt. \"6x Chaos Rising Booster Pack\"."
+                : "Left blank, the purchase names the products above."
+        }
+    }
+
     private var footnote: String {
         switch kind {
-        case .purchase: return "Nothing is identified yet. Open the purchase and scan what came out of it."
+        case .purchase:
+            return lines.isEmpty
+                ? "Nothing is identified yet. Open the purchase and scan what came out of it."
+                : "The products go into inventory, and the total splits over every copy."
         case .sale:
             return saleCards.isEmpty
                 ? "This records the money. With no cards attached, the gain reads as not known. You can attach cards later from the order."
@@ -219,11 +258,16 @@ struct AddTransactionSheet: View {
 
         switch kind {
         case .purchase:
+            let typed = note.trimmingCharacters(in: .whitespacesAndNewlines)
             let purchase = Purchase(
-                date: date, vendor: name, note: note.trimmingCharacters(in: .whitespaces),
+                date: date, vendor: name, note: typed.isEmpty ? PurchaseIntake.note(for: lines) : typed,
                 itemCostCents: amountCents, shippingCents: shippingCents, taxCents: taxCents, feesCents: feesCents
             )
             modelContext.insert(purchase)
+            if !lines.isEmpty {
+                PurchaseIntake.record(lines, on: purchase, context: modelContext)
+                inventory.invalidateHaystacks()
+            }
             try? modelContext.save()
             onAdded(.purchase(purchase.id))
 
@@ -271,6 +315,33 @@ struct AddTransactionSheet: View {
         case "ebay": return "ebay"
         case "whatnot": return "whatnot"
         default: return folded
+        }
+    }
+}
+
+/// One product on a purchase that is not saved yet: how many, and which printing.
+private struct PurchaseLineRow: View {
+    @Binding var line: PurchaseIntake.Line
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(line.name).lineLimit(2)
+                    Text(line.isSealed ? "Sealed · \(line.setName)" : line.setName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Text("\(line.quantity)x").monospacedDigit()
+                Stepper("Quantity", value: $line.quantity, in: 1...999).labelsHidden()
+            }
+            if line.printings.count > 1 {
+                Picker("Printing", selection: $line.printing) {
+                    ForEach(line.printings, id: \.self) { Text($0).tag($0) }
+                }
+            }
         }
     }
 }

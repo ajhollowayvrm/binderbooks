@@ -108,6 +108,15 @@ enum AllocationMethod: String, Codable, CaseIterable {
 }
 ```
 
+**Amended 2026-09-13.** The Add sheet can name what came in a purchase while he
+records it. He searches the catalog and taps each product. Each product becomes one
+`PurchaseItem` with one `OwnedCard` for each copy, the same shape
+`AddToInventorySheet` writes, and a sealed product's cards carry `isSealedSelf`. The
+landed total then splits over every copy. The list is optional: a note alone still
+saves a purchase with no items, so the decoupling above holds. A blank note takes the
+product names, for example "2x Chaos Rising Booster Pack, Charizard ex". The code is
+`PurchaseIntake`.
+
 `vendor` exists for bookkeeping — he wants to know where something came from. It is
 **not** a reporting dimension. Do not normalize it, do not build a vendor entity, do
 not fuzzy-match "WAL-MART #1234" against "Walmart". He explicitly does not want
