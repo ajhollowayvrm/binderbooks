@@ -107,6 +107,8 @@ struct GradingOutlook: Equatable {
         var costCents: Int
         var grossCents: Int?
         var feeCents = 0
+        /// His name for a hand-entered card. Empty for a catalog card.
+        var manualName = ""
 
         var id: UUID { cardId }
         var isPriced: Bool { grossCents != nil }
@@ -162,6 +164,7 @@ extension LedgerSummary {
             // when a card comes back, and these have not.
             let grader = GradedComps.graderAtGrader(tags: card.tags)
             var line = GradingOutlook.Line(cardId: card.id, productId: card.productId, grader: grader, costCents: card.totalBasisCents)
+            line.manualName = card.manualName
             if let grader {
                 let comps = card.effectiveCompCents
                 let comp = assumption.gradeNumber.map { GradedComps.comp(at: $0, for: grader, in: comps) }

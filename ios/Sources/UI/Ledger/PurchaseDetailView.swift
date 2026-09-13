@@ -114,12 +114,12 @@ struct PurchaseDetailView: View {
     private func cardRow(_ card: OwnedCard) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(inventory.hits[card.productId]?.name ?? card.ocrName ?? "Unknown")
+                Text(card.displayName(inventory.hits[card.productId]) ?? "Unknown")
                     .lineLimit(1)
                 HStack(spacing: 6) {
                     if card.basisIsAllocated { Text("derived") }
                     if card.basisIsManual { Text("you priced it") }
-                    if let set = inventory.hits[card.productId]?.setName { Text(set).lineLimit(1) }
+                    if let set = card.setName(inventory.hits[card.productId]) { Text(set).lineLimit(1) }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -206,7 +206,7 @@ struct GradingDetailView: View {
                     ForEach(submission.entries) { entry in
                         if let card = entry.card {
                             NavigationLink(value: AppRoute.ownedCard(card.id)) {
-                                LabeledContent(inventory.hits[card.productId]?.name ?? card.ocrName ?? "Unknown", value: gradeText(entry))
+                                LabeledContent(card.displayName(inventory.hits[card.productId]) ?? "Unknown", value: gradeText(entry))
                             }
                             .swipeActions(edge: .trailing) {
                                 Button("Remove", role: .destructive) { remove(entry) }

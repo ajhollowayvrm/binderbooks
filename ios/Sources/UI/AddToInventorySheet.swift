@@ -1,15 +1,21 @@
 import SwiftData
 import SwiftUI
 
-/// Add a catalog product to inventory by hand: how many, which printing, what
-/// condition, what it cost. The short road for a card that was never scanned.
+/// Add a card to inventory by hand: how many, which printing, what condition,
+/// what it cost. The short road for a card that was never scanned.
+///
+/// With a catalog product, the sheet adds that product. Without one, he types
+/// the card himself. That is the road for a Chinese or an Italian print, which
+/// TCGplayer does not carry. The card keeps his name, set, number, language,
+/// and value, and has no `productId`.
 ///
 /// The cards can join a purchase he already recorded, start a new one, or
 /// stand alone. A cost typed here is his price and the purchase total never
 /// overwrites it. With no cost, the cards take a share of the purchase they
 /// join, the same as a scanned card.
 struct AddToInventorySheet: View {
-    let detail: ProductDetail
+    /// Nil when he enters the card by hand.
+    let detail: ProductDetail?
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -21,6 +27,9 @@ struct AddToInventorySheet: View {
         case existing(UUID)
     }
 
+    /// The printings a hand-entered card can pick from. None is required.
+    static let handPrintings = ["Normal", "Holofoil", "Reverse Holofoil"]
+
     @State private var quantity = 1
     @State private var printing: String
     @State private var condition = CardCondition.nearMint.rawValue
@@ -29,26 +38,57 @@ struct AddToInventorySheet: View {
     @State private var vendor = ""
     @State private var date = Date()
 
+    @State private var manualName: String
+    @State private var manualSetName = ""
+    @State private var manualNumber = ""
+    @State private var valueText = ""
+    /// Kept between entries, because he enters a stack of Italian cards one
+    /// after another.
+    @AppStorage("handEntryLanguage") private var language = "en"
+
     init(detail: ProductDetail) {
         self.detail = detail
         _printing = State(initialValue: detail.prices.first?.subTypeName ?? "")
+        _manualName = State(initialValue: "")
     }
 
-    private var costCents: Int? { Money.cents(from: costText) }
-    private var printings: [String] { detail.prices.map(\.subTypeName) }
+    /// A card the catalog does not carry. `name` fills the name field, because
+    /// the search text he typed is usually the card's name.
+    init(handEnteredName name: String) {
+        self.detail = nil
+        _printing = State(initialValue: "")
+        _manualName = State(initialValue: name.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 
-    /// Only the quantity is required. A vendor, a date, and a cost are all
-    /// optional, because he adds cards he was given as often as cards he bought.
+    private var isHandEntry: Bool { detail == nil }
+    private var costCents: Int? { Money.cents(from: costText) }
+    private var valueCents: Int? { Money.cents(from: valueText) }
+    private var printings: [String] { detail?.prices.map(\.subTypeName) ?? Self.handPrintings }
+    private var trimmedName: String { manualName.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var cardName: String { detail?.hit.name ?? trimmedName }
+
+    /// Only the quantity is required, and a name for a hand-entered card. A
+    /// vendor, a date, a cost, and a value are all optional, because he adds
+    /// cards he was given as often as cards he bought.
     private var canSave: Bool {
-        quantity > 0 && (costText.isEmpty || costCents != nil)
+        guard quantity > 0, costText.isEmpty || costCents != nil else { return false }
+        guard isHandEntry else { return true }
+        return !trimmedName.isEmpty && (valueText.isEmpty || valueCents != nil)
     }
 
     var body: some View {
         NavigationStack {
             Form {
+                if isHandEntry {
+                    handEntrySection
+                }
+
                 Section {
                     Stepper("Quantity: \(quantity)", value: $quantity, in: 1...99)
-                    if printings.count > 1 {
+                    if isHandEntry {
+                        // A second tap on the chosen printing clears it.
+                        chipRow("Printing (optional)", printings, selected: printing) { printing = printing == $0 ? "" : $0 }
+                    } else if printings.count > 1 {
                         chipRow("Printing", printings, selected: printing) { printing = $0 }
                     }
                     chipRow("Condition", CardCondition.allCases.map(\.rawValue), selected: condition) { condition = $0 }
@@ -77,7 +117,7 @@ struct AddToInventorySheet: View {
                     Text(purchaseDescription)
                 }
             }
-            .navigationTitle(detail.hit.name)
+            .navigationTitle(detail?.hit.name ?? "Add by hand")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -85,6 +125,28 @@ struct AddToInventorySheet: View {
                     Button("Add") { save() }.disabled(!canSave)
                 }
             }
+        }
+    }
+
+    private var handEntrySection: some View {
+        Section {
+            TextField("Name", text: $manualName)
+                .textInputAutocapitalization(.words)
+            TextField("Set (optional)", text: $manualSetName)
+                .textInputAutocapitalization(.words)
+            TextField("Number, e.g. 025/165 (optional)", text: $manualNumber)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+            Picker("Language", selection: $language) {
+                ForEach(CardLanguage.codes, id: \.self) { code in
+                    Text(CardLanguage.name(code)).tag(code)
+                }
+            }
+            MoneyField(label: "Value each", text: $valueText)
+        } header: {
+            Text("The card")
+        } footer: {
+            Text("For a card the catalog does not carry, such as a Chinese or an Italian print. The value is your figure. The app uses it as the card's market value.")
         }
     }
 
@@ -124,9 +186,18 @@ struct AddToInventorySheet: View {
     }
 
     private func save() {
+        let productId = detail?.hit.productId ?? 0
+        let isSealed = detail?.hit.isSealed ?? false
         let cards = (0..<quantity).map { _ -> OwnedCard in
-            let card = OwnedCard(productId: detail.hit.productId, printing: printing, condition: condition, confidence: .manual)
-            card.isSealedSelf = detail.hit.isSealed
+            let card = OwnedCard(productId: productId, printing: printing, condition: condition, confidence: .manual)
+            card.isSealedSelf = isSealed
+            if isHandEntry {
+                card.manualName = trimmedName
+                card.manualSetName = manualSetName.trimmingCharacters(in: .whitespacesAndNewlines)
+                card.manualNumber = manualNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                card.manualMarketCents = valueCents
+                card.language = language
+            }
             return card
         }
         if let costCents {
@@ -142,7 +213,7 @@ struct AddToInventorySheet: View {
         case .none:
             purchase = nil
         case .new:
-            let created = Purchase(date: date, vendor: vendor.trimmingCharacters(in: .whitespaces), note: detail.hit.name, itemCostCents: costCents ?? 0)
+            let created = Purchase(date: date, vendor: vendor.trimmingCharacters(in: .whitespaces), note: cardName, itemCostCents: costCents ?? 0)
             modelContext.insert(created)
             purchase = created
         case .existing(let id):
@@ -150,7 +221,7 @@ struct AddToInventorySheet: View {
         }
 
         if let purchase {
-            let item = PurchaseItem(productId: detail.hit.productId, quantity: cards.count, isSealed: detail.hit.isSealed)
+            let item = PurchaseItem(productId: productId, quantity: cards.count, isSealed: isSealed)
             item.purchase = purchase
             modelContext.insert(item)
             for card in cards {

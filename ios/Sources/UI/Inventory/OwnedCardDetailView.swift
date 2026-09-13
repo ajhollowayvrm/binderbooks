@@ -54,12 +54,17 @@ private struct OwnedCardDetailBody: View {
             basis
             GradedCompsSection(card: card)
             source
+            // A card with no catalog product: one he entered by hand, or an
+            // imported row that never had one. He can name it here.
+            if card.productId == 0, !card.isSealedSelf {
+                ManualIdentitySection(card: card) { model.invalidateHaystacks() }
+            }
             edits
             Section {
                 Button("Delete card", role: .destructive) { showDelete = true }
             }
         }
-        .navigationTitle(hit?.name ?? "Card")
+        .navigationTitle(card.displayName(hit) ?? "Card")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("No hits from this box?", isPresented: $confirmNoHits, titleVisibility: .visible) {
             Button("No hits", role: .destructive) { markNoHits() }
@@ -75,7 +80,7 @@ private struct OwnedCardDetailBody: View {
             }
         }
         .sheet(isPresented: $markingGraded) {
-            MarkGradedSheet(cards: [card], name: { hit?.name ?? $0.ocrName ?? "Card" }) {
+            MarkGradedSheet(cards: [card], name: { $0.displayName(hit) ?? "Card" }) {
                 model.invalidateHaystacks()
             }
         }
@@ -95,14 +100,18 @@ private struct OwnedCardDetailBody: View {
                         .frame(width: 110, height: 154)
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(hit?.name ?? card.ocrName ?? "Unknown").font(.title3.weight(.semibold))
+                    Text(card.displayName(hit) ?? "Unknown").font(.title3.weight(.semibold))
                     if let hit {
                         Text(hit.setName).foregroundStyle(.secondary)
                         if let number = hit.number { Text(number).monospacedDigit() }
                         if let rarity = hit.rarity, rarity != "None" { Text(rarity).font(.footnote).foregroundStyle(.secondary) }
+                    } else if card.isHandEntered {
+                        if let setName = card.setName(nil) { Text(setName).foregroundStyle(.secondary) }
+                        if let number = card.number(nil) { Text(number).monospacedDigit() }
+                        Text("\(CardLanguage.name(card.language)) · entered by hand").font(.footnote).foregroundStyle(.secondary)
                     }
                     HStack(spacing: 6) {
-                        ConfidenceMarker(confidence: card.matchConfidence, identified: card.isIdentified, isBulk: card.isBulk)
+                        ConfidenceMarker(confidence: card.matchConfidence, identified: card.hasIdentity, isBulk: card.isBulk)
                         Text(card.matchConfidence.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
                     }
                     if card.isSlabbed {
@@ -146,7 +155,7 @@ private struct OwnedCardDetailBody: View {
 
     private var basis: some View {
         Section("Value") {
-            LabeledContent("Market", value: model.marketCents(for: card)?.asCurrency ?? "—")
+            LabeledContent(card.isHandEntered ? "Your value" : "Market", value: model.marketCents(for: card)?.asCurrency ?? "—")
             // What it might come back worth, per grader, from the comps he
             // entered. The grader it is out at is the one that matters now.
             let atGrader = GradedComps.graderAtGrader(tags: card.tags)
@@ -298,5 +307,64 @@ private struct OwnedCardDetailBody: View {
         let item = Allocation.ripTarget(for: card, context: modelContext)
         item.isRipped = true
         onDelete()
+    }
+}
+
+/// The name, set, number, language, and value of a card with no catalog
+/// product. He typed them, so he can correct them here.
+private struct ManualIdentitySection: View {
+    let card: OwnedCard
+    var onChange: () -> Void
+
+    @Environment(\.modelContext) private var modelContext
+    @State private var valueText = ""
+
+    /// A stored code that is not in the list still shows, so the picker never
+    /// has a selection without a row.
+    private var languageCodes: [String] {
+        CardLanguage.codes.contains(card.language) ? CardLanguage.codes : CardLanguage.codes + [card.language]
+    }
+
+    var body: some View {
+        Section {
+            TextField("Name", text: binding(\.manualName))
+                .textInputAutocapitalization(.words)
+            TextField("Set", text: binding(\.manualSetName))
+                .textInputAutocapitalization(.words)
+            TextField("Number", text: binding(\.manualNumber))
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+            Picker("Language", selection: binding(\.language)) {
+                ForEach(languageCodes, id: \.self) { code in
+                    Text(CardLanguage.name(code)).tag(code)
+                }
+            }
+            MoneyField(label: "Value", text: $valueText)
+        } header: {
+            Text("The card")
+        } footer: {
+            Text("The catalog does not carry this card. The name and the value are yours. The app uses the value as the card's market value.")
+        }
+        .onAppear {
+            valueText = card.manualMarketCents.map(Money.fieldText) ?? ""
+        }
+        .onChange(of: valueText) { _, text in
+            // An unreadable value keeps the last good one.
+            if text.isEmpty {
+                card.manualMarketCents = nil
+            } else if let cents = Money.cents(from: text) {
+                card.manualMarketCents = cents
+            }
+            save()
+        }
+    }
+
+    private func binding(_ keyPath: ReferenceWritableKeyPath<OwnedCard, String>) -> Binding<String> {
+        Binding(get: { card[keyPath: keyPath] }, set: { card[keyPath: keyPath] = $0; save() })
+    }
+
+    private func save() {
+        try? modelContext.save()
+        onChange()
     }
 }

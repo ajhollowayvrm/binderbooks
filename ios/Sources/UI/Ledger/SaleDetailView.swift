@@ -147,7 +147,7 @@ struct SaleDetailView: View {
     }
 
     @ViewBuilder private func row(for line: SaleLine) -> some View {
-        let name = line.card.flatMap { inventory.hits[$0.productId]?.name } ?? line.describedAs
+        let name = line.card.flatMap { inventory.hits[$0.productId]?.name ?? ($0.manualName.isEmpty ? nil : $0.manualName) } ?? line.describedAs
         if let card = line.card {
             NavigationLink(value: AppRoute.ownedCard(card.id)) {
                 lineBody(name: name, line: line)

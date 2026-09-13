@@ -614,6 +614,30 @@ removal. `RealSalesOrderImportTests` checks these numbers when
 `build/sales/sold-orders.csv` and `scripts/catalog.sqlite` are present. The CSV is
 his export with the buyer names removed. `build/` is never committed.
 
+### Hand-entered cards
+
+**Built 2026-09-12.** AJ owns Chinese and Italian Pokémon cards. TCGplayer carries
+neither language, so no `productId` exists for them. He enters them by hand: search
+for the card, then tap "Not in the catalog? Add it by hand". The search text fills
+the name.
+
+This is the one exception to "the store never embeds a card name". The card keeps
+`productId` 0 and these fields on `OwnedCard`:
+
+| Field | Holds |
+|---|---|
+| `manualName` | The name as he types it, in any script. |
+| `manualSetName`, `manualNumber` | Optional. The number answers a number search. |
+| `language` | A BCP 47 code: `zh-Hans`, `it`. A catalog card keeps `en`. |
+| `manualMarketCents` | Optional. His value. The inventory uses it as the market value. |
+
+`isIdentified` still means "has a catalog product". The scan review, the comps fetch,
+the TCGplayer listing export, and the sold-orders import need a `productId`, so they
+skip a hand-entered card. `hasIdentity` is true for both kinds, and the confidence
+marker reads it. The card detail screen edits these fields on any card with
+`productId` 0, which includes imported rows that never had a product. Export format
+version 8 carries the fields.
+
 ---
 
 ## Calculators

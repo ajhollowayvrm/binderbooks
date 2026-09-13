@@ -60,7 +60,7 @@ struct OwnedCardCard: View {
                     .minimumScaleFactor(0.6)
                 ConfidenceMarker(
                     confidence: row.card.matchConfidence,
-                    identified: row.card.isIdentified,
+                    identified: row.card.hasIdentity,
                     isBulk: row.card.isBulk
                 )
             }
@@ -68,11 +68,11 @@ struct OwnedCardCard: View {
             // text does — until it does not: a slab covers its own art with a
             // label, and a cell whose image is still loading has nothing else
             // to say which card it is.
-            Text(row.hit?.name ?? row.card.ocrName ?? "Unknown")
+            Text(row.name)
                 .font(.caption.weight(.medium))
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
-            if let setName = row.hit?.setName {
+            if let setName = row.setName {
                 Text(setName)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -103,11 +103,14 @@ struct OwnedCardCard: View {
                 Image(systemName: "shippingbox")
                 Text("Sealed")
             } else {
-                if let number = row.hit?.number {
+                if let number = row.number {
                     Text(number)
                         .monospacedDigit()
                 }
                 Text(CardCondition(rawValue: row.card.condition)?.short ?? row.card.condition)
+                if let language = CardLanguage.badge(row.card.language) {
+                    Text(language)
+                }
                 if row.card.quantity > 1 {
                     Text("×\(row.card.quantity)")
                 }

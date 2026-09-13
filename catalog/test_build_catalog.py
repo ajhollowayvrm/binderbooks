@@ -59,6 +59,12 @@ class ParseNumberTests(unittest.TestCase):
         self.check("UE10BT/AOT-1-007", 7, None, "UE10BT")
         self.check("UEX07BT/AOT-2-AP01", 1, None, "UEX07BT")
 
+    def test_palworld_drops_parallel_suffix(self):
+        self.check("EBP01-001", 1, None, "EBP01")
+        self.check("EBP01-001OSR", 1, None, "EBP01")
+        self.check("ETD02-001TSP", 1, None, "ETD02")
+        self.check("EPR-004", 4, None, "EPR")
+
     def test_double_card_takes_first(self):
         self.check("073/076 / 074/076", 73, 76)
 
@@ -111,11 +117,12 @@ class CategoryTests(unittest.TestCase):
         {"categoryId": 63, "name": "Digimon Card Game"},
         {"categoryId": 81, "name": "Union Arena"},
         {"categoryId": 85, "name": "Pokemon Japan"},
+        {"categoryId": 91, "name": "Palworld OFFICIAL CARD GAME"},
     ]
 
     def test_resolves_configured_names(self):
         ids = [c["categoryId"] for c in bc.resolve_categories(self.LIVE, bc.CATEGORY_NAMES)]
-        self.assertEqual(ids, [3, 85, 63, 81])
+        self.assertEqual(ids, [3, 85, 63, 81, 91])
 
     def test_missing_name_fails(self):
         with self.assertRaises(SystemExit):

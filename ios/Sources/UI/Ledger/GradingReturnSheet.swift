@@ -114,7 +114,7 @@ struct GradingReturnSheet: View {
 
     private func name(for entryID: UUID) -> String {
         guard let card = submission.entries.first(where: { $0.id == entryID })?.card else { return "Unknown" }
-        return inventory.hits[card.productId]?.name ?? card.ocrName ?? "Unknown"
+        return card.displayName(inventory.hits[card.productId]) ?? "Unknown"
     }
 
     /// "10", not "10.0". A half grade keeps its half.

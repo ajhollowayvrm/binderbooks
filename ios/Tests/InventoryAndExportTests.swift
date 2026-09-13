@@ -280,6 +280,39 @@ private func seed(_ context: ModelContext) throws {
         #expect(restoredSession.ripTarget?.productId == 55)
     }
 
+    /// A hand-entered card carries the only card name the store holds. A lost
+    /// name cannot be read back from the catalog, so the file must keep it.
+    @Test @MainActor func aHandEnteredCardSurvivesTheRoundTrip() throws {
+        let card = OwnedCard(productId: 0, printing: "Holofoil", condition: "Near Mint", confidence: .manual)
+        card.manualName = "皮卡丘"
+        card.manualSetName = "Gem Pack 2"
+        card.manualNumber = "025/165"
+        card.manualMarketCents = 1_250
+        card.language = "zh-Hans"
+        source.mainContext.insert(card)
+        let catalogCard = OwnedCard(productId: 9, printing: "Normal", condition: "Near Mint", confidence: .manual)
+        source.mainContext.insert(catalogCard)
+        try source.mainContext.save()
+
+        let data = try CollectionExport.exportData(source.mainContext)
+        let file = try CollectionExport.decode(data)
+        #expect(file.version == 8)
+        // A catalog card writes none of the new keys.
+        #expect(file.cards.first { $0.productId == 9 }?.manualName == nil)
+
+        _ = try CollectionExport.apply(file, to: target.mainContext, mode: .merge)
+        let restored = try #require(try target.mainContext.fetch(FetchDescriptor<OwnedCard>()).first { $0.productId == 0 })
+        #expect(restored.manualName == "皮卡丘")
+        #expect(restored.manualSetName == "Gem Pack 2")
+        #expect(restored.manualNumber == "025/165")
+        #expect(restored.manualMarketCents == 1_250)
+        #expect(restored.language == "zh-Hans")
+        #expect(restored.isHandEntered)
+        #expect(!restored.isIdentified)
+        #expect(try CollectionExport.exportData(target.mainContext, now: Date(timeIntervalSinceReferenceDate: 0))
+            == CollectionExport.exportData(source.mainContext, now: Date(timeIntervalSinceReferenceDate: 0)))
+    }
+
     @Test func exportIsDeterministic() throws {
         let file = CollectionExport.File(exportedAt: "2026-09-10T05:00:00Z", purchases: [], purchaseItems: [], cards: [], sessions: [])
         #expect(try CollectionExport.encode(file) == CollectionExport.encode(file))
@@ -474,6 +507,37 @@ private func seed(_ context: ModelContext) throws {
         // A bulk card carries no cost of its own, so it has no gain to read.
         let bulk = try #require(rows.first { $0.card.productId == 3 })
         #expect(bulk.unrealizedCents == nil)
+    }
+
+    /// A hand-entered card has no catalog row. His value, name, set, number,
+    /// and language must still reach the inventory and its search.
+    @Test @MainActor func aHandEnteredCardHasAValueAndAnswersASearch() throws {
+        let card = OwnedCard(productId: 0, printing: "", condition: "Near Mint", confidence: .manual)
+        card.manualName = "Pikachu"
+        card.manualSetName = "Scarlatto e Violetto"
+        card.manualNumber = "025/165"
+        card.manualMarketCents = 900
+        card.acquisitionBasisCents = 400
+        card.language = "it"
+        container.mainContext.insert(card)
+        try container.mainContext.save()
+
+        let model = InventoryModel()
+        model.setTestRows(hits: [:], prices: [:])
+        let cards = try container.mainContext.fetch(FetchDescriptor<OwnedCard>())
+        let row = try #require(model.rows(from: cards).first)
+        #expect(row.name == "Pikachu")
+        #expect(row.setName == "Scarlatto e Violetto")
+        #expect(row.number == "025/165")
+        #expect(row.marketCents == 900)
+        #expect(row.unrealizedCents == 500)
+        #expect(model.summary(of: [row]).pricedMarketCents == 900)
+        #expect(row.card.hasIdentity)
+        #expect(CardLanguage.badge(row.card.language) == "IT")
+        for query in ["pikachu", "scarlatto", "italian", "25/165"] {
+            #expect(model.rows(from: cards, query: query).count == 1, "query \(query)")
+        }
+        #expect(model.rows(from: cards, query: "charizard").isEmpty)
     }
 
     @Test @MainActor func filtersNarrow() throws {

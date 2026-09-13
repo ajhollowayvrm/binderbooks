@@ -60,6 +60,28 @@ enum CardCondition: String, CaseIterable {
     }
 }
 
+/// The languages a hand-entered card can have. The store keeps a BCP 47 code.
+/// A catalog card keeps "en", also a Japanese product: its category gives its
+/// language.
+enum CardLanguage {
+    static let codes = ["en", "ja", "zh-Hans", "zh-Hant", "ko", "it", "fr", "de", "es", "pt"]
+
+    /// "Italian", "Chinese (Simplified)". In English, like the rest of the app.
+    static func name(_ code: String) -> String {
+        Locale(identifier: "en_US").localizedString(forIdentifier: code) ?? code
+    }
+
+    /// A short mark for a row: "IT", "ZH-S". Nil for English, the default.
+    static func badge(_ code: String) -> String? {
+        switch code {
+        case "", "en": return nil
+        case "zh-Hans": return "ZH-S"
+        case "zh-Hant": return "ZH-T"
+        default: return code.uppercased()
+        }
+    }
+}
+
 /// Money left his account. Says nothing about what was bought.
 @Model
 final class Purchase {
@@ -236,6 +258,41 @@ final class OwnedCard {
 
     /// The row's id in the BinderBooks ledger it was imported from.
     var sourceRef: String = ""
+
+    /// A card that is not in the catalog, which he entered by hand. TCGplayer
+    /// does not carry Chinese or Italian prints, so these cards have no
+    /// `productId`. These fields are the only card name the store holds. They
+    /// stay empty on every catalog card. See docs/02-data-model.md.
+    var manualName: String = ""
+    var manualSetName: String = ""
+    /// The number as printed: "025/165".
+    var manualNumber: String = ""
+    /// What he believes the card is worth, in cents. The catalog has no price
+    /// for the card, so this value is its market value. Nil until he types one.
+    var manualMarketCents: Int?
+
+    /// True for a card he entered by hand: a name and no catalog product.
+    var isHandEntered: Bool { productId == 0 && !manualName.isEmpty }
+
+    /// True when the app knows the card, from the catalog or from his entry.
+    /// `isIdentified` stays catalog-only, because the scan review, the comps
+    /// fetch, the listing export, and the order import all need a `productId`.
+    var hasIdentity: Bool { isIdentified || isHandEntered }
+
+    /// The name to show: the catalog name, then his name, then the scanner text.
+    func displayName(_ hit: SearchHit?) -> String? {
+        if let hit { return hit.name }
+        if !manualName.isEmpty { return manualName }
+        return ocrName
+    }
+
+    func setName(_ hit: SearchHit?) -> String? {
+        hit?.setName ?? (manualSetName.isEmpty ? nil : manualSetName)
+    }
+
+    func number(_ hit: SearchHit?) -> String? {
+        hit?.number ?? (manualNumber.isEmpty ? nil : manualNumber)
+    }
 
     init(productId: Int, printing: String, condition: String, confidence: MatchConfidence) {
         self.id = UUID()

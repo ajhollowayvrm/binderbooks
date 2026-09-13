@@ -21,7 +21,9 @@ enum CollectionExport {
     /// inventory directly instead of opening its whole purchase.
     /// Version 7 added `SaleDTO.costsEstimated`, for an order the sales import
     /// brought in with no fees.
-    static let version = 7
+    /// Version 8 added the `OwnedCardDTO.manual…` fields, for a card he entered
+    /// by hand because the catalog does not carry it.
+    static let version = 8
 
     struct File: Codable, Equatable {
         var format: String = CollectionExport.format
@@ -114,6 +116,13 @@ enum CollectionExport {
         /// Optional, like `tags`: added in version 6, for the self-card that
         /// stands for an unopened sealed item.
         var isSealedSelf: Bool?
+        /// Optional, like `tags`: added in version 8, for a card he entered by
+        /// hand. The export writes nil for an empty field, so a catalog card
+        /// carries none of these keys.
+        var manualName: String?
+        var manualSetName: String?
+        var manualNumber: String?
+        var manualMarketCents: Int?
     }
 
     struct GradingSubmissionDTO: Codable, Equatable {
@@ -274,7 +283,11 @@ enum CollectionExport {
                     certNumber: $0.certNumber, graderRaw: $0.graderRaw, gradeLabel: $0.gradeLabel, ocrName: $0.ocrName, ocrNumber: $0.ocrNumber,
                     candidateProductIds: $0.candidateProductIds, scannedAt: $0.scannedAt,
                     gradedCompCents: $0.gradedCompCents, fetchedCompCents: $0.fetchedCompCents, compsFetchedAt: $0.compsFetchedAt, sourceRef: $0.sourceRef,
-                    tags: $0.tags, isSealedSelf: $0.isSealedSelf
+                    tags: $0.tags, isSealedSelf: $0.isSealedSelf,
+                    manualName: $0.manualName.isEmpty ? nil : $0.manualName,
+                    manualSetName: $0.manualSetName.isEmpty ? nil : $0.manualSetName,
+                    manualNumber: $0.manualNumber.isEmpty ? nil : $0.manualNumber,
+                    manualMarketCents: $0.manualMarketCents
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString },
             sessions: sessions.map {
@@ -477,6 +490,10 @@ enum CollectionExport {
             card.scannedAt = dto.scannedAt
             card.tags = dto.tags ?? []
             card.isSealedSelf = dto.isSealedSelf ?? false
+            card.manualName = dto.manualName ?? ""
+            card.manualSetName = dto.manualSetName ?? ""
+            card.manualNumber = dto.manualNumber ?? ""
+            card.manualMarketCents = dto.manualMarketCents
             card.gradedCompCents = dto.gradedCompCents ?? [:]
             card.fetchedCompCents = dto.fetchedCompCents ?? [:]
             card.compsFetchedAt = dto.compsFetchedAt

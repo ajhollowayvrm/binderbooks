@@ -207,7 +207,7 @@ struct LedgerSummaryView: View {
     private func outlookRow(_ line: GradingOutlook.Line) -> some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(inventory.hits[line.productId]?.name ?? "Unknown")
+                Text(inventory.hits[line.productId]?.name ?? (line.manualName.isEmpty ? "Unknown" : line.manualName))
                     .lineLimit(1)
                 Text(outlookDetail(line))
                     .font(.caption.monospacedDigit())

@@ -16,12 +16,12 @@ struct OwnedCardRow: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(row.hit?.name ?? row.card.ocrName ?? "Unknown")
+                    Text(row.name)
                         .lineLimit(1)
-                    ConfidenceMarker(confidence: row.card.matchConfidence, identified: row.card.isIdentified, isBulk: row.card.isBulk)
+                    ConfidenceMarker(confidence: row.card.matchConfidence, identified: row.card.hasIdentity, isBulk: row.card.isBulk)
                 }
-                if let hit = row.hit {
-                    Text(hit.setName)
+                if let setName = row.setName {
+                    Text(setName)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -30,9 +30,10 @@ struct OwnedCardRow: View {
                     if row.card.isSealedSelf {
                         Text("Sealed")
                     } else {
-                        if let number = row.hit?.number { Text(number).monospacedDigit() }
+                        if let number = row.number { Text(number).monospacedDigit() }
                         if !row.card.printing.isEmpty { Text(row.card.printing) }
                         Text(CardCondition(rawValue: row.card.condition)?.short ?? row.card.condition)
+                        if let language = CardLanguage.badge(row.card.language) { Text(language) }
                     }
                     if row.card.quantity > 1 { Text("×\(row.card.quantity)") }
                     if row.card.isPersonalCollection { Text("PC") }

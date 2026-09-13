@@ -41,6 +41,13 @@ enum OwnedCardMatcher {
             if let code = hit.setCode { parts.append(code) }
             if let rarity = hit.rarity { parts.append(NameCleaner.clean(rarity)) }
         }
+        // A hand-entered card has no hit. Its own name, set, number, and
+        // language take the place of the catalog's. `NameCleaner` keeps Han
+        // characters, so a Chinese name matches the Chinese text he types.
+        if !card.manualName.isEmpty { parts.append(NameCleaner.clean(card.manualName)) }
+        if !card.manualSetName.isEmpty { parts.append(NameCleaner.clean(card.manualSetName)) }
+        if !card.manualNumber.isEmpty { parts.append(card.manualNumber.lowercased()) }
+        if CardLanguage.badge(card.language) != nil { parts.append(NameCleaner.clean(CardLanguage.name(card.language))) }
         if !card.printing.isEmpty { parts.append(NameCleaner.clean(card.printing)) }
         parts.append(NameCleaner.clean(CardCondition(rawValue: card.condition)?.short ?? card.condition))
         if let ocrName = card.ocrName { parts.append(NameCleaner.clean(ocrName)) }
@@ -74,7 +81,8 @@ enum OwnedCardMatcher {
             return true
         }
         // An unidentified card still answers a number query through the scan.
-        let scanned = CollectorNumber.parse(card.ocrNumber)
+        // A hand-entered card answers through the number he typed.
+        let scanned = CollectorNumber.parse(card.ocrNumber ?? (card.manualNumber.isEmpty ? nil : card.manualNumber))
         guard scanned.numberNum == wanted else { return false }
         if let total = query.setTotal { return total == scanned.setTotal }
         if let code = query.setCode { return code == scanned.setCode }

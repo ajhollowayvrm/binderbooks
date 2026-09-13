@@ -121,6 +121,7 @@ struct CategorySummary: Identifiable, Hashable, Sendable {
         case "Pokemon": return "Pokémon"
         case "Pokemon Japan": return "Japan"
         case "Digimon Card Game": return "Digimon"
+        case "Palworld OFFICIAL CARD GAME": return "Palworld"
         default: return displayName
         }
     }

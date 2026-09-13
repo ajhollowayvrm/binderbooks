@@ -9,6 +9,10 @@ struct InventoryRow: Identifiable {
 
     var id: UUID { card.id }
 
+    var name: String { card.displayName(hit) ?? "Unknown" }
+    var setName: String? { card.setName(hit) }
+    var number: String? { card.number(hit) }
+
     /// Market minus what the card cost. A basis split out of a pack or a lot
     /// counts: he prices a card from what the item cost, and reads the
     /// difference when he sells it. `basisIsAllocated` still says the figure
@@ -146,7 +150,10 @@ final class InventoryModel {
         return all.filter { groupIds.contains($0.groupId) }
     }
 
+    /// A card with no catalog product has no catalog price. His own value
+    /// stands in, and it is nil until he types one.
     func marketCents(for card: OwnedCard) -> Int? {
+        if card.productId == 0 { return card.manualMarketCents }
         guard let rows = prices[card.productId], !rows.isEmpty else { return nil }
         if let exact = rows.first(where: { $0.subTypeName == card.printing })?.marketCents { return exact }
         return rows.compactMap(\.marketCents).min()

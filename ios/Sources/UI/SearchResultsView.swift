@@ -15,6 +15,7 @@ struct SearchResultsView: View {
     @Environment(InventoryModel.self) private var inventory
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var cards: [OwnedCard]
     @State private var showSetPicker = false
+    @State private var addingByHand = false
     @AppStorage(cardLayoutKey) private var layout: CardLayout = .grid
 
     /// The inventory chips do not apply here. This section answers the query,
@@ -36,6 +37,9 @@ struct SearchResultsView: View {
             SetPickerSheet(sets: model.sets, selected: model.filter.groupId) { groupId in
                 model.filter.groupId = groupId
             }
+        }
+        .sheet(isPresented: $addingByHand) {
+            AddToInventorySheet(handEnteredName: model.text)
         }
         .task(id: catalog.database?.path) {
             model.database = { [weak catalog] in catalog?.database }
@@ -65,6 +69,9 @@ struct SearchResultsView: View {
                 }
                 Section {
                     catalogRows
+                    if !model.isSearching {
+                        addByHandButton
+                    }
                 } header: {
                     Text("Catalog (\(catalogCount))").textCase(nil)
                 } footer: {
@@ -84,6 +91,11 @@ struct SearchResultsView: View {
                     CardSectionHeader(title: "Catalog (\(catalogCount))")
                     catalogGrid
                         .padding(.horizontal, 12)
+                    if !model.isSearching {
+                        addByHandButton
+                            .padding(.horizontal, 12)
+                            .padding(.top, 12)
+                    }
                     catalogFooter
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -93,6 +105,16 @@ struct SearchResultsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollDismissesKeyboard(.immediately)
+        }
+    }
+
+    /// The road for a card the catalog does not carry, such as a Chinese or an
+    /// Italian print. The query fills the name, because he just typed it.
+    private var addByHandButton: some View {
+        Button {
+            addingByHand = true
+        } label: {
+            Label("Not in the catalog? Add it by hand", systemImage: "square.and.pencil")
         }
     }
 

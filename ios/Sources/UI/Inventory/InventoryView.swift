@@ -164,13 +164,13 @@ struct InventoryView: View {
             }
         }
         .sheet(item: $markGradedTarget) { target in
-            MarkGradedSheet(cards: target.cards, name: { model.hits[$0.productId]?.name ?? $0.ocrName ?? "Card" }) {
+            MarkGradedSheet(cards: target.cards, name: { $0.displayName(model.hits[$0.productId]) ?? "Card" }) {
                 model.invalidateHaystacks()
                 endSelection()
             }
         }
         .sheet(item: $sellTarget) { target in
-            SellSheet(cards: target.cards, name: { model.hits[$0.productId]?.name ?? $0.ocrName ?? "" }) {
+            SellSheet(cards: target.cards, name: { $0.displayName(model.hits[$0.productId]) ?? "" }) {
                 model.invalidateHaystacks()
                 endSelection()
             }
