@@ -540,6 +540,52 @@ private func seed(_ context: ModelContext) throws {
         #expect(model.rows(from: cards, query: "charizard").isEmpty)
     }
 
+    /// Every order, on four hand-entered cards. A card with no figure sorts
+    /// last in both directions, ties keep the newest card first, and the
+    /// collection section of a search ignores the sort.
+    @Test @MainActor func sortOrdersThePageAndPutsMissingFiguresLast() throws {
+        let context = container.mainContext
+        func card(_ name: String, market: Int?, basis: Int, daysAgo: Double, set: String?, number: String) {
+            let card = OwnedCard(productId: 0, printing: "", condition: "Near Mint", confidence: .manual)
+            card.manualName = name
+            card.manualSetName = set ?? ""
+            card.manualNumber = number
+            card.manualMarketCents = market
+            card.acquisitionBasisCents = basis
+            card.acquiredAt = Date(timeIntervalSinceNow: -daysAgo * 86_400)
+            context.insert(card)
+        }
+        card("Umbreon", market: 10_000, basis: 2_000, daysAgo: 3, set: "Evolving Skies", number: "215/203")
+        card("Venusaur", market: 900, basis: 400, daysAgo: 1, set: "Base Set", number: "15/102")
+        card("Charizard", market: nil, basis: 1_000, daysAgo: 2, set: "Base Set", number: "4/102")
+        card("Mew", market: 900, basis: 2_000, daysAgo: 0, set: nil, number: "151")
+        try context.save()
+
+        let model = InventoryModel()
+        model.setTestRows(hits: [:], prices: [:])
+        let cards = try context.fetch(FetchDescriptor<OwnedCard>())
+        let expected: [InventorySort: [String]] = [
+            .newest: ["Mew", "Venusaur", "Charizard", "Umbreon"],
+            .oldest: ["Umbreon", "Charizard", "Venusaur", "Mew"],
+            // Mew and Venusaur tie at $9, so the newer Mew leads both ways.
+            .valueHigh: ["Umbreon", "Mew", "Venusaur", "Charizard"],
+            .valueLow: ["Mew", "Venusaur", "Umbreon", "Charizard"],
+            .gainHigh: ["Umbreon", "Venusaur", "Mew", "Charizard"],
+            .gainLow: ["Mew", "Venusaur", "Umbreon", "Charizard"],
+            .name: ["Charizard", "Mew", "Umbreon", "Venusaur"],
+            // 4/102 before 15/102, and the card with no set goes last.
+            .setNumber: ["Charizard", "Venusaur", "Umbreon", "Mew"],
+        ]
+        #expect(expected.count == InventorySort.allCases.count)
+        for (sort, names) in expected {
+            model.sort = sort
+            #expect(model.rows(from: cards).map(\.name) == names, "sort \(sort)")
+        }
+
+        model.sort = .name
+        #expect(model.rows(from: cards, applyFilter: false).map(\.name) == expected[.newest])
+    }
+
     @Test @MainActor func filtersNarrow() throws {
         try seed(container.mainContext)
         let model = InventoryModel()

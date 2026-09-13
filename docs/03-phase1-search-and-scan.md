@@ -128,6 +128,21 @@ One toggle sits beside the chips.
   carries the basis and the gain, which a grid cell cannot hold. Read profit in list
   layout, in the summary tiles, or on the card detail.
 
+### Inventory sort
+
+The inventory page has eight orders: newest first, oldest first, value high to low,
+value low to high, gain high to low, gain low to high, name, and set and number.
+**Newest first is the default.** Settings stores the default in `inventorySort`.
+
+- The sort button sits beside the layout button. A pick from it lasts until the app
+  quits. The button fills while the page is not in the default order.
+- The sort menu can make the current pick the default, or go back to the default.
+- A value sort reads the figure the row leads with: the graded value, then the low
+  end of a projection, then the market price. A gain sort reads the gain the row
+  shows, so a card under a projection has no gain.
+- A card with no figure sorts last in both directions. Ties keep newest first.
+- The collection section of a search ignores the sort and stays newest first.
+
 ### Searching his own cards
 
 `OwnedCardMatcher` answers the collection section. The store holds no card name

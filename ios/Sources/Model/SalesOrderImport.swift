@@ -495,12 +495,7 @@ enum SalesOrderCatalog {
     private static let numberPattern = #/(\d+)\s*/\s*(\d+)/#
 
     static func resolve(_ db: Database, orders: [SalesOrderCSV.Order]) throws -> [CopyKey: Int] {
-        var categories: [String: Int] = [:]
-        for row in try Row.fetchAll(db, sql: "SELECT categoryId, name FROM category") {
-            let id: Int = row["categoryId"]
-            categories[(row["name"] as String).lowercased()] = id
-        }
-
+        let categories = try categoryIds(db)
         var out: [CopyKey: Int] = [:]
         for order in orders {
             for (index, line) in order.lines.enumerated() {
@@ -523,6 +518,16 @@ enum SalesOrderCatalog {
             }
         }
         return out
+    }
+
+    /// Category ids by lower-case name: "pokemon japan" is 85.
+    static func categoryIds(_ db: Database) throws -> [String: Int] {
+        var categories: [String: Int] = [:]
+        for row in try Row.fetchAll(db, sql: "SELECT categoryId, name FROM category") {
+            let id: Int = row["categoryId"]
+            categories[(row["name"] as String).lowercased()] = id
+        }
+        return categories
     }
 
     static func tcgplayerProduct(_ db: Database, line: SalesOrderCSV.Line, categories: [String: Int]) throws -> Int? {

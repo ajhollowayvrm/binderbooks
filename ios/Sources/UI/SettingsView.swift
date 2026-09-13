@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 /// Settings: the catalog, and the backup that stands between him and total loss.
@@ -18,9 +19,12 @@ struct SettingsView: View {
     @State private var showListingExport = false
     @State private var showSalesImporter = false
     @State private var pendingSales: PendingSalesFile?
+    @State private var showListingImporter = false
+    @State private var pendingListings: PendingListingsFile?
     @AppStorage("lastExportAt") private var lastExportAt: Double = 0
     @AppStorage(PPTKey.defaultsKey) private var pptKey = ""
     @AppStorage(SellingCostsKey.defaultsKey) private var costOverride = ""
+    @AppStorage(InventorySort.defaultsKey) private var defaultSort: InventorySort = .newest
     @Query private var sales: [Sale]
 
     private var derivedRates: ChannelRates { ChannelRates.derived(from: sales) }
@@ -31,6 +35,18 @@ struct SettingsView: View {
                 NavigationLink(value: AppRoute.catalogStatus) {
                     Label("Catalog status and updates", systemImage: "externaldrive")
                 }
+            }
+
+            Section {
+                Picker("Default sort", selection: $defaultSort) {
+                    ForEach(InventorySort.allCases) { sort in
+                        Text(sort.title).tag(sort)
+                    }
+                }
+            } header: {
+                Text("Inventory")
+            } footer: {
+                Text("The inventory page opens in this order. The sort button beside the chips changes the order until the app quits.")
             }
 
             Section {
@@ -54,10 +70,21 @@ struct SettingsView: View {
                 .sheet(isPresented: $showListingExport) {
                     TCGplayerExportSheet()
                 }
+                Button {
+                    showListingImporter = true
+                } label: {
+                    Label("Import TCGplayer listings", systemImage: "tray.and.arrow.down")
+                }
+                .fileImporter(isPresented: $showListingImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+                    handleListingImport(result)
+                }
+                .sheet(item: $pendingListings) { file in
+                    TCGplayerListingImportSheet(contents: file.contents)
+                }
             } header: {
                 Text("TCGplayer")
             } footer: {
-                Text("Builds the CSV that Seller Portal imports, with each card at the cheapest live listing of its condition and printing.")
+                Text("List builds the CSV that Seller Portal imports, with each card at the cheapest live listing of its condition and printing. Import reads Seller Portal's pricing export and puts the stock you list into inventory, tagged listed.")
             }
 
             Section {
@@ -80,17 +107,16 @@ struct SettingsView: View {
 
             Section {
                 if let exportData {
-                    ShareLink(
-                        item: ExportFile(data: exportData, name: CollectionExport.suggestedFileName()),
-                        preview: SharePreview(CollectionExport.suggestedFileName(), image: Image(systemName: "doc.text"))
-                    ) {
+                    Button {
+                        shareExport(exportData)
+                    } label: {
                         Label("Export collection (\(exportData.count.formatted(.byteCount(style: .file))))", systemImage: "square.and.arrow.up")
                     }
-                    .simultaneousGesture(TapGesture().onEnded { lastExportAt = Date().timeIntervalSince1970 })
-                } else if let exportError {
-                    Text(exportError).foregroundStyle(.red)
-                } else {
+                } else if exportError == nil {
                     ProgressView()
+                }
+                if let exportError {
+                    Text(exportError).foregroundStyle(.red)
                 }
                 Button {
                     showImporter = true
@@ -190,6 +216,32 @@ struct SettingsView: View {
         }
     }
 
+    /// Opens the system share sheet on the export file.
+    ///
+    /// The last export time moves only when the sheet reports a completed action.
+    /// A cancelled sheet or a closed preview is not a backup.
+    private func shareExport(_ data: Data) {
+        exportError = nil
+        do {
+            let url = URL.temporaryDirectory.appending(path: CollectionExport.suggestedFileName())
+            try data.write(to: url, options: .atomic)
+            let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            sheet.completionWithItemsHandler = { _, completed, _, _ in
+                if completed { lastExportAt = Date().timeIntervalSince1970 }
+            }
+            let scene = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive }
+            var presenter = scene?.keyWindow?.rootViewController
+            while let presented = presenter?.presentedViewController { presenter = presented }
+            guard let presenter else { return }
+            sheet.popoverPresentationController?.sourceView = presenter.view
+            presenter.present(sheet, animated: true)
+        } catch {
+            exportError = error.localizedDescription
+        }
+    }
+
     private func handleImport(_ result: Result<URL, Error>) {
         importError = nil
         importReport = nil
@@ -217,6 +269,19 @@ struct SettingsView: View {
         }
     }
 
+    private func handleListingImport(_ result: Result<URL, Error>) {
+        importError = nil
+        do {
+            let url = try result.get()
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let text = try String(contentsOf: url, encoding: .utf8)
+            pendingListings = PendingListingsFile(contents: try TCGplayerPricingCSV.read(text))
+        } catch {
+            importError = error.localizedDescription
+        }
+    }
+
     private func run(_ file: CollectionExport.File, mode: CollectionExport.Mode) {
         do {
             importReport = try CollectionExport.apply(file, to: modelContext, mode: mode)
@@ -229,16 +294,6 @@ struct SettingsView: View {
 
 extension CollectionExport.File: Identifiable {
     var id: String { exportedAt }
-}
-
-struct ExportFile: Transferable {
-    var data: Data
-    var name: String
-
-    static var transferRepresentation: some TransferRepresentation {
-        DataRepresentation(exportedContentType: .json) { $0.data }
-            .suggestedFileName { $0.name }
-    }
 }
 
 /// Merge or replace. Replace is destructive, so it asks twice.

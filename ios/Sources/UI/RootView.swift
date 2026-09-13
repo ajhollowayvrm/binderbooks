@@ -16,7 +16,7 @@ struct RootView: View {
 
     @State private var search = SearchModel(context: .browsing)
     @State private var recents = RecentlyViewed()
-    @State private var inventory = InventoryModel()
+    @State private var inventory = InventoryModel(sort: .storedDefault)
     @State private var launcher = ScannerLauncher()
     @State private var path = NavigationPath()
 

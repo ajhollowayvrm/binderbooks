@@ -614,6 +614,51 @@ removal. `RealSalesOrderImportTests` checks these numbers when
 `build/sales/sold-orders.csv` and `scripts/catalog.sqlite` are present. The CSV is
 his export with the buyer names removed. `build/` is never committed.
 
+### TCGplayer listings import
+
+**Built 2026-09-13.** Settings → TCGplayer → Import TCGplayer listings reads Seller
+Portal's pricing export. It also reads two exports joined into one file, such as the
+English export and the Japanese export. The code is in
+`ios/Sources/Model/TCGplayerListingImport.swift`.
+
+AJ asked for this so that he can mass upload cards to TCGplayer from the app. The
+listing export uploads only the cards in inventory without the `listed` tag. Stock
+that he listed before the app existed was not in inventory, or it had no tag. This
+import puts that stock into inventory with the tag, so the next export uploads only
+new cards.
+
+What the file holds:
+
+- One row is one SKU. "Total Quantity" is the copies the store lists now. Most rows
+  say 0, because the file holds every SKU the store ever listed. The import reads
+  only the rows with stock.
+- Some ids are not numbers: "C-4505111". His export of 2026-09-13 holds 24 of them,
+  and all 24 have no stock. The import reads the stock before the id. A row with
+  such an id and stock is reported as not read.
+- The file names the set, the number, and the product name the way a sold-orders row
+  does. `SalesOrderCatalog.tcgplayerProduct` finds the product for both files.
+- The file has no cost and no purchase date. The import creates no purchase.
+
+Each copy goes to one of three places. Held copies count first, so a card that is on
+the books and on TCGplayer is never added twice:
+
+| Place | Rule | What changes |
+|---|---|---|
+| Already listed | A held copy of the product, condition, and printing has the `listed` tag. | Nothing. |
+| To tag | A held copy has no `listed` tag. A copy with no printing fits any printing. | The card takes the tag, the SKU id, and the file's printing when it had none. |
+| To add | No held copy is left. | A new card with the tag and the SKU id. |
+
+A held copy is a card that the sold-orders import could sell: identified, committed,
+not sold, not personal, and not a sealed item. A slab or a card at a grader never
+fits a raw SKU. The import never removes a tag or a card. He can type a total cost
+for the new cards, and it splits evenly with `basisIsManual`, the same as a cost in
+`AddToInventorySheet`. A row that the catalog cannot name imports nothing, and the
+review sheet lists it.
+
+`RealTCGplayerListingImportTests` runs when `build/listings/pricing-export.csv` and
+`scripts/catalog.sqlite` are present. It requires every row with stock to find its
+product.
+
 ### Hand-entered cards
 
 **Built 2026-09-12.** AJ owns Chinese and Italian Pokémon cards. TCGplayer carries

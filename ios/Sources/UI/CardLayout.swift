@@ -36,11 +36,15 @@ enum CardLayout: String, CaseIterable, Sendable {
 /// chips from sliding under it.
 struct CardLayoutButton: View {
     @Binding var layout: CardLayout
+    /// A second control behind the same divider. The inventory page puts its
+    /// sort menu here.
+    var accessory: AnyView?
 
     var body: some View {
         HStack(spacing: 8) {
             Divider()
                 .frame(height: 22)
+            if let accessory { accessory }
             Button {
                 layout = layout.next
             } label: {

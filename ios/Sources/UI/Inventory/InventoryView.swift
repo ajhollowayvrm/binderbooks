@@ -29,6 +29,7 @@ struct InventoryView: View {
     @State private var selection: Set<UUID> = []
     @State private var recentHits: [SearchHit] = []
     @AppStorage(cardLayoutKey) private var layout: CardLayout = .grid
+    @AppStorage(InventorySort.defaultsKey) private var defaultSort: InventorySort = .newest
 
     private var rows: [InventoryRow] { model.rows(from: cards, query: query) }
     private var tagUses: [TagUse] { model.tagUses(in: cards) }
@@ -49,10 +50,15 @@ struct InventoryView: View {
             }
             HStack(spacing: 0) {
                 filterRow
-                CardLayoutButton(layout: $layout)
+                CardLayoutButton(layout: $layout, accessory: AnyView(sortMenu))
             }
             Divider()
             list(rows)
+        }
+        // A new default applies at once. Otherwise a change in Settings shows
+        // nothing until the next launch.
+        .onChange(of: defaultSort) { _, sort in
+            model.sort = sort
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -476,6 +482,40 @@ struct InventoryView: View {
             .padding(.horizontal)
             .padding(.vertical, 6)
         }
+    }
+
+    /// A pick here lasts until the app quits. The filled symbol shows that the
+    /// page is not in the default order, and the second section makes the
+    /// pick the default or goes back to the default.
+    private var sortMenu: some View {
+        let isTemporary = model.sort != defaultSort
+        return Menu {
+            Picker("Sort", selection: Binding(get: { model.sort }, set: { model.sort = $0 })) {
+                ForEach(InventorySort.allCases) { sort in
+                    Text(sort.title).tag(sort)
+                }
+            }
+            if isTemporary {
+                Section {
+                    Button {
+                        defaultSort = model.sort
+                    } label: {
+                        Label("Make default", systemImage: "pin")
+                    }
+                    Button {
+                        model.sort = defaultSort
+                    } label: {
+                        Label("Back to \(defaultSort.title)", systemImage: "arrow.uturn.backward")
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: isTemporary ? "arrow.up.arrow.down.circle.fill" : "arrow.up.arrow.down")
+                .font(.body)
+                .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Sort: \(model.sort.title)")
     }
 
     private var tagChipTitle: String {

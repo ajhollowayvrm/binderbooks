@@ -55,6 +55,122 @@ struct InventoryRow: Identifiable {
         if let range = projectedRange { return GradedComps.rangeText(range) }
         return marketCents?.asCurrency ?? "—"
     }
+
+    /// The figure a value sort reads: the one `priceText` leads with. A
+    /// projection sorts at its low end, because that is the figure he can
+    /// count on.
+    var sortValueCents: Int? {
+        gradedValueCents ?? projectedRange?.lowerBound ?? marketCents
+    }
+
+    /// The figure a gain sort reads. Nil under a projection, because the row
+    /// shows no gain there.
+    var sortGainCents: Int? {
+        projectedRange == nil ? unrealizedCents : nil
+    }
+}
+
+/// The order of the inventory page. The row must show the number the list
+/// sorted by (`docs/03`), so every value order reads a figure the row shows.
+enum InventorySort: String, CaseIterable, Identifiable, Sendable {
+    case newest
+    case oldest
+    case valueHigh
+    case valueLow
+    case gainHigh
+    case gainLow
+    case name
+    case setNumber
+
+    /// The stored default. Settings writes it, and so does "Make default" in
+    /// the sort menu.
+    static let defaultsKey = "inventorySort"
+
+    static var storedDefault: InventorySort {
+        UserDefaults.standard.string(forKey: defaultsKey).flatMap(InventorySort.init) ?? .newest
+    }
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .newest: return "Newest first"
+        case .oldest: return "Oldest first"
+        case .valueHigh: return "Value: high to low"
+        case .valueLow: return "Value: low to high"
+        case .gainHigh: return "Gain: high to low"
+        case .gainLow: return "Gain: low to high"
+        case .name: return "Name"
+        case .setNumber: return "Set and number"
+        }
+    }
+
+    /// Ties keep the acquisition order, newest first, in every sort.
+    func sorted(_ rows: [InventoryRow]) -> [InventoryRow] {
+        switch self {
+        case .newest:
+            return rows.sorted(by: Self.newerFirst)
+        case .oldest:
+            return rows.sorted { Self.newerFirst($1, $0) }
+        case .valueHigh:
+            return Self.byFigure(rows, descending: true, \.sortValueCents)
+        case .valueLow:
+            return Self.byFigure(rows, descending: false, \.sortValueCents)
+        case .gainHigh:
+            return Self.byFigure(rows, descending: true, \.sortGainCents)
+        case .gainLow:
+            return Self.byFigure(rows, descending: false, \.sortGainCents)
+        case .name:
+            return rows.map { ($0, $0.name) }
+                .sorted { a, b in
+                    let order = a.1.localizedStandardCompare(b.1)
+                    return order == .orderedSame ? Self.newerFirst(a.0, b.0) : order == .orderedAscending
+                }
+                .map(\.0)
+        case .setNumber:
+            // `localizedStandardCompare` reads the digits as numbers, so 4/102
+            // comes before 15/102.
+            return rows.map { ($0, $0.setName, $0.number) }
+                .sorted { a, b in
+                    if let order = Self.compareLast(a.1, b.1) { return order }
+                    if let order = Self.compareLast(a.2, b.2) { return order }
+                    return Self.newerFirst(a.0, b.0)
+                }
+                .map(\.0)
+        }
+    }
+
+    private static func newerFirst(_ a: InventoryRow, _ b: InventoryRow) -> Bool {
+        a.card.acquiredAt == b.card.acquiredAt ? a.card.scannedAt > b.card.scannedAt : a.card.acquiredAt > b.card.acquiredAt
+    }
+
+    /// Each figure is read once per row, not once per comparison. A row with
+    /// no figure sorts last in both directions, because a card with no price
+    /// is not the cheapest card.
+    private static func byFigure(_ rows: [InventoryRow], descending: Bool, _ figure: (InventoryRow) -> Int?) -> [InventoryRow] {
+        rows.map { ($0, figure($0)) }
+            .sorted { a, b in
+                switch (a.1, b.1) {
+                case let (x?, y?) where x != y: return descending ? x > y : x < y
+                case (_?, nil): return true
+                case (nil, _?): return false
+                default: return newerFirst(a.0, b.0)
+                }
+            }
+            .map(\.0)
+    }
+
+    /// Nil when the two texts tie. A missing text sorts last.
+    private static func compareLast(_ a: String?, _ b: String?) -> Bool? {
+        switch (a, b) {
+        case let (x?, y?):
+            let order = x.localizedStandardCompare(y)
+            return order == .orderedSame ? nil : order == .orderedAscending
+        case (_?, nil): return true
+        case (nil, _?): return false
+        case (nil, nil): return nil
+        }
+    }
 }
 
 struct InventoryFilter: Equatable {
@@ -94,6 +210,9 @@ struct InventorySummary: Equatable {
 @Observable
 final class InventoryModel {
     var filter = InventoryFilter()
+    /// The order the page uses now. The app starts it at the stored default. A
+    /// pick from the sort menu lasts until the app quits.
+    var sort: InventorySort
     private(set) var hits: [Int: SearchHit] = [:]
     private(set) var prices: [Int: [ProductPrice]] = [:]
     private(set) var isLoading = false
@@ -102,13 +221,21 @@ final class InventoryModel {
     /// The catalog the caches were built from. A swap invalidates them.
     var catalogPath: String?
 
-    /// Committed cards only, newest first. The caller passes the store's cards.
+    /// Tests pass no sort, so a default saved on the simulator cannot reorder
+    /// their rows.
+    init(sort: InventorySort = .newest) {
+        self.sort = sort
+    }
+
+    /// Committed cards only, in `sort` order. The caller passes the store's
+    /// cards.
     ///
-    /// `query` is the text from the one search field. The order stays
-    /// acquisition-first even with a query, because he reads his own inventory
-    /// in that order everywhere else.
+    /// `query` is the text from the one search field. The page keeps `sort`
+    /// with a query too.
     /// `applyFilter` is false for the collection section of a search, so the
     /// chips on the inventory page never narrow a search result in silence.
+    /// That section also ignores `sort` and stays newest first, because the
+    /// sort menu lives on the inventory page.
     ///
     /// A sold card is excluded either way. It is not a chip he can turn off,
     /// because a card he sold is not inventory — it is on its order in the
@@ -116,10 +243,10 @@ final class InventoryModel {
     /// let sold cards back into the collection half of a search.
     func rows(from cards: [OwnedCard], query: String = "", applyFilter: Bool = true) -> [InventoryRow] {
         let parsed = OwnedCardQuery(query)
-        return cards
+        let rows = cards
             .filter { $0.isCommitted && !CardTagIndex.isSold($0) && (!applyFilter || matches($0)) && matchesQuery($0, parsed) }
-            .sorted { $0.acquiredAt == $1.acquiredAt ? $0.scannedAt > $1.scannedAt : $0.acquiredAt > $1.acquiredAt }
             .map { InventoryRow(card: $0, hit: hits[$0.productId], marketCents: marketCents(for: $0)) }
+        return (applyFilter ? sort : .newest).sorted(rows)
     }
 
     /// Labels in use, most used first. Derived on every read, so a deleted card
