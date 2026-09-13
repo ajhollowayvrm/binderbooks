@@ -218,8 +218,14 @@ Include these TCGplayer categories:
 
 - Pokémon (English)
 - Pokémon Japan
-- Digimon
-- Union Arena
+- ~~Digimon~~
+- ~~Union Arena~~
+
+**Amended 2026-09-12:** AJ removed Digimon and Union Arena: *"Let's keep only Pokemon
+and Pokemon Japan and I'll just do everything else by hand."* His collection and his
+sold orders held no card from either. Palworld was added and removed the same day,
+because his Palworld cards are Chinese and TCGplayer does not carry them. A card from
+any other game or language goes in by hand (see "Hand-entered cards" in `02`).
 
 **Check `https://tcgcsv.com/tcgplayer/categories` before building the filter list** —
 category IDs must come from the live endpoint, not from this document. He also asked

@@ -36,9 +36,10 @@ SCHEMA_VERSION = 1
 BASE_URL = "https://tcgcsv.com/tcgplayer"
 
 # Category names as TCGCSV spells them. The job resolves them to IDs at run time
-# and fails if a name does not resolve. TCGCSV writes the Palworld name in
-# capitals. Palworld's first set, Dawn of Palpagos, released on 2026-07-30.
-CATEGORY_NAMES = ["Pokemon", "Pokemon Japan", "Digimon Card Game", "Union Arena", "Palworld OFFICIAL CARD GAME"]
+# and fails if a name does not resolve. On 2026-09-12 AJ removed Digimon, Union
+# Arena, and Palworld: he owns none of those cards in English, and he enters
+# everything else by hand in the app.
+CATEGORY_NAMES = ["Pokemon", "Pokemon Japan"]
 
 # Words that mark a Chinese-language category. The job scans the full category
 # list for them and reports the result. It does not add them to the build.

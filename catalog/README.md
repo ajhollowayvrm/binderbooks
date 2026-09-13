@@ -30,14 +30,16 @@ A full build makes about 1,750 requests and takes a few minutes.
 
 ## Facts about TCGCSV, verified 2026-09-09
 
-- **The category names are exact.** `Pokemon`, `Pokemon Japan`, `Digimon Card Game`,
-  `Union Arena`, `Palworld OFFICIAL CARD GAME`. The name is not `Digimon`. The job
-  resolves names to IDs on every run and fails if a name does not resolve.
-- **Palworld (category 91) was added on 2026-09-12.** It had 8 groups and 282
-  products: Dawn of Palpagos (`BP01`, `TD01`, `TD02`), promos, prototypes, and the
-  sets that release later. Numbers look like `EBP01-001OSR`, and the existing
-  `CODE-NUM` rule reads them. Prototype cards have no number and the rarity `None`,
-  so they stay singles. The printings are `Normal` and `Foil`. It uses `CardType`.
+- **The build takes two categories: `Pokemon` and `Pokemon Japan`.** The names are
+  exact. The job resolves names to IDs on every run and fails if a name does not
+  resolve. On 2026-09-12 AJ removed `Digimon Card Game`, `Union Arena`, and
+  `Palworld OFFICIAL CARD GAME`. He owns no English cards from them, and he enters
+  other cards by hand in the app. The parser still reads their number formats,
+  below, so a category can come back with one line in `CATEGORY_NAMES`.
+- **Palworld (category 91) was checked on 2026-09-12.** It had 8 groups and 282
+  products. Numbers look like `EBP01-001OSR`, and the `CODE-NUM` rule reads them.
+  Prototype cards have no number and the rarity `None`, so they stay singles. The
+  printings are `Normal` and `Foil`. TCGplayer carries no Chinese Palworld cards.
 - **No Chinese-language category exists.** The job scans all category names on every
   run and writes the result to the build report.
 - **TCGCSV returns 401 to Python's default user agent.** The job sends its own

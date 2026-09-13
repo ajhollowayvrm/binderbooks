@@ -42,11 +42,12 @@ from any document, including this one. Match on category `name`, and fail loudly
 configured name doesn't resolve — a silently missing category looks identical to an
 empty search result.
 
-Configured categories: Pokémon (English), Pokémon Japan, Digimon, Union Arena, Palworld.
+Configured categories: Pokémon (English), Pokémon Japan.
 
-**Amended 2026-09-12:** AJ added Palworld (`Palworld OFFICIAL CARD GAME`), for Dawn of
-Palpagos. TCGplayer carries no Chinese or Italian cards, so those cards go in by hand.
-See "Hand-entered cards" in `02`.
+**Amended 2026-09-12:** AJ removed Digimon and Union Arena, and removed Palworld on the
+day it was added. His collection and his sold orders hold only Pokémon and Pokémon
+Japan, and his Palworld cards are Chinese. TCGplayer carries no Chinese or Italian
+cards. He enters every other card by hand. See "Hand-entered cards" in `02`.
 
 Also: scan the full category list for any Chinese-language card category and report
 what you find in the job log. If one exists, add it. If not, note it — the assumption

@@ -122,7 +122,7 @@ class CategoryTests(unittest.TestCase):
 
     def test_resolves_configured_names(self):
         ids = [c["categoryId"] for c in bc.resolve_categories(self.LIVE, bc.CATEGORY_NAMES)]
-        self.assertEqual(ids, [3, 85, 63, 81, 91])
+        self.assertEqual(ids, [3, 85])
 
     def test_missing_name_fails(self):
         with self.assertRaises(SystemExit):
