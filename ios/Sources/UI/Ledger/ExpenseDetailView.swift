@@ -12,6 +12,7 @@ struct ExpenseDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Query private var expenses: [BusinessExpense]
     @State private var confirmDelete = false
+    @State private var editing = false
 
     init(expenseID: UUID) {
         self.expenseID = expenseID
@@ -54,6 +55,18 @@ struct ExpenseDetailView: View {
         }
         .navigationTitle("Expense")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if expense != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Edit") { editing = true }
+                }
+            }
+        }
+        .sheet(isPresented: $editing) {
+            if let expense {
+                EditExpenseSheet(expense: expense)
+            }
+        }
         .confirmationDialog("Delete this expense?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { deleteExpense() }
         }

@@ -15,6 +15,7 @@ struct PurchaseDetailView: View {
     @Query private var purchases: [Purchase]
     @State private var confirmDelete = false
     @State private var showBlocked = false
+    @State private var editing = false
 
     init(purchaseID: UUID) {
         self.purchaseID = purchaseID
@@ -90,6 +91,18 @@ struct PurchaseDetailView: View {
         }
         .navigationTitle("Purchase")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if purchase != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Edit") { editing = true }
+                }
+            }
+        }
+        .sheet(isPresented: $editing) {
+            if let purchase {
+                EditPurchaseSheet(purchase: purchase) { inventory.invalidateHaystacks() }
+            }
+        }
         .confirmationDialog("Delete this purchase?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { deletePurchase() }
         }
@@ -150,6 +163,7 @@ struct GradingDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Query private var submissions: [GradingSubmission]
     @State private var recording = false
+    @State private var editing = false
     @State private var confirmDelete = false
     @State private var blockedMessage: String?
 
@@ -181,6 +195,12 @@ struct GradingDetailView: View {
                     }
                     if !submission.submissionNumber.isEmpty {
                         LabeledContent("Submission", value: submission.submissionNumber)
+                    }
+                    if !submission.serviceLevel.isEmpty {
+                        LabeledContent("Service level", value: submission.serviceLevel)
+                    }
+                    if submission.declaredValueCents > 0 {
+                        LabeledContent("Declared value", value: submission.declaredValueCents.asCurrency)
                     }
                 } footer: {
                     if submission.entries.contains(where: { $0.card != nil }) {
@@ -240,9 +260,21 @@ struct GradingDetailView: View {
         }
         .navigationTitle("Grading")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !submissions.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Edit") { editing = true }
+                }
+            }
+        }
         .sheet(isPresented: $recording) {
             if let submission = submissions.first {
                 GradingReturnSheet(submission: submission) { inventory.invalidateHaystacks() }
+            }
+        }
+        .sheet(isPresented: $editing) {
+            if let submission = submissions.first {
+                EditGradingSheet(submission: submission) { inventory.invalidateHaystacks() }
             }
         }
         .confirmationDialog("Delete this submission?", isPresented: $confirmDelete, titleVisibility: .visible) {

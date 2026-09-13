@@ -42,6 +42,8 @@ private struct OwnedCardDetailBody: View {
     @State private var tagTarget: TagSheetTarget?
     @State private var markingGraded = false
     @State private var confirmNoHits = false
+    @State private var editingCost = false
+    @State private var pickingProduct = false
 
     private var hit: SearchHit? { model.hits[card.productId] }
     private var printings: [String] { model.prices[card.productId]?.map(\.subTypeName) ?? [] }
@@ -82,6 +84,14 @@ private struct OwnedCardDetailBody: View {
         .sheet(isPresented: $markingGraded) {
             MarkGradedSheet(cards: [card], name: { $0.displayName(hit) ?? "Card" }) {
                 model.invalidateHaystacks()
+            }
+        }
+        .sheet(isPresented: $editingCost) {
+            EditCardCostSheet(card: card) { model.invalidateHaystacks() }
+        }
+        .sheet(isPresented: $pickingProduct) {
+            CatalogPickSheet(currentProductId: card.productId, seed: card.displayName(hit) ?? card.ocrNumber ?? "") { picked in
+                assign(picked)
             }
         }
         .task(id: card.productId) {
@@ -168,6 +178,7 @@ private struct OwnedCardDetailBody: View {
                     }
                 }
             }
+            LabeledContent("Acquired", value: card.acquiredAt.formatted(date: .abbreviated, time: .omitted))
             LabeledContent("Acquisition basis") {
                 HStack(spacing: 4) {
                     Text(card.acquisitionBasisCents.asCurrency).monospacedDigit()
@@ -192,9 +203,14 @@ private struct OwnedCardDetailBody: View {
                         .foregroundStyle(.secondary)
                 }
             } else if card.totalBasisCents == 0 {
-                Text("No cost on this card yet. Set one from the review screen, or attach it to a purchase.")
+                Text("No cost on this card yet. Tap Edit cost to set one.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            Button {
+                editingCost = true
+            } label: {
+                Label("Edit cost…", systemImage: "dollarsign.circle")
             }
         }
     }
@@ -203,7 +219,9 @@ private struct OwnedCardDetailBody: View {
     private var source: some View {
         if let purchase = card.sourceItem?.purchase {
             Section("Source") {
-                LabeledContent("Vendor", value: purchase.vendor.isEmpty ? "—" : purchase.vendor)
+                NavigationLink(value: LedgerEntry.Kind.purchase(purchase.id)) {
+                    LabeledContent("Vendor", value: purchase.vendor.isEmpty ? "—" : purchase.vendor)
+                }
                 LabeledContent("Date", value: purchase.date.formatted(date: .abbreviated, time: .omitted))
                 LabeledContent("Landed cost", value: purchase.landedCostCents.asCurrency)
                 LabeledContent("Lines", value: "\(purchase.items.count)")
@@ -254,6 +272,13 @@ private struct OwnedCardDetailBody: View {
 
     private var edits: some View {
         Section("Edit") {
+            if !card.isSealedSelf {
+                Button {
+                    pickingProduct = true
+                } label: {
+                    Label(card.isIdentified ? "Change card…" : "Find in catalog…", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
             if printings.count > 1 {
                 chipRow("Printing", printings, selected: card.printing) { card.printing = $0; save() }
             }
@@ -265,6 +290,9 @@ private struct OwnedCardDetailBody: View {
             }
             Toggle("Personal collection (not inventory)", isOn: Binding(get: { card.isPersonalCollection }, set: { card.isPersonalCollection = $0; save() }))
             Toggle("Bulk (identity only, no basis)", isOn: Binding(get: { card.isBulk }, set: { card.isBulk = $0; save() }))
+            if card.isBulk {
+                Stepper("Quantity: \(card.quantity)", value: Binding(get: { max(1, card.quantity) }, set: { card.quantity = $0; save() }), in: 1...9_999)
+            }
             if card.matchConfidence == .uncertain {
                 Button("Confirm this identification") { card.matchConfidence = .manual; save() }
             }
@@ -286,6 +314,22 @@ private struct OwnedCardDetailBody: View {
 
     private func save() {
         try? modelContext.save()
+    }
+
+    /// The card becomes the picked product. Its printing stays when the new
+    /// product has it, and the printing rules choose one when it does not.
+    private func assign(_ picked: SearchHit) {
+        guard picked.productId != card.productId else { return }
+        try? CardEditor.assign(card, toProduct: picked.productId, context: modelContext)
+        model.invalidateHaystacks()
+        Task {
+            await model.load(for: [card])
+            let available = printings
+            if !available.isEmpty, !available.contains(card.printing) {
+                card.printing = PrintingRules.choose(available: available, rarity: picked.rarity, sessionDefault: nil).printing
+                save()
+            }
+        }
     }
 
     /// Starts a session scoped to this box alone, so its cost splits only over
