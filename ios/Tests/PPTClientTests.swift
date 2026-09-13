@@ -66,6 +66,18 @@ import Testing
         #expect(PPTClient.gradeLabel(forBucket: "psaGem") == nil)
     }
 
+    /// PPT answered `data: []` for Japanese product 602681 (Umbreon ex 217/187)
+    /// with "english", and full comps with "japanese" (2026-09-13). A catalog
+    /// card has language "en", so the category must decide.
+    @Test func aJapaneseCatalogCardAsksTheJapaneseCatalogue() {
+        #expect(PPTClient.language(categoryId: TCGCategory.pokemonJapan, cardLanguage: "en") == "japanese")
+        #expect(PPTClient.language(categoryId: TCGCategory.pokemon, cardLanguage: "en") == "english")
+        #expect(PPTClient.language(categoryId: TCGCategory.pokemon, cardLanguage: "ja") == "english")
+        // A card with no catalog hit uses its own language.
+        #expect(PPTClient.language(categoryId: nil, cardLanguage: "ja") == "japanese")
+        #expect(PPTClient.language(categoryId: nil, cardLanguage: "en") == "english")
+    }
+
     @Test func nonsenseIsUnreadable() {
         #expect(throws: PPTClient.Failure.unreadable) {
             try PPTClient.parse(Data("not json".utf8), tcgPlayerId: 1)

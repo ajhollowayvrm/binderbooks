@@ -45,6 +45,17 @@ struct PPTClient {
         return try Self.parse(data, tcgPlayerId: tcgPlayerId)
     }
 
+    /// The PPT catalogue that holds a card. PPT keeps Japanese cards in a
+    /// separate catalogue: a Japanese product id sent with "english" gets
+    /// `data: []`, and the fetch records the card as "not on PPT".
+    ///
+    /// The catalog category decides, because `OwnedCard.language` is "en" on
+    /// every catalog card. A card with no catalog hit uses its own language.
+    static func language(categoryId: Int?, cardLanguage: String) -> String {
+        if let categoryId { return categoryId == TCGCategory.pokemonJapan ? "japanese" : "english" }
+        return cardLanguage.lowercased().hasPrefix("j") ? "japanese" : "english"
+    }
+
     // MARK: - Parsing
 
     /// An id lookup answers `{"data": {…}}` with one card under it. A search

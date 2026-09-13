@@ -420,7 +420,7 @@ struct InventoryView: View {
     }
 
     private func fetchComps(_ cards: [OwnedCard]) async {
-        let report = await fetcher.fetch(cards, context: modelContext, client: PPTClient(key: PPTKey.value))
+        let report = await fetcher.fetch(cards, context: modelContext, client: PPTClient(key: PPTKey.value)) { model.hits[$0.productId]?.categoryId }
         compsMessage = report.summary
         endSelection()
     }

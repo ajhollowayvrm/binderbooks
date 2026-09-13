@@ -37,7 +37,9 @@ final class CompsFetcher {
         cards.filter(\.isIdentified).count * 2
     }
 
-    func fetch(_ cards: [OwnedCard], context: ModelContext, client: PPTClient, pause: Duration = .milliseconds(1_100)) async -> Report {
+    /// `categoryId` gives the catalog category of a card. PPT needs it to find
+    /// a Japanese card.
+    func fetch(_ cards: [OwnedCard], context: ModelContext, client: PPTClient, categoryId: (OwnedCard) -> Int?, pause: Duration = .milliseconds(1_100)) async -> Report {
         var report = Report()
         isRunning = true
         total = cards.count
@@ -48,7 +50,8 @@ final class CompsFetcher {
             defer { done += 1 }
             guard card.isIdentified else { report.skipped += 1; continue }
             do {
-                if let comps = try await client.gradedComps(tcgPlayerId: card.productId, language: card.language) {
+                let language = PPTClient.language(categoryId: categoryId(card), cardLanguage: card.language)
+                if let comps = try await client.gradedComps(tcgPlayerId: card.productId, language: language) {
                     card.fetchedCompCents = comps
                     card.compsFetchedAt = Date()
                     report.fetched += 1

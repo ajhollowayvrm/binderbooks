@@ -7,6 +7,8 @@ import SwiftUI
 /// show under the named rows rather than vanish.
 struct GradedCompsSection: View {
     let card: OwnedCard
+    /// The catalog category. PPT needs it to find a Japanese card.
+    let categoryId: Int?
 
     @Environment(\.modelContext) private var modelContext
     @State private var fetcher = CompsFetcher()
@@ -82,7 +84,7 @@ struct GradedCompsSection: View {
     }
 
     private func fetch() async {
-        let report = await fetcher.fetch([card], context: modelContext, client: PPTClient(key: PPTKey.value))
+        let report = await fetcher.fetch([card], context: modelContext, client: PPTClient(key: PPTKey.value)) { _ in categoryId }
         message = report.summary
     }
 }

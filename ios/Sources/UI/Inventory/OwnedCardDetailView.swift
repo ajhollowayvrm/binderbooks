@@ -54,7 +54,7 @@ private struct OwnedCardDetailBody: View {
             sealed
             tags
             basis
-            GradedCompsSection(card: card)
+            GradedCompsSection(card: card, categoryId: hit?.categoryId)
             source
             // A card with no catalog product: one he entered by hand, or an
             // imported row that never had one. He can name it here.
