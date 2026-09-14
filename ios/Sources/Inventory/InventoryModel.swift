@@ -182,11 +182,13 @@ struct InventoryFilter: Equatable {
     /// `TagKey` values, not display forms. A card matches when it holds any of
     /// them, which is what "binder 3" plus "for sale" means to him.
     var tagKeys: Set<String> = []
+    /// Only the cards with no purchase behind them, which have no cost to split.
+    var noPurchaseOnly = false
 
     /// True when a chip is on. The typed query is not part of this, because the
     /// search header owns the query and the Clear button must not wipe it.
     var isActive: Bool {
-        !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly || !tagKeys.isEmpty
+        !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly || !tagKeys.isEmpty || noPurchaseOnly
     }
 }
 
@@ -348,6 +350,7 @@ final class InventoryModel {
         if filter.slabsOnly, !card.isSlabbed { return false }
         if filter.hideBulk, card.isBulk { return false }
         if filter.personalOnly, !card.isPersonalCollection { return false }
+        if filter.noPurchaseOnly, card.sourceItem?.purchase != nil { return false }
         return true
     }
 }

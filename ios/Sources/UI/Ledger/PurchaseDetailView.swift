@@ -16,6 +16,7 @@ struct PurchaseDetailView: View {
     @State private var confirmDelete = false
     @State private var showBlocked = false
     @State private var editing = false
+    @State private var addingCards = false
 
     init(purchaseID: UUID) {
         self.purchaseID = purchaseID
@@ -69,6 +70,13 @@ struct PurchaseDetailView: View {
                             cardRow(card)
                         }
                     }
+                    // For cards already in inventory that came from this
+                    // purchase. Open it is for cards not scanned yet.
+                    Button {
+                        addingCards = true
+                    } label: {
+                        Label("Add cards from inventory…", systemImage: "plus.rectangle.on.rectangle")
+                    }
                 } header: {
                     Text(cards.count == 1 ? "1 card" : "\(cards.count) cards")
                 } footer: {
@@ -101,6 +109,11 @@ struct PurchaseDetailView: View {
         .sheet(isPresented: $editing) {
             if let purchase {
                 EditPurchaseSheet(purchase: purchase) { inventory.invalidateHaystacks() }
+            }
+        }
+        .sheet(isPresented: $addingCards) {
+            if let purchase {
+                PurchaseCardsSheet(purchase: purchase) { inventory.invalidateHaystacks() }
             }
         }
         .confirmationDialog("Delete this purchase?", isPresented: $confirmDelete, titleVisibility: .visible) {

@@ -129,7 +129,28 @@ import Testing
         #expect(!entry.isMoneyIn)
         #expect(entry.amountCents == -3_200)
         #expect(entry.title == "Gamecraft")
-        #expect(entry.detail == "6x Chaos Rising Booster Pack")
+        #expect(entry.detail == "no cards yet · 6x Chaos Rising Booster Pack")
+    }
+
+    /// The row says how many cards came out of the purchase, so money with
+    /// nothing to show for it stands out in the list.
+    @Test @MainActor func aPurchaseRowCountsItsCards() throws {
+        let container = try store()
+        let context = container.mainContext
+        let purchase = Purchase(date: day("2026-09-09"), vendor: "Whatnot", itemCostCents: 4_000)
+        context.insert(purchase)
+        let item = PurchaseItem(productId: 42)
+        context.insert(item)
+        item.purchase = purchase
+        for _ in 0..<2 {
+            let card = OwnedCard(productId: 42, printing: "Normal", condition: CardCondition.nearMint.rawValue, confidence: .manual)
+            context.insert(card)
+            card.sourceItem = item
+        }
+        try context.save()
+
+        let entry = try #require(LedgerEntry.entries(purchases: [purchase], grading: [], sales: []).first)
+        #expect(entry.detail == "2 cards")
     }
 
     /// An order he types has no cards, exactly like the 35 imported ones.

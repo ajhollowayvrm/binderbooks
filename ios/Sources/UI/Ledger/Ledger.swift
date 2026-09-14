@@ -45,7 +45,7 @@ struct LedgerEntry: Identifiable, Hashable {
                     kind: .purchase(purchase.id),
                     date: purchase.date,
                     title: purchase.vendor.isEmpty ? "Purchase" : purchase.vendor,
-                    detail: purchase.note,
+                    detail: purchase.note.isEmpty ? cardCount(purchase) : "\(cardCount(purchase)) · \(purchase.note)",
                     amountCents: -purchase.landedCostCents
                 )
             )
@@ -90,6 +90,17 @@ struct LedgerEntry: Identifiable, Hashable {
         }
 
         return out.sorted { $0.date == $1.date ? $0.title < $1.title : $0.date > $1.date }
+    }
+
+    /// How many cards came out of a purchase. "no cards yet" is the gap he
+    /// looks for: money on the books with nothing in inventory to show for it.
+    static func cardCount(_ purchase: Purchase) -> String {
+        let count = purchase.items.reduce(0) { $0 + $1.cards.count }
+        switch count {
+        case 0: return "no cards yet"
+        case 1: return "1 card"
+        default: return "\(count) cards"
+        }
     }
 
     static func channelName(_ raw: String) -> String {

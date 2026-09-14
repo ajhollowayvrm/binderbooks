@@ -692,6 +692,42 @@ marker reads it. The card detail screen edits these fields on any card with
 `productId` 0, which includes imported rows that never had a product. Export format
 version 8 carries the fields.
 
+### Choosing a purchase
+
+**Built 2026-09-13.** Many cards reached inventory with no purchase: a scan
+committed with no purchase, a card added by hand, a row from the old ledger. The
+reconciliation of 2026-09-13 found 112 held cards with no cost and 79 purchases
+with no cards. The money and the cards were both on the books, but not joined.
+The code is `PurchaseLink`.
+
+Where he joins them:
+
+| Place | What it does |
+|---|---|
+| Card screen, Source | "Choose a purchase…", or "Change purchase…" |
+| Inventory selection, `…` menu | "Choose a purchase…" for every selected card |
+| Purchase screen | "Add cards from inventory…" |
+| Inventory chips | "No purchase" shows only the cards with none |
+| Ledger row | "no cards yet", "1 card", or "4 cards" before the note |
+
+The rules:
+
+- A card alone on its line moves with the line. A scan session can rip from
+  that line (`ScanSession.ripTarget`), so the line is never left behind or
+  deleted.
+- A card that shares a line, such as two pulls from one pack, gets its own new
+  line on the purchase, the way a scan commit does.
+- An unopened box bought several at a time is isolated first, so only that box
+  moves.
+- A card with no cost takes its share and gets `basisIsAllocated`. A card with a
+  cost the split did not write keeps it as his price and gets `basisIsManual`.
+  That cost comes out of the purchase total first.
+- The card takes the purchase's date.
+- The purchase splits again, and so does every purchase the cards left, when
+  `PurchaseEditor.canResplit` allows it. When it does not, the sheet says so.
+- A sold card whose order line has no known cost takes the card's new cost. A
+  known cost on an order line never changes.
+
 ---
 
 ## Calculators

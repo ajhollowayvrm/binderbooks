@@ -44,6 +44,7 @@ private struct OwnedCardDetailBody: View {
     @State private var confirmNoHits = false
     @State private var editingCost = false
     @State private var pickingProduct = false
+    @State private var choosingPurchase = false
 
     private var hit: SearchHit? { model.hits[card.productId] }
     private var printings: [String] { model.prices[card.productId]?.map(\.subTypeName) ?? [] }
@@ -94,9 +95,18 @@ private struct OwnedCardDetailBody: View {
                 assign(picked)
             }
         }
+        .sheet(isPresented: $choosingPurchase) {
+            ChoosePurchaseSheet(cards: [card]) { model.invalidateHaystacks() }
+        }
         .task(id: card.productId) {
             await model.load(for: [card])
         }
+        #if DEBUG
+        // `CT_CHOOSE_PURCHASE=1` opens the sheet, because simctl cannot tap.
+        .onAppear {
+            if ProcessInfo.processInfo.environment["CT_CHOOSE_PURCHASE"] == "1" { choosingPurchase = true }
+        }
+        #endif
     }
 
     private var identity: some View {
@@ -215,10 +225,13 @@ private struct OwnedCardDetailBody: View {
         }
     }
 
+    /// Always shown. A card with no purchase has no cost to split, and he can
+    /// only fix a gap he can see.
     @ViewBuilder
     private var source: some View {
-        if let purchase = card.sourceItem?.purchase {
-            Section("Source") {
+        let purchase = card.sourceItem?.purchase
+        Section {
+            if let purchase {
                 NavigationLink(value: LedgerEntry.Kind.purchase(purchase.id)) {
                     LabeledContent("Vendor", value: purchase.vendor.isEmpty ? "—" : purchase.vendor)
                 }
@@ -228,6 +241,19 @@ private struct OwnedCardDetailBody: View {
                 if !purchase.note.isEmpty {
                     Text(purchase.note).font(.footnote).foregroundStyle(.secondary)
                 }
+            } else {
+                LabeledContent("Purchase", value: "None")
+            }
+            Button {
+                choosingPurchase = true
+            } label: {
+                Label(purchase == nil ? "Choose a purchase…" : "Change purchase…", systemImage: "cart")
+            }
+        } header: {
+            Text("Source")
+        } footer: {
+            if purchase == nil {
+                Text("With no purchase, this card has only a cost you typed. Choose where it came from, and it takes its share of that purchase.")
             }
         }
         if let session = card.scanSession {

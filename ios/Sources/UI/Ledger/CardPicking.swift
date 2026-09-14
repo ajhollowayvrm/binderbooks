@@ -10,6 +10,7 @@ struct InventoryCardPicker: View {
     var single = false
     /// What the order recorded, for a line that links no card.
     var recorded: String?
+    var footer = "Sold cards are not on this list. One card can be on one order only."
 
     @Environment(InventoryModel.self) private var model
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var cards: [OwnedCard]
@@ -47,7 +48,7 @@ struct InventoryCardPicker: View {
                     Text("\(selection.count) selected")
                 }
             } footer: {
-                Text("Sold cards are not on this list. One card can be on one order only.")
+                Text(footer)
             }
         }
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search inventory")

@@ -187,12 +187,14 @@ struct RootView: View {
             search.text = ""
             path = NavigationPath()
         }
-        if env["CT_OPEN_CARD"] == "1" {
+        // `CT_OPEN_CARD=nopurchase` pushes the newest card with no purchase.
+        if let spec = env["CT_OPEN_CARD"], spec == "1" || spec == "nopurchase" {
             Task {
                 while !catalog.isReady { try? await Task.sleep(for: .milliseconds(200)) }
                 var descriptor = FetchDescriptor<OwnedCard>(sortBy: [SortDescriptor(\.scannedAt, order: .reverse)])
-                descriptor.fetchLimit = 1
-                if let card = try? modelContext.fetch(descriptor).first {
+                if spec == "1" { descriptor.fetchLimit = 1 }
+                let cards = (try? modelContext.fetch(descriptor)) ?? []
+                if let card = spec == "1" ? cards.first : cards.first(where: { $0.sourceItem?.purchase == nil && !CardTagIndex.isSold($0) }) {
                     try? await Task.sleep(for: .milliseconds(300))
                     path.append(AppRoute.ownedCard(card.id))
                 }
