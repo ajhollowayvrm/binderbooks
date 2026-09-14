@@ -16,6 +16,8 @@ import SwiftUI
 struct AddToInventorySheet: View {
     /// Nil when he enters the card by hand.
     let detail: ProductDetail?
+    /// Called after a save, before the sheet dismisses.
+    var onAdded: (() -> Void)?
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -46,16 +48,18 @@ struct AddToInventorySheet: View {
     /// after another.
     @AppStorage("handEntryLanguage") private var language = "en"
 
-    init(detail: ProductDetail) {
+    init(detail: ProductDetail, onAdded: (() -> Void)? = nil) {
         self.detail = detail
+        self.onAdded = onAdded
         _printing = State(initialValue: detail.prices.first?.subTypeName ?? "")
         _manualName = State(initialValue: "")
     }
 
     /// A card the catalog does not carry. `name` fills the name field, because
     /// the search text he typed is usually the card's name.
-    init(handEnteredName name: String) {
+    init(handEnteredName name: String, onAdded: (() -> Void)? = nil) {
         self.detail = nil
+        self.onAdded = onAdded
         _printing = State(initialValue: "")
         _manualName = State(initialValue: name.trimmingCharacters(in: .whitespacesAndNewlines))
     }
@@ -235,6 +239,7 @@ struct AddToInventorySheet: View {
             for card in cards { modelContext.insert(card) }
         }
         try? modelContext.save()
+        onAdded?()
         dismiss()
     }
 }

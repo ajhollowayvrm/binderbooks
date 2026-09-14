@@ -19,6 +19,8 @@ struct RootView: View {
     @State private var inventory = InventoryModel(sort: .storedDefault)
     @State private var launcher = ScannerLauncher()
     @State private var path = NavigationPath()
+    @State private var addingCard = false
+    @State private var scanAfterAdd = false
 
     var body: some View {
         @Bindable var search = search
@@ -43,6 +45,27 @@ struct RootView: View {
                     NavigationLink(value: AppRoute.settings) {
                         Label("Settings", systemImage: "gearshape")
                     }
+                }
+                // Its own capsule, because it adds and the other two navigate.
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        addingCard = true
+                    } label: {
+                        Label("Add a card", systemImage: "plus")
+                    }
+                }
+            }
+            // The scanner opens after the sheet is gone. A full-screen cover
+            // presented during the sheet's dismissal does not appear.
+            .sheet(isPresented: $addingCard, onDismiss: {
+                if scanAfterAdd {
+                    scanAfterAdd = false
+                    openScanner()
+                }
+            }) {
+                AddCardSheet(openSessionCount: openSessions.first?.cards.count) {
+                    scanAfterAdd = true
                 }
             }
             .navigationDestination(for: SearchHit.self) { hit in
@@ -181,6 +204,10 @@ struct RootView: View {
                 while !catalog.isReady { try? await Task.sleep(for: .milliseconds(200)) }
                 path.append(AppRoute.settings)
             }
+        }
+        // `CT_OPEN_ADD_CARD=1` opens the plus button's sheet.
+        if env["CT_OPEN_ADD_CARD"] == "1" {
+            addingCard = true
         }
         if env["CT_OPEN_SCANNER"] == "1" {
             Task {
