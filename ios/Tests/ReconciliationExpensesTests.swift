@@ -42,6 +42,14 @@ import Testing
         struct LineMove: Decodable { var newItem: NewItem; var cardIds: [UUID]; var why: String }
         struct ItemDelete: Decodable { var id: UUID; var why: String }
         struct LineReassign: Decodable { var itemId: UUID; var purchaseId: UUID; var productId: Int; var quantity: Int; var why: String }
+        struct SaleRemoval: Decodable { var id: UUID; var why: String }
+        struct SaleRepair: Decodable { var id: UUID; var orderId: String; var soldAt: Double; var grossCents: Int; var shippingChargedCents: Int; var why: String }
+        struct SaleOrderId: Decodable { var id: UUID; var orderId: String }
+        var saleRemovals: [SaleRemoval]
+        var saleRepairs: [SaleRepair]
+        var saleOrderIds: [SaleOrderId]
+        /// Sales with no fee on record. They take the app's own fitted fee.
+        var saleFeeEstimates: [UUID]
         var lineMoves: [LineMove]
         var itemDeletes: [ItemDelete]
         var lineReassigns: [LineReassign]
@@ -213,6 +221,55 @@ import Testing
         }
         try context.save()
 
+        // The fit reads the books before any sale changes, and it skips a sale
+        // with no fee, so the old ledger's missing fees cannot pull it down.
+        let fees = FeeEstimate.derived(from: try context.fetch(FetchDescriptor<Sale>()))
+        var removedLines = 0
+
+        for removal in plan.saleRemovals {
+            let id = removal.id
+            let sale = try one(Sale.self, #Predicate { $0.id == id }, "sale \(id)")
+            // Deleting a sale deletes its lines. None of them may carry a card.
+            try #require(sale.lines.allSatisfy { $0.card == nil && $0.sealedItem == nil }, "sale \(id) has a card on a line")
+            removedLines += sale.lines.count
+            report.append("REMOVE SALE \(sale.soldAt.formatted(day)) \(sale.channelRaw) \(money(sale.grossCents + sale.shippingChargedCents)) lines \(sale.lines.count) | \(removal.why)")
+            context.delete(sale)
+        }
+        try context.save()
+
+        for repair in plan.saleRepairs {
+            let id = repair.id
+            let sale = try one(Sale.self, #Predicate { $0.id == id }, "sale \(id)")
+            let before = "\(sale.soldAt.formatted(day)) \(money(sale.grossCents + sale.shippingChargedCents))"
+            var details = SaleEditor.Details(sale)
+            details.externalOrderId = repair.orderId
+            details.soldAt = Date(timeIntervalSinceReferenceDate: repair.soldAt)
+            details.grossCents = repair.grossCents
+            details.shippingChargedCents = repair.shippingChargedCents
+            try SaleEditor.apply(details, to: sale, context: context)
+            report.append("REPAIR SALE \(before) -> \(sale.soldAt.formatted(day)) \(money(sale.grossCents + sale.shippingChargedCents)) \(sale.externalOrderId) | \(repair.why)")
+        }
+
+        for link in plan.saleOrderIds {
+            let id = link.id
+            let sale = try one(Sale.self, #Predicate { $0.id == id }, "sale \(id)")
+            #expect(sale.externalOrderId.isEmpty, "sale \(id) already has an order number")
+            sale.externalOrderId = link.orderId
+        }
+        try context.save()
+        report.append("ORDER NUMBERS attached to \(plan.saleOrderIds.count) sales from the TCGplayer order list")
+
+        for id in plan.saleFeeEstimates {
+            let sale = try one(Sale.self, #Predicate { $0.id == id }, "sale \(id)")
+            let fit = try #require(fees.fit(for: sale.channelRaw), "no fee fit for \(sale.channelRaw)")
+            #expect(sale.marketplaceFeesCents == 0, "sale \(id) already has a fee")
+            sale.marketplaceFeesCents = fit.feeCents(onCents: sale.grossCents + sale.shippingChargedCents)
+            // An estimate, so FeeEstimate never learns from it.
+            sale.costsEstimated = true
+            report.append("FEE \(sale.soldAt.formatted(day)) \(sale.channelRaw) \(money(sale.grossCents + sale.shippingChargedCents)) -> fee \(money(sale.marketplaceFeesCents)) estimated")
+        }
+        try context.save()
+
         for change in plan.sales {
             let id = change.saleId
             let sale = try one(Sale.self, #Predicate { $0.id == id }, "sale \(id)")
@@ -236,8 +293,8 @@ import Testing
         try context.save()
 
         #expect(try context.fetchCount(FetchDescriptor<OwnedCard>()) == cardsBefore)
-        #expect(try context.fetchCount(FetchDescriptor<Sale>()) == salesBefore)
-        #expect(try context.fetchCount(FetchDescriptor<SaleLine>()) == linesBefore)
+        #expect(try context.fetchCount(FetchDescriptor<Sale>()) == salesBefore - plan.saleRemovals.count)
+        #expect(try context.fetchCount(FetchDescriptor<SaleLine>()) == linesBefore - removedLines)
         #expect(try context.fetchCount(FetchDescriptor<GradingSubmission>()) == gradingBefore + plan.newGrading.count)
         #expect(try context.fetchCount(FetchDescriptor<BusinessExpense>()) == expensesBefore + plan.expenses.count)
         let purchases = try context.fetch(FetchDescriptor<Purchase>())
