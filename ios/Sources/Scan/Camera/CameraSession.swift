@@ -49,6 +49,35 @@ final class CameraSession: NSObject {
         }
     }
 
+    /// The back camera that focuses nearest.
+    ///
+    /// He identifies a card by holding it close, and the wide camera stops
+    /// focusing at about a hand's width. The ultra wide focuses far nearer on
+    /// a Pro phone, which is the lens the stock Camera app switches to for
+    /// macro. Picking a physical camera rather than a virtual one is on
+    /// purpose: a virtual device changes lens mid-session on its own, and a
+    /// scanner that reads the same card twice must not read it through two
+    /// different lenses.
+    ///
+    /// Not every phone has an ultra wide that focuses, so the wide camera is
+    /// the fallback and the behaviour there is unchanged.
+    static func closestFocusingCamera() -> AVCaptureDevice? {
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInUltraWideCamera, .builtInWideAngleCamera],
+            mediaType: .video,
+            position: .back
+        )
+        let cameras = discovery.devices
+        let ultraWide = cameras.first { $0.deviceType == .builtInUltraWideCamera }
+        // An ultra wide with no autofocus focuses no nearer than the wide one,
+        // and it is the softer sensor. It is only worth taking when it focuses.
+        if let ultraWide, ultraWide.isFocusModeSupported(.continuousAutoFocus) {
+            return ultraWide
+        }
+        return cameras.first { $0.deviceType == .builtInWideAngleCamera }
+            ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+    }
+
     // MARK: - Setting up
 
     func configure() throws {
@@ -60,7 +89,7 @@ final class CameraSession: NSObject {
         // reason the old still path existed; 720p loses it at arm's length.
         session.sessionPreset = session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : .high
 
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+        guard let camera = Self.closestFocusingCamera() else {
             throw Failure.noCamera
         }
         device = camera
@@ -89,9 +118,9 @@ final class CameraSession: NSObject {
 
     /// Close focus, continuous, and steady exposure.
     ///
-    /// A card is held about a hand's width away, which is near the close limit
-    /// of the wide camera. Left alone the lens hunts for the desk behind it and
-    /// every frame in between is soft.
+    /// A card is held close, which is why `closestFocusingCamera` picks the
+    /// lens it does. Left alone the lens still hunts for the desk behind the
+    /// card, and every frame in between is soft.
     private func configureLens(_ camera: AVCaptureDevice) {
         do {
             try camera.lockForConfiguration()
@@ -114,6 +143,8 @@ final class CameraSession: NSObject {
             if camera.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
                 camera.whiteBalanceMode = .continuousAutoWhiteBalance
             }
+            matchWideFieldOfView(camera)
+
             // Foil throws hard highlights. Letting the exposure sit a little
             // under keeps the pattern visible instead of blown white.
             if camera.isExposureModeSupported(.continuousAutoExposure),
@@ -123,6 +154,38 @@ final class CameraSession: NSObject {
         } catch {
             // An unconfigurable lens still takes pictures. Carry on.
         }
+    }
+
+    /// Crop the ultra wide back to the wide camera's field of view.
+    ///
+    /// The ultra wide sees about twice as much of the room, so a card held at
+    /// one distance lands on about half as many pixels across. The collector
+    /// number is the smallest print on a card, and it does not survive that
+    /// loss: the name still reads, the number stops reading, and a card with a
+    /// name and no number is matched on the name alone.
+    ///
+    /// Zoom is a sensor crop, so this costs no detail. It buys back the
+    /// framing the wide camera gave while keeping the close focus that is the
+    /// reason for taking the ultra wide at all.
+    ///
+    /// Call this with the device already locked for configuration.
+    private func matchWideFieldOfView(_ camera: AVCaptureDevice) {
+        guard camera.deviceType == .builtInUltraWideCamera else { return }
+        let wide = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera],
+            mediaType: .video,
+            position: .back
+        ).devices.first
+        guard let wide else { return }
+
+        let ultraAngle = Double(camera.activeFormat.videoFieldOfView)
+        let wideAngle = Double(wide.activeFormat.videoFieldOfView)
+        guard wideAngle > 0, ultraAngle > wideAngle else { return }
+
+        // Field of view is an angle across the frame; zoom is a ratio of
+        // widths. Half-angle tangents convert the one to the other.
+        let factor = tan(ultraAngle / 2 * .pi / 180) / tan(wideAngle / 2 * .pi / 180)
+        camera.videoZoomFactor = min(max(1, factor), camera.activeFormat.videoMaxZoomFactor)
     }
 
     /// True while the lens is moving, so the frame is not worth signing.

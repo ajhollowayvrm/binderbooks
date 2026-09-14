@@ -22,7 +22,7 @@ struct CameraScannerView: UIViewControllerRepresentable {
     var onCapturedWithoutNumber: () -> Void = {}
 
     static var isSupported: Bool {
-        AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) != nil
+        CameraSession.closestFocusingCamera() != nil
     }
 
     func makeUIViewController(context: Context) -> CameraScannerController {

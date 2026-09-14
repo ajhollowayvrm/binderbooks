@@ -46,14 +46,17 @@ import UIKit
 
     /// The card as the camera sees it: on a desk, turned, and not filling the
     /// frame. This is the input the scanner actually gets.
-    static func photograph(_ card: CGImage, rotation: CGFloat) -> CGImage {
-        let frame = CGSize(width: 1000, height: 1000)
+    static func photograph(
+        _ card: CGImage,
+        rotation: CGFloat,
+        frame: CGSize = CGSize(width: 1000, height: 1000),
+        drawn: CGSize = CGSize(width: 420, height: 588)
+    ) -> CGImage {
         return UIGraphicsImageRenderer(size: frame).image { context in
             let cg = context.cgContext
             UIColor(white: 0.18, alpha: 1).setFill()
             cg.fill(CGRect(origin: .zero, size: frame))
 
-            let drawn = CGSize(width: 420, height: 588)
             cg.translateBy(x: frame.width / 2, y: frame.height / 2)
             cg.rotate(by: rotation)
             cg.translateBy(x: -drawn.width / 2, y: -drawn.height / 2)
@@ -75,6 +78,32 @@ import UIKit
         #expect(found!.confidence > 0.6)
         #expect(found!.image.width == Int(CardRectifier.outputSize.width))
         #expect(found!.image.height == Int(CardRectifier.outputSize.height))
+    }
+
+    /// The frame the phone actually delivers is 1080 by 1920, and every other
+    /// detection test draws a square 1000 by 1000. A square frame hides a whole
+    /// class of fault: a ratio measured in normalised coordinates is the card's
+    /// true ratio there, and in a portrait frame it is not. This test pins the
+    /// shape the camera really sends, so the aspect band in `CardRectifier`
+    /// stays correct for the phone and not only for the test.
+    @Test func findsTheCardInAPortraitCameraFrame() throws {
+        let photo = Self.photograph(
+            Self.snivy,
+            rotation: 0.06,
+            frame: CGSize(width: 1080, height: 1920),
+            drawn: CGSize(width: 700, height: 980)
+        )
+        let found = try #require(try CardRectifier.rectify(photo))
+        #expect(found.confidence > 0.6)
+
+        // The corners found must be the card's, not a sliver of it. The card
+        // covers about 65 per cent of the frame's width here.
+        let xs = found.corners.map(\.x)
+        let ys = found.corners.map(\.y)
+        let width = xs.max()! - xs.min()!
+        let height = ys.max()! - ys.min()!
+        #expect(width > 0.55)
+        #expect(height > 0.45)
     }
 
     /// An empty desk is not a card. Nil is the right answer, and the caller
