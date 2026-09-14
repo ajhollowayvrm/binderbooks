@@ -23,6 +23,13 @@ struct ScanSessionView: View {
     @State private var numberHintTask: Task<Void, Never>?
     @State private var nothingToCapture = false
     @AppStorage("scanMode") private var scanModeRaw = ScanMode.automatic.rawValue
+    /// Kept between sessions. A slinger holds the card at one fixed distance,
+    /// so the framing that reads it today is the framing that reads it
+    /// tomorrow, and dialling it in again every time is work for nothing.
+    @AppStorage("scanZoom") private var zoom = 1.0
+    /// Not kept. A light that comes on by itself the next time he opens the
+    /// scanner is a surprise, and the button is right there.
+    @State private var torchOn = false
 
     private var scanMode: ScanMode { ScanMode(rawValue: scanModeRaw) ?? .automatic }
 
@@ -125,12 +132,15 @@ struct ScanSessionView: View {
                         // the rare fallback rather than every capture.
                         if usedStill { scannerGeneration += 1 }
                     },
-                    onCapturedWithoutNumber: { showNumberHint() }
+                    onCapturedWithoutNumber: { showNumberHint() },
+                    torchOn: torchOn,
+                    zoom: zoom
                 )
                 .id(scannerGeneration)
                 if scanMode == .manual {
                     shutter
                 }
+                lensControls
                 numberHintBanner
             } else {
                 simulatorViewfinder(model)
@@ -174,6 +184,61 @@ struct ScanSessionView: View {
         }
         .frame(maxWidth: .infinity)
         .clipped()
+    }
+
+    /// The torch and the framing, up the trailing edge of the viewfinder.
+    ///
+    /// Both exist for the same reason: a card slinger is a closed chute. It is
+    /// dark in there, and the card sits at a fixed distance that is rarely the
+    /// distance the default framing suits.
+    @ViewBuilder private var lensControls: some View {
+        VStack(spacing: 10) {
+            if CameraScannerView.hasTorch {
+                Button {
+                    torchOn.toggle()
+                } label: {
+                    Image(systemName: torchOn ? "flashlight.on.fill" : "flashlight.off.fill")
+                        .font(.title3)
+                        .frame(width: 44, height: 44)
+                        .background(.thinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(torchOn ? "Turn the light off" : "Turn the light on")
+            }
+
+            VStack(spacing: 0) {
+                ForEach(Self.zoomSteps, id: \.self) { step in
+                    Button {
+                        zoom = step
+                    } label: {
+                        Text(Self.zoomLabel(step))
+                            .font(.caption.weight(zoom == step ? .bold : .regular))
+                            .monospacedDigit()
+                            .frame(width: 44, height: 34)
+                            .foregroundStyle(zoom == step ? Color.accentColor : .primary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Zoom \(Self.zoomLabel(step))")
+                    .accessibilityAddTraits(zoom == step ? [.isSelected] : [])
+                }
+            }
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22))
+        }
+        .padding(.top, 12)
+        .padding(.trailing, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+    }
+
+    /// Counted from the scanner's own framing, not from the lens. 1 is what
+    /// `CameraSession` sets up, which on the ultra wide is already a crop.
+    static let zoomSteps: [Double] = [1, 1.5, 2, 3]
+
+    static func zoomLabel(_ step: Double) -> String {
+        let rounded = step.rounded()
+        let text = step == rounded
+            ? String(Int(rounded))
+            : String(format: "%.1f", step)
+        return text + "\u{00D7}"
     }
 
     /// The card logged from its name alone. Say so and move on: docs/03 says

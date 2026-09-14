@@ -185,8 +185,16 @@ final class CameraSession: NSObject {
         // Field of view is an angle across the frame; zoom is a ratio of
         // widths. Half-angle tangents convert the one to the other.
         let factor = tan(ultraAngle / 2 * .pi / 180) / tan(wideAngle / 2 * .pi / 180)
-        camera.videoZoomFactor = min(max(1, factor), camera.activeFormat.videoMaxZoomFactor)
+        baseZoom = min(max(1, factor), Double(camera.maxAvailableVideoZoomFactor))
+        camera.videoZoomFactor = CGFloat(baseZoom)
     }
+
+    /// The zoom the lens sits at before he asks for any. On the ultra wide this
+    /// is the crop back to the wide camera's field of view, and on the wide
+    /// camera it is 1. Everything he chooses multiplies this, so asking for 1
+    /// gives the framing the scanner was built around rather than undoing the
+    /// crop.
+    private(set) var baseZoom: Double = 1
 
     /// True while the lens is moving, so the frame is not worth signing.
     var isFocusing: Bool {
@@ -223,16 +231,23 @@ final class CameraSession: NSObject {
 
     // MARK: - Zoom and light
 
-    func setZoom(_ factor: Double) {
+    /// Zoom, counted from the scanner's own framing rather than from the lens.
+    ///
+    /// 1 is the framing `matchWideFieldOfView` sets, and 2 is twice into it.
+    /// Counting from the lens instead would make 1 mean "undo the crop", which
+    /// is the one setting no card scan wants.
+    func setZoom(_ relative: Double) {
         guard let device else { return }
+        let wanted = baseZoom * max(0.1, relative)
         do {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
-            device.videoZoomFactor = max(1, min(factor, device.activeFormat.videoMaxZoomFactor))
+            device.videoZoomFactor = max(
+                device.minAvailableVideoZoomFactor,
+                min(CGFloat(wanted), device.maxAvailableVideoZoomFactor)
+            )
         } catch {}
     }
-
-    var hasTorch: Bool { device?.hasTorch ?? false }
 
     func setTorch(_ on: Bool) {
         guard let device, device.hasTorch else { return }

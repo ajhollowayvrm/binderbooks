@@ -21,6 +21,10 @@ struct FrameReader {
         /// Where the card sat, normalised, origin bottom left. Drawn in the
         /// viewfinder so he can see what the scanner is looking at.
         var cardCorners: [CGPoint]?
+        /// The frame those corners are normalised against. The viewfinder needs
+        /// it to place them, because the preview shows the frame cropped to
+        /// fill a differently shaped view.
+        var frameSize: CGSize = .zero
         var sharpness: Double = 0
     }
 
@@ -49,6 +53,7 @@ struct FrameReader {
 
         let image = CIImage(cvPixelBuffer: pixels)
         guard let frame = context.createCGImage(image, from: image.extent) else { return reading }
+        reading.frameSize = CGSize(width: frame.width, height: frame.height)
 
         // Barcodes first and cheaply: a slab is read by its label, not its art,
         // and a graded card has no artwork the catalog holds anyway.

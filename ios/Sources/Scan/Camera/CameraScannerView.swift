@@ -20,21 +20,37 @@ struct CameraScannerView: UIViewControllerRepresentable {
     /// flag it passes is always false.
     var onCaptureEnded: (Bool) -> Void = { _ in }
     var onCapturedWithoutNumber: () -> Void = {}
+    /// The torch, on or off. A card slinger is a closed chute, and the light in
+    /// it is whatever leaks past the phone.
+    var torchOn: Bool = false
+    /// How far to zoom in, counted from the scanner's own framing. 1 is that
+    /// framing; above it crops further into the sensor.
+    var zoom: Double = 1
 
     static var isSupported: Bool {
         CameraSession.closestFocusingCamera() != nil
+    }
+
+    /// Whether this phone's scanning camera has a torch at all, so the caller
+    /// can leave the button out rather than offer a control that does nothing.
+    static var hasTorch: Bool {
+        CameraSession.closestFocusingCamera()?.hasTorch ?? false
     }
 
     func makeUIViewController(context: Context) -> CameraScannerController {
         let controller = CameraScannerController()
         controller.onObservation = onObservation
         controller.mode = mode
+        controller.torchOn = torchOn
+        controller.zoom = zoom
         return controller
     }
 
     func updateUIViewController(_ controller: CameraScannerController, context: Context) {
         controller.onObservation = onObservation
         controller.mode = mode
+        controller.torchOn = torchOn
+        controller.zoom = zoom
 
         if captureCount != controller.handledCaptureCount {
             controller.handledCaptureCount = captureCount
@@ -62,6 +78,26 @@ final class CameraScannerController: UIViewController {
     var onObservation: ((ScanObservation) -> Void)?
     var mode: ScanMode = .automatic
     var handledCaptureCount = 0
+
+    /// Set from SwiftUI on every update, so each only reaches the lens when it
+    /// actually changed. Locking the device for configuration on every pass of
+    /// the view body would stall the session for nothing.
+    var torchOn = false {
+        didSet {
+            guard torchOn != oldValue, isRunning else { return }
+            camera.setTorch(torchOn)
+        }
+    }
+
+    var zoom: Double = 1 {
+        didSet {
+            guard zoom != oldValue, isRunning else { return }
+            camera.setZoom(zoom)
+        }
+    }
+
+    /// True once the session is configured and the lens will take an order.
+    private var isRunning = false
 
     private let camera = CameraSession()
     private var preview: AVCaptureVideoPreviewLayer?
@@ -94,6 +130,13 @@ final class CameraScannerController: UIViewController {
 
         let layer = AVCaptureVideoPreviewLayer(session: camera.session)
         layer.videoGravity = .resizeAspectFill
+        // The same rotation the data output applies, stated rather than left to
+        // the default. `PreviewGeometry` places the outline on the footing that
+        // the preview shows the very buffer Vision read, and that holds only
+        // while the two connections agree.
+        if let connection = layer.connection, connection.isVideoRotationAngleSupported(90) {
+            connection.videoRotationAngle = 90
+        }
         layer.frame = view.bounds
         view.layer.insertSublayer(layer, at: 0)
         layer.addSublayer(outline)
@@ -109,6 +152,11 @@ final class CameraScannerController: UIViewController {
             }
         }
         camera.start()
+        isRunning = true
+        // Whatever he chose before the camera was ready. The setters above are
+        // no-ops until now, so the first application happens here.
+        camera.setZoom(zoom)
+        camera.setTorch(torchOn)
         // The lens moving is a main-actor read, so it is sampled here and left
         // where the frame queue can see it.
         startFocusWatch()
@@ -131,7 +179,11 @@ final class CameraScannerController: UIViewController {
     }
 
     func setRunning(_ running: Bool) {
+        // A stopped session leaves the torch burning, and the screen it returns
+        // to has no control to put it out.
+        if !running { camera.setTorch(false) }
         running ? camera.start() : camera.stop()
+        if running, isRunning { camera.setTorch(torchOn) }
     }
 
     deinit {
@@ -141,7 +193,7 @@ final class CameraScannerController: UIViewController {
     // MARK: - Frames in
 
     private func received(_ reading: FrameReader.Reading) {
-        draw(reading.cardCorners)
+        draw(reading.cardCorners, frameSize: reading.frameSize)
 
         // A slab is its own thing: read once per visit, by barcode.
         if let cert = reading.observation.certNumber {
@@ -163,16 +215,21 @@ final class CameraScannerController: UIViewController {
         state.resetAccumulator()
     }
 
-    private func draw(_ corners: [CGPoint]?) {
+    private func draw(_ corners: [CGPoint]?, frameSize: CGSize) {
         guard let corners, corners.count == 4, let preview else {
             outline.path = nil
             return
         }
         let path = UIBezierPath()
         for (index, corner) in corners.enumerated() {
-            // Vision counts from the bottom left; the preview layer converts
-            // from its own normalised space with the origin at the top left.
-            let point = preview.layerPointConverted(fromCaptureDevicePoint: CGPoint(x: corner.x, y: 1 - corner.y))
+            guard let point = PreviewGeometry.previewPoint(
+                forVision: corner,
+                frameSize: frameSize,
+                bounds: preview.bounds
+            ) else {
+                outline.path = nil
+                return
+            }
             index == 0 ? path.move(to: point) : path.addLine(to: point)
         }
         path.close()
@@ -242,5 +299,50 @@ final class ReadingState: @unchecked Sendable {
         accumulator.reset()
         bestSharpness = 0
         lock.unlock()
+    }
+}
+
+/// Where a point in the camera frame lands in the preview.
+///
+/// The outline was drawn through `layerPointConverted(fromCaptureDevicePoint:)`,
+/// which reads its argument in the capture device's own space: normalised over
+/// the sensor, in the sensor's landscape orientation. Vision's corners are not
+/// in that space. They are normalised over the buffer the data output hands us,
+/// and that buffer has already been rotated upright. Feeding the one to the
+/// other drew an outline that sat off the card and had the wrong shape, so the
+/// green quad he aims with described nothing he was looking at.
+///
+/// The preview shows exactly that same rotated buffer, scaled to fill the view
+/// and cropped where the two shapes disagree. That is a mapping we can write
+/// down, so it is written down here, where a test can hold it to it.
+enum PreviewGeometry {
+    /// `point` is normalised over the frame with the origin at the bottom left,
+    /// which is how Vision reports. The result is in the layer's coordinates,
+    /// with the origin at the top left, which is how Core Animation draws.
+    ///
+    /// `.resizeAspectFill`: the frame is scaled by whichever of the two ratios
+    /// is larger, so it covers the view, and it overhangs on the other axis by
+    /// equal amounts at each end.
+    static func previewPoint(
+        forVision point: CGPoint,
+        frameSize: CGSize,
+        bounds: CGRect
+    ) -> CGPoint? {
+        guard frameSize.width > 0, frameSize.height > 0,
+              bounds.width > 0, bounds.height > 0
+        else { return nil }
+
+        let scale = max(bounds.width / frameSize.width, bounds.height / frameSize.height)
+        let shown = CGSize(width: frameSize.width * scale, height: frameSize.height * scale)
+        let origin = CGPoint(
+            x: bounds.midX - shown.width / 2,
+            y: bounds.midY - shown.height / 2
+        )
+        return CGPoint(
+            x: origin.x + point.x * shown.width,
+            // Vision counts up from the bottom; the layer counts down from the
+            // top.
+            y: origin.y + (1 - point.y) * shown.height
+        )
     }
 }

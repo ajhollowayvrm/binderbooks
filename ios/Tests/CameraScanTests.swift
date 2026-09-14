@@ -159,3 +159,88 @@ import UIKit
         #expect(merged.artDescriptor == nil)
     }
 }
+
+/// Placing the card outline on the preview.
+///
+/// The outline is what he aims with, and it was drawn through an API that reads
+/// its argument in the capture device's landscape space while Vision reports in
+/// the rotated buffer's. The result sat off the card and had the wrong shape.
+/// The mapping is written out now, so it can be held to these.
+@Suite struct PreviewGeometryTests {
+    /// The phone's frame, and a viewfinder that is shorter and wider than it.
+    /// The frame has to be cropped top and bottom to fill that.
+    static let frame = CGSize(width: 1080, height: 1920)
+    static let bounds = CGRect(x: 0, y: 0, width: 390, height: 500)
+
+    static func place(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+        PreviewGeometry.previewPoint(forVision: CGPoint(x: x, y: y), frameSize: frame, bounds: bounds)!
+    }
+
+    /// The middle of the frame is the middle of the view, whatever the crop.
+    @Test func theCentreHoldsStill() {
+        let point = Self.place(0.5, 0.5)
+        #expect(abs(point.x - Self.bounds.midX) < 0.001)
+        #expect(abs(point.y - Self.bounds.midY) < 0.001)
+    }
+
+    /// Aspect fill scales by the wider ratio, so the frame's full width lands
+    /// on the view's full width here, and its height overhangs.
+    @Test func theWidthFillsAndTheHeightOverhangs() {
+        let left = Self.place(0, 0.5)
+        let right = Self.place(1, 0.5)
+        #expect(abs(left.x - 0) < 0.001)
+        #expect(abs(right.x - Self.bounds.width) < 0.001)
+
+        // 1080 wide scales to 390, so 1920 tall becomes about 693: taller than
+        // the 500 point view, hanging off both ends by about 96.
+        let top = Self.place(0.5, 1)
+        let bottom = Self.place(0.5, 0)
+        #expect(top.y < 0)
+        #expect(bottom.y > Self.bounds.height)
+        #expect(abs((bottom.y - top.y) - 693.33) < 1)
+    }
+
+    /// Vision counts up from the bottom and Core Animation counts down from the
+    /// top. Getting this backwards draws the outline upside down, which is the
+    /// kind of wrong that still looks plausible on a card.
+    @Test func visionsOriginIsTurnedOver() {
+        #expect(Self.place(0.5, 0.9).y < Self.place(0.5, 0.1).y)
+    }
+
+    /// A card in the frame comes out a card on the screen. The outline has to
+    /// keep the shape of the thing it is drawn around, or it says nothing.
+    @Test func aCardKeepsItsShape() {
+        // A card upright in the middle of the frame: 0.6 of the width, and the
+        // height that 2.5 by 3.5 gives it in a 1080 by 1920 frame.
+        let width = 0.6
+        let height = width * (1080.0 / 1920.0) / (2.5 / 3.5)
+        let left = 0.5 - width / 2
+        let bottom = 0.5 - height / 2
+
+        let corners = [
+            Self.place(left, bottom + height),
+            Self.place(left + width, bottom + height),
+            Self.place(left + width, bottom),
+            Self.place(left, bottom),
+        ]
+        let drawnWidth = corners[1].x - corners[0].x
+        let drawnHeight = corners[3].y - corners[0].y
+        #expect(abs(drawnWidth / drawnHeight - 2.5 / 3.5) < 0.01)
+    }
+
+    /// Nothing is placed against a frame of no size. The first readings arrive
+    /// before the preview has been laid out.
+    @Test func noFrameYieldsNoPoint() {
+        #expect(PreviewGeometry.previewPoint(
+            forVision: CGPoint(x: 0.5, y: 0.5),
+            frameSize: .zero,
+            bounds: Self.bounds
+        ) == nil)
+        #expect(PreviewGeometry.previewPoint(
+            forVision: CGPoint(x: 0.5, y: 0.5),
+            frameSize: Self.frame,
+            bounds: .zero
+        ) == nil)
+    }
+}
+
