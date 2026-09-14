@@ -90,4 +90,24 @@ import Testing
         accumulator.add(ScanObservation(), now: start)
         #expect(accumulator.merged(now: start).isEmpty)
     }
+
+    /// One frame that found the card is enough. The quadrilateral detector
+    /// loses the card for a frame at a time while he turns it over, and the
+    /// shutter must not refuse a capture over that.
+    @Test func oneFrameFindingTheCardSaysTheCardWasThere() {
+        var accumulator = ObservationAccumulator()
+        var seen = observation(name: "Dedenne", number: "085/195")
+        seen.sawCard = true
+        accumulator.add(observation(name: "Dedenne", number: "085/195"), now: start)
+        accumulator.add(seen, now: start.addingTimeInterval(0.1))
+        #expect(accumulator.merged(now: start.addingTimeInterval(0.2)).sawCard)
+    }
+
+    /// And no frame finding it says so, which is what stops the scanner
+    /// logging the words on his desk.
+    @Test func noFrameFindingTheCardSaysItWasNotThere() {
+        var accumulator = ObservationAccumulator()
+        accumulator.add(observation(name: "Dedenne", number: "085/195"), now: start)
+        #expect(!accumulator.merged(now: start).sawCard)
+    }
 }

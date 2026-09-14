@@ -275,15 +275,79 @@ key across the whole catalog — no set symbol, no set selection.
 
 3. Narrow by OCR'd name against cleanName (fuzzy — OCR misreads).
 
-4. Apply session bias (below).
+4. Add the cards whose artwork looks like the card in the frame: the
+   30 nearest in `ArtIndex`, over every signed card in the catalog.
 
-5. Score the artwork against each candidate's signature (below).
+5. Apply session bias (below).
 
-6. Resolve:
+6. Score the artwork against each candidate's signature (below).
+
+7. Resolve:
      one candidate            -> .certain
      one clear winner         -> .likely
      several                  -> .uncertain, attach candidates for the chip
 ```
+
+### Artwork proposes, the words decide
+
+Step 4 is the 2026-09-14 change, and it is the reverse of what the scanner did
+before. Artwork used to arrive last, as a tie-break among candidates the words
+had already found. A frame whose words were junk had nothing to tie-break: the
+words found an attack name, the attack name found no card, and the picture was
+never asked. He photographed one Dedenne and the scanner logged seven cards —
+"Tail Smack", "Dede-Short", and a Japanese "Resistance Gym" off a card that was
+not even the one in his hand.
+
+`ArtIndex` is every signed card in the catalog in one buffer, 71,802 of them,
+searched by brute force. Nine megabytes, a few milliseconds, once per card
+logged. An approximate index would be faster and is not worth its own
+correctness risk.
+
+Measured over the whole index against degraded references, artwork alone:
+
+| | |
+|---|---|
+| exact card, rank 1 | 61% |
+| exact card, top 10 | 92% |
+| exact card, top 30 | 94% |
+| same **name**, rank 1 | 77% |
+| exact card, ranked within the number's cards | 82% |
+
+The gap between 61% and 92% is why artwork proposes rather than decides: most
+near misses are the same card reprinted in another set — right picture, wrong
+row — and the collector number is what answers "which row". Together they are
+far stronger than either alone.
+
+The order of authority:
+
+1. **The number and the name agreeing beats everything**, including the
+   picture. Two independent readings pointing one way are better evidence than
+   a photograph taken across a desk under a lamp.
+2. Failing that, **artwork that stands clear of every other card decides** —
+   `sameCard` or nearer, and at least `artDecisiveLead` (0.08) in front of the
+   nearest picture of a *different* card. A reprint is not a different card;
+   the picture cannot tell three printings of Solosis apart and is not asked to.
+3. Failing that, **nothing is assigned and the chip asks** — but the chip is
+   now ordered by the picture, so the right card is one tap away instead of
+   buried under the name search that just failed.
+
+A card only the picture found can never win on score. The score is for words.
+
+### Everything is read from inside the card
+
+The other half of the 2026-09-14 change, and the direct cause of the seven
+cards. Text used to be read off the **whole camera frame**. A frame is his desk,
+the binder page, the next card in the chute and the card he is holding, and
+Vision reads every word in it with no idea which surface each one came from.
+
+`CardRectifier` already found the card's quadrilateral for the signature. Now
+the words are read from inside it too, flattened at the card's own resolution
+(`readingLongSide`, 1400) rather than the signature's 448×627 — at 627 pixels
+tall a collector number is about eight pixels of text and unreadable.
+
+**No card in the frame, no reading.** The viewfinder draws the quadrilateral, so
+he can see when the scanner has lost the card, and the manual shutter refuses a
+capture rather than logging whatever words were lying around.
 
 **Artwork is a signal beside the number and the name, not above them.** It is
 weighted at about what a name is worth, so no single signal can overrule the

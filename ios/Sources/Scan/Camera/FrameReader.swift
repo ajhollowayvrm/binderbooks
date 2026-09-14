@@ -63,22 +63,45 @@ struct FrameReader {
             return reading
         }
 
-        if decision.readText {
-            reading.observation = readText(frame)
+        // Find the card once, and read everything from inside it.
+        //
+        // The words used to be read off the whole frame. A frame is his desk,
+        // the binder page, the next card in the chute and the card he is
+        // holding, and Vision reads every word in it with no idea which
+        // surface each one came from — which is how "Resistance Gym" off a
+        // neighbouring card was logged twice while he was holding a Dedenne.
+        // Nothing outside the card's own quadrilateral is read now.
+        let rectangle = try? CardRectifier.detect(frame)
+        if let rectangle {
+            reading.observation.sawCard = true
+            reading.cardCorners = [
+                rectangle.topLeft, rectangle.topRight,
+                rectangle.bottomRight, rectangle.bottomLeft,
+            ]
         }
 
-        guard decision.findCard else { return reading }
+        if decision.readText, let rectangle {
+            // At the card's own resolution, not the signature's. A signature
+            // is taken at 448 by 627, where the collector number is eight
+            // pixels of text and unreadable.
+            let size = CardRectifier.readingSize(for: rectangle, in: frame)
+            if let card = CardRectifier.flatten(frame, to: rectangle, size: size) {
+                var words = readText(card)
+                words.sawCard = true
+                reading.observation = words
+            }
+        }
 
-        // The lens is moving, so whatever this frame shows is in transit. Find
-        // the card for the outline, but do not sign it.
+        guard decision.findCard, let rectangle else { return reading }
+
+        // The lens is moving, so whatever this frame shows is in transit. The
+        // outline is drawn from it, but it is not signed.
         reading.sharpness = FrameSharpness.score(of: frame)
-        guard let card = try? CardRectifier.rectify(frame) else { return reading }
-        reading.cardCorners = card.corners
-
         guard !isFocusing, policy.shouldSign(sharpness: reading.sharpness, bestSoFar: bestSharpness) else {
             return reading
         }
-        if let raw = try? CardArtDescriptor.featurePrint(of: card.image),
+        guard let card = CardRectifier.flatten(frame, to: rectangle) else { return reading }
+        if let raw = try? CardArtDescriptor.featurePrint(of: card),
            let signature = CardArtDescriptor.make(fromRaw: raw) {
             reading.observation.artDescriptor = signature
             reading.observation.artSharpness = reading.sharpness

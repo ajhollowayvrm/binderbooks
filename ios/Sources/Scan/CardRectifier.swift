@@ -27,6 +27,15 @@ enum CardRectifier {
     /// enough that Vision's own downscale does the rest.
     static let outputSize = CGSize(width: 448, height: 627)
 
+    /// The long side of the card when it is flattened for **reading**.
+    ///
+    /// Reading is not signing. A signature is taken at `outputSize`, where the
+    /// artwork survives and the fine print does not have to. The collector
+    /// number is three millimetres of ink at the bottom edge, and at 627 pixels
+    /// tall it is about eight pixels of text, which Vision cannot read. This
+    /// size keeps it legible without asking Vision to read a whole desk.
+    static let readingLongSide: CGFloat = 1400
+
     private static let context = CIContext(options: [.useSoftwareRenderer: false])
 
     struct Rectified {
@@ -82,8 +91,48 @@ enum CardRectifier {
         rectangle.boundingBox.width * rectangle.boundingBox.height
     }
 
+    /// The card alone, flattened at reading resolution.
+    ///
+    /// Everything that reads words off a frame must read this and not the
+    /// frame. A camera frame holds the card he is logging, the next card in the
+    /// chute, the binder page behind it and his desk, and Vision reads all of
+    /// it: that is how "Resistance Gym" off a neighbouring card and "Tail
+    /// Smack" off this one's own attack line became cards in the ledger. The
+    /// crop is the fix, because a word that is not on the card cannot be read
+    /// from it.
+    ///
+    /// Nil when no card is in the frame. The caller decides what to do then,
+    /// and the honest answer is usually nothing.
+    static func rectifyForReading(_ image: CGImage) throws -> CGImage? {
+        guard let rectangle = try detect(image) else { return nil }
+        return flatten(image, to: rectangle, size: readingSize(for: rectangle, in: image))
+    }
+
+    /// How large to render the card for reading: its own pixel size, capped.
+    ///
+    /// Capped because a card filling the frame of a 48-megapixel sensor gains
+    /// nothing from being rendered at that size and costs seconds. Its own size
+    /// rather than a fixed one because upsampling a card held far from the lens
+    /// invents no detail and only makes Vision slower.
+    static func readingSize(for rectangle: VNRectangleObservation, in image: CGImage) -> CGSize {
+        let box = rectangle.boundingBox
+        let pixelHeight = box.height * CGFloat(image.height)
+        let pixelWidth = box.width * CGFloat(image.width)
+        let longest = max(pixelHeight, pixelWidth, 1)
+        let height = min(readingLongSide, longest)
+        return CGSize(
+            width: max(1, (height * CGFloat(cardAspect)).rounded()),
+            height: max(1, height.rounded())
+        )
+    }
+
     /// Pull the four corners back to a rectangle and render at the fixed size.
     static func flatten(_ image: CGImage, to rectangle: VNRectangleObservation) -> CGImage? {
+        flatten(image, to: rectangle, size: outputSize)
+    }
+
+    /// Pull the four corners back to a rectangle and render at the given size.
+    static func flatten(_ image: CGImage, to rectangle: VNRectangleObservation, size outputSize: CGSize) -> CGImage? {
         let source = CIImage(cgImage: image)
         let extent = source.extent
 

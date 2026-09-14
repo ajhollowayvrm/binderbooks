@@ -244,6 +244,8 @@ final class CameraScannerController: UIViewController {
 
     func captureNow() -> CaptureOutcome {
         let merged = state.merged()
+        // A slab is read off its label and has no card quadrilateral to find.
+        guard merged.certNumber != nil || merged.sawCard else { return .nothing }
         guard merged.number != nil || merged.name != nil || merged.certNumber != nil else {
             return .nothing
         }

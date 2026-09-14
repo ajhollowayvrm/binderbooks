@@ -25,7 +25,15 @@ final class CatalogController {
     private(set) var pendingManifest: CatalogManifest?
     private(set) var lastCheckedAt: Date?
     private(set) var lastError: String?
+    /// Every signed card in the catalog, searchable by artwork.
+    ///
+    /// Built on demand and held for the life of the open catalog, because it
+    /// costs nine megabytes and a second to build and the scanner asks for it
+    /// once per card. Dropped when the catalog file is replaced: the
+    /// signatures in it belong to that file.
+    private(set) var artIndex: ArtIndex?
 
+    private var artIndexTask: Task<ArtIndex?, Never>?
     private var locations: CatalogLocations?
     private var updater: CatalogUpdater?
     private var exclusiveUsers = 0
@@ -59,6 +67,28 @@ final class CatalogController {
         checkTask = task
         await task.value
         checkTask = nil
+    }
+
+    /// Build the artwork index, or hand back the one already built.
+    ///
+    /// The scanner calls this when a session opens, so the first card of the
+    /// stack does not pay for it. Nil when no catalog is open, or when the
+    /// catalog carries no signatures.
+    @discardableResult
+    func loadArtIndex() async -> ArtIndex? {
+        if let artIndex { return artIndex }
+        if let artIndexTask { return await artIndexTask.value }
+        guard let database else { return nil }
+        let task = Task<ArtIndex?, Never> {
+            try? await database.asyncRead { db in try ArtIndex.load(db) }
+        }
+        artIndexTask = task
+        let built = await task.value
+        artIndexTask = nil
+        // A catalog swapped in while this was building invalidates it.
+        guard self.database === database else { return nil }
+        if let built, !built.isEmpty { artIndex = built }
+        return artIndex
     }
 
     func beginExclusiveUse() {
@@ -150,6 +180,9 @@ final class CatalogController {
         guard let updater else { return }
         let old = database
         database = nil
+        artIndex = nil
+        artIndexTask?.cancel()
+        artIndexTask = nil
         try old?.close()
         do {
             try await updater.install(verified: verified, manifest: manifest)

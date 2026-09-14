@@ -78,6 +78,10 @@ struct ScanSessionView: View {
                 catalog.beginExclusiveUse()
                 m.loadHeld()
                 await m.loadRows()
+                // Before the first card, not on it. Building the artwork index
+                // is the one slow thing the scanner does, and it must not
+                // happen while he is holding a card over the lens.
+                Task { await m.loadArtIndex() }
                 applyDebugScans(m)
             }
         }

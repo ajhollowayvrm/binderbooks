@@ -31,6 +31,14 @@ struct ScanObservation: Equatable, Sendable {
     /// only signal that separates two cards holding one number, and the only
     /// one that sees the foil pattern.
     var artDescriptor: [Int8]?
+    /// True when a card-shaped thing was found in the frame.
+    ///
+    /// Everything read from the frame is read from inside that shape, so this
+    /// says whether the words below came off a card at all. A frame with no
+    /// card in it is read from nothing, and logs nothing: the scanner used to
+    /// read the whole frame, and logged the desk, the binder page behind the
+    /// card, and the next card in the chute as cards of their own.
+    var sawCard = false
     /// How sharp the frame was that the signature came from.
     ///
     /// Kept beside the signature because the accumulator has to choose between

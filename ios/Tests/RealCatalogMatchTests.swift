@@ -130,4 +130,138 @@ import Testing
         let result = try match(name: "Zzzzqqqx", number: nil)
         #expect(result.productId == nil)
     }
+
+    // MARK: - Identification by artwork
+
+    /// Dedenne 085/195 in Silver Tempest. The card he was holding when the
+    /// scanner logged seven cards off one photograph, so it is the card the
+    /// artwork path is tested on.
+    static let dedenne = 451_739
+
+    /// The signature the catalog already holds for a product, used as though
+    /// the camera had just taken it.
+    ///
+    /// Vision cannot make a signature in the simulator — feature prints need
+    /// the neural engine — so these tests use the stored one. That tests the
+    /// index and the matcher, which is what changed, and not Vision, which
+    /// `CardArtTests` covers on a device.
+    private func storedDescriptor(_ productId: Int) throws -> [Int8] {
+        let data = try queue().read { db in
+            try Data.fetchOne(db, sql: "SELECT descriptor FROM productArt WHERE productId = ?", arguments: [productId])
+        }
+        let blob = try #require(data)
+        return try #require(CardArtDescriptor.descriptor(from: blob))
+    }
+
+    private func index() throws -> ArtIndex {
+        try queue().read { db in try ArtIndex.load(db) }
+    }
+
+    @Test func theIndexHoldsEverySignedCardInTheCatalog() throws {
+        let art = try index()
+        let rows = try queue().read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM productArt") ?? 0
+        }
+        #expect(art.count == rows)
+        #expect(art.count > 50_000, "only \(art.count) signatures")
+    }
+
+    /// The index must find the card a signature came from, and find it first.
+    @Test func aSignatureFindsItsOwnCard() throws {
+        let art = try index()
+        let neighbours = art.nearest(to: try storedDescriptor(Self.dedenne), limit: 5)
+        let first = try #require(neighbours.first)
+        #expect(first.productId == Self.dedenne)
+        #expect(first.distance < 0.001, "a signature is not at zero from itself: \(first.distance)")
+        // Sorted, nearest first.
+        #expect(neighbours == neighbours.sorted { $0.distance < $1.distance })
+    }
+
+    /// The reported failure, with the picture added.
+    ///
+    /// He photographed a Dedenne and the scanner logged "Tail Smack" and
+    /// "Dede-Short" — its two attacks — as cards of their own. The words alone
+    /// cannot fix that, because the scanner cannot tell which line is the
+    /// name. The picture can, and with no number to help it.
+    @Test func anAttackNameLosesToThePictureOfTheCard() throws {
+        let observation = ScanObservation(
+            number: nil,
+            name: "Tail Smack",
+            nameCandidates: ["Tail Smack", "Dede-Short"],
+            artDescriptor: try storedDescriptor(Self.dedenne)
+        )
+        let art = try index()
+        let result = try queue().read { db in
+            try CardMatcher.match(db, observation: observation, bias: [], defaultPrinting: nil, art: art)
+        }
+        #expect(result.productId == Self.dedenne)
+        let hit = try #require(result.hit)
+        #expect(hit.name == "Dedenne")
+    }
+
+    /// Without the picture the same observation must still assign nothing.
+    /// The old safety rail stays exactly where it was.
+    @Test func anAttackNameWithNoPictureStillAssignsNothing() throws {
+        let result = try match(name: "Tail Smack", number: nil)
+        #expect(result.productId == nil)
+    }
+
+    /// The number and the picture pointing at one card find that card even
+    /// though every word on it was read wrong.
+    ///
+    /// It still reads `uncertain`, and that is the printing rule, not the
+    /// match: Dedenne 085/195 is printed Normal and Reverse Holofoil, and
+    /// docs/03 sends a guessed printing to review. The match itself is right.
+    @Test func theNumberAndThePictureAgreeOnTheCard() throws {
+        let observation = ScanObservation(
+            number: "085/195",
+            name: "Tail Smack",
+            nameCandidates: ["Tail Smack"],
+            artDescriptor: try storedDescriptor(Self.dedenne)
+        )
+        let art = try index()
+        let result = try queue().read { db in
+            try CardMatcher.match(db, observation: observation, bias: [], defaultPrinting: nil, art: art)
+        }
+        #expect(result.productId == Self.dedenne)
+        #expect(result.printingGuessed)
+    }
+
+    /// Ampharos ex 89/97: one printing, and the only card in the catalog at
+    /// that number. Nothing is left to guess, so the number and the picture
+    /// agreeing is allowed to say `certain` even though the name read is junk.
+    @Test func theNumberAndThePictureAgreeingIsCertain() throws {
+        let ampharos = 83_550
+        let observation = ScanObservation(
+            number: "89/97",
+            name: "Cluster Bolt",
+            nameCandidates: ["Cluster Bolt"],
+            artDescriptor: try storedDescriptor(ampharos)
+        )
+        let art = try index()
+        let result = try queue().read { db in
+            try CardMatcher.match(db, observation: observation, bias: [], defaultPrinting: nil, art: art)
+        }
+        #expect(result.productId == ampharos)
+        #expect(result.confidence == .certain)
+    }
+
+    /// The picture must not overrule words that agree with each other. A name
+    /// the catalog holds and a number that finds it are two signals, and a
+    /// photograph through glare is not better evidence than both of them.
+    @Test func thePictureDoesNotOverruleANameAndNumberThatAgree() throws {
+        let observation = ScanObservation(
+            number: "070/196",
+            name: "Sableye",
+            nameCandidates: ["Sableye"],
+            // The wrong card's picture entirely.
+            artDescriptor: try storedDescriptor(Self.dedenne)
+        )
+        let art = try index()
+        let result = try queue().read { db in
+            try CardMatcher.match(db, observation: observation, bias: [], defaultPrinting: nil, art: art)
+        }
+        let hit = try #require(result.hit)
+        #expect(hit.name == "Sableye", "artwork hijacked a good reading: \(hit.name)")
+    }
 }

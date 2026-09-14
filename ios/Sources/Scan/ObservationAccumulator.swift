@@ -65,6 +65,10 @@ struct ObservationAccumulator {
         // One frame is enough. Japanese script is never a misread of an English
         // card, and glare hides the kana far more often than it invents it.
         merged.sawJapaneseText = live.contains { $0.observation.sawJapaneseText }
+        // One frame is enough here too. The card leaves the quadrilateral
+        // detector's reach for a frame at a time while he turns it over, and
+        // "no card was ever in view" is the only answer worth acting on.
+        merged.sawCard = live.contains { $0.observation.sawCard }
 
         // The sharpest signature in the window, not the most recent and not the
         // most agreed. Signatures are not votes: a blurred frame and a sharp

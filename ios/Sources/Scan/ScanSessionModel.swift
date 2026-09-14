@@ -83,6 +83,16 @@ final class ScanSessionModel {
         return line
     }
 
+    /// Build the artwork index before the first card arrives.
+    ///
+    /// Nine megabytes of signatures and about a second of work. Paid once when
+    /// the session opens rather than on the first card he scans, and skipped
+    /// silently when the catalog carries no signatures — the matcher then
+    /// works on words alone, the way it always did.
+    func loadArtIndex() async {
+        await catalog.loadArtIndex()
+    }
+
     func loadHeld() {
         let descriptor = FetchDescriptor<OwnedCard>(predicate: #Predicate { $0.productId > 0 })
         held = Self.heldCounts((try? context.fetch(descriptor)) ?? [])
@@ -116,7 +126,8 @@ final class ScanSessionModel {
         Task {
             defer { inFlight -= 1 }
             do {
-                let result = try await CardMatcher(database: db).match(observation, session: bias, defaultPrinting: defaultPrinting)
+                let matcher = CardMatcher(database: db, art: catalog.artIndex)
+                let result = try await matcher.match(observation, session: bias, defaultPrinting: defaultPrinting)
                 await insert(result, observation: observation)
             } catch {
                 lastError = error.localizedDescription

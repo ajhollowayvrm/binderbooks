@@ -20,12 +20,27 @@ struct MatchResult: Equatable, Sendable {
 /// 2. Candidates by (setCode, numberNum) or (setTotal, numberNum).
 /// 3. Add name candidates when the number gave nothing, or when several cards
 ///    share the total and none of them is the name he read.
-/// 4. Score by name agreement, the session bias, an exact number string, and a
-///    bonus where the number and the name agree.
-/// 5. One candidate: certain. One clear winner: likely. Several: uncertain.
+/// 4. Add the cards whose artwork looks like the card in the frame, taken
+///    from `ArtIndex` over the whole catalog. The picture is the one signal
+///    that does not depend on reading anything, so it is the one signal a
+///    misread cannot spoil.
+/// 5. Score by name agreement, the session bias, an exact number string, and a
+///    bonus where the number and the name agree. A card only the picture found
+///    cannot win on score; it wins, where it wins, on the artwork test.
+/// 6. One candidate: certain. One clear winner: likely. Several: uncertain.
 ///    Nothing that agrees with the name: no product at all.
+///
+/// The order of authority: the number and the name agreeing beats everything.
+/// Failing that, artwork that stands clear of every other card decides.
+/// Failing that, nothing is assigned and the chip asks.
 struct CardMatcher: Sendable {
     let database: CatalogDatabase
+    /// Every signed card in the catalog, searchable by artwork.
+    ///
+    /// Optional because a catalog can carry no signatures and because the
+    /// index takes a moment to build when the scanner opens. Without it the
+    /// matcher works the way it always did, on words alone.
+    var art: ArtIndex?
 
     static let nameAgreement = 0.5
     /// The bar a name must clear when it is the **only** signal.
@@ -56,14 +71,35 @@ struct CardMatcher: Sendable {
     /// apart, so a distance that comfortably says "this is a Snivy" says
     /// nothing at all about which of the three Snivys it is.
     static let artSamePrinting: Float = 0.40
+    /// How much nearer the winning picture must be than the nearest picture of
+    /// a **different** card before artwork is allowed to overrule the words.
+    ///
+    /// Reprints are not different cards. Solosis printed in three sets is one
+    /// picture, and the three sit within a hundredth of each other; asking the
+    /// picture which of the three it is would fail every time and mean nothing.
+    /// Which row of the three is the collector number's question.
+    static let artDecisiveLead: Float = 0.08
+    /// What a candidate earns for being on the artwork shortlist at all.
+    ///
+    /// Small. The shortlist is thirty cards long and only one of them is the
+    /// card, so membership is weak evidence; the distance term above it is
+    /// where the real signal is. This only has to lift a card the words never
+    /// found above one the words found badly.
+    static let artShortlistBonus = 0.15
 
     func match(_ observation: ScanObservation, session bias: [Int], defaultPrinting: String?) async throws -> MatchResult {
         try await database.asyncRead { db in
-            try Self.match(db, observation: observation, bias: bias, defaultPrinting: defaultPrinting)
+            try Self.match(db, observation: observation, bias: bias, defaultPrinting: defaultPrinting, art: art)
         }
     }
 
-    static func match(_ db: Database, observation: ScanObservation, bias: [Int], defaultPrinting: String?) throws -> MatchResult {
+    static func match(
+        _ db: Database,
+        observation: ScanObservation,
+        bias: [Int],
+        defaultPrinting: String?,
+        art: ArtIndex? = nil
+    ) throws -> MatchResult {
         let parsed = CollectorNumber.parse(observation.number)
         let numberHits = try numberCandidates(db, parsed: parsed)
 
@@ -78,6 +114,32 @@ struct CardMatcher: Sendable {
         var merged: [SearchHit] = numberHits
         for hit in nameHits where !numberIds.contains(hit.productId) {
             merged.append(hit)
+        }
+
+        // The cards that look like the card in the frame.
+        //
+        // This is the step the scanner did not have. Artwork used to arrive
+        // late, as a tie-break among candidates the words had already found,
+        // so a frame whose words were junk had nothing to tie-break: the words
+        // found an attack name, and artwork was never asked. Now the picture
+        // proposes too, against every signed card in the catalog, and a card
+        // the words missed entirely can still reach the shortlist.
+        let neighbours = observation.artDescriptor.flatMap { descriptor in
+            art.map { $0.nearest(to: descriptor) }
+        } ?? []
+        let artIds = Set(neighbours.map(\.productId))
+        if !artIds.isEmpty {
+            let known = Set(merged.map(\.productId))
+            let fresh = neighbours.map(\.productId).filter { !known.contains($0) }
+            if !fresh.isEmpty {
+                let rows = try CatalogSearch.fetchHits(db, ids: fresh, filter: SearchFilter())
+                let byId = Dictionary(rows.map { ($0.productId, $0) }, uniquingKeysWith: { a, _ in a })
+                // In the index's own order, nearest first, so the chip reads
+                // the way the camera ranked them when nothing else decides.
+                for id in fresh {
+                    if let row = byId[id] { merged.append(row) }
+                }
+            }
         }
 
         // He is holding a Japanese card, so only a Japanese product can be the
@@ -130,7 +192,9 @@ struct CardMatcher: Sendable {
             // strongest signal the scanner ever gets.
             let fromNumber = numberIds.contains(hit.productId)
             let fromName = nameIds.contains(hit.productId)
+            let fromArt = artIds.contains(hit.productId)
             if fromNumber, fromName { score += agreementBonus }
+            if fromArt { score += artShortlistBonus }
 
             // Artwork agreement, worth about what a name is worth. A candidate
             // with no reference image scores nothing here and is neither helped
@@ -142,20 +206,64 @@ struct CardMatcher: Sendable {
             }
             return Candidate(
                 hit: hit, score: score, similarity: similarity,
-                fromNumber: fromNumber, fromName: fromName, artDistance: distance
+                fromNumber: fromNumber, fromName: fromName, fromArt: fromArt,
+                artDistance: distance
             )
         }.sorted { $0.score > $1.score }
 
-        let ordered = scored.map(\.hit)
-        let top = scored[0]
+        // The words rank first, among themselves, exactly as they always did.
+        //
+        // The artwork shortlist is thirty cards long and a card matched
+        // exactly by its picture scores about what a card matched exactly by
+        // its name and its number scores. Letting the two compete on one score
+        // let a picture of a Dedenne outrank a Sableye that the name and the
+        // number both agreed on. So a card the words never found cannot win on
+        // score at all. It wins, when it wins, on the artwork test below.
+        let byWords = scored.filter { $0.fromNumber || $0.fromName }
+        let byArtOnly = scored.filter { !($0.fromNumber || $0.fromName) }
+        var ordered = (byWords + byArtOnly).map(\.hit)
+        var top = byWords.first ?? scored[0]
 
-        // Artwork can rescue a card whose text is a mess. When the camera
-        // agrees with exactly one candidate, and with no other, the misread
-        // name and the ambiguous number stop deciding anything. This is the
-        // Japanese card whose name the catalog files in English, and the card
-        // photographed through glare that read as nonsense.
-        let agreeing = scored.filter { ($0.artDistance ?? .greatestFiniteMagnitude) <= CardArtDescriptor.sameCard }
-        let artIsDecisive = agreeing.count == 1 && agreeing[0].hit.productId == top.hit.productId
+        // What the camera says, on its own.
+        //
+        // The old test was "exactly one candidate sits within `sameCard`",
+        // which held while the only candidates were the handful the words
+        // found. The artwork shortlist is thirty cards long and several of
+        // them are near by construction, so counting them settles nothing.
+        // What settles it is a lead: the nearest picture, and how far it
+        // stands in front of the nearest picture of a *different* card.
+        let byArt = scored
+            .compactMap { candidate in candidate.artDistance.map { (candidate, $0) } }
+            .sorted { $0.1 < $1.1 }
+        let nearestArt = byArt.first
+        let artLead: Float = {
+            guard let nearestArt else { return 0 }
+            guard let rival = byArt.first(where: { !isSameArtwork($0.0.hit, as: nearestArt.0.hit) })
+            else { return .greatestFiniteMagnitude }
+            return rival.1 - nearestArt.1
+        }()
+        let artWinner: Candidate? = {
+            guard let nearestArt, nearestArt.1 <= CardArtDescriptor.sameCard else { return nil }
+            return artLead >= artDecisiveLead ? nearestArt.0 : nil
+        }()
+
+        // Artwork rescues a card whose text is a mess. The words found an
+        // attack name and a number one digit out; the picture found the card.
+        //
+        // Where the words agree with each other they are left alone. A name
+        // the catalog holds and a number that finds that same card are two
+        // independent readings pointing one way, and a photograph taken across
+        // a desk under a lamp is not better evidence than both of them.
+        let wordsAgree = scored.contains { $0.fromNumber && $0.similarity >= nameAgreement }
+        if let artWinner, !wordsAgree, artWinner.hit.productId != top.hit.productId {
+            top = artWinner
+            // The chip follows the picture too, nearest first, or he is offered
+            // a list ranked by the very words that just lost.
+            let byPicture = byArt.map(\.0.hit)
+            let pictured = Set(byPicture.map(\.productId))
+            ordered = byPicture + ordered.filter { !pictured.contains($0.productId) }
+        }
+        let artIsDecisive = artWinner?.hit.productId == top.hit.productId
 
         // A weak name must never beat the number.
         //
@@ -167,9 +275,16 @@ struct CardMatcher: Sendable {
         // produce readings like that and the number is still right.
         if cleanedName != nil, !top.fromNumber, top.similarity < nameOnlyAgreement, !artIsDecisive {
             // The number's cards lead the chip. He is far likelier to want one
-            // of those than the card a misread name dragged in.
-            let byNumber = scored.filter(\.fromNumber)
-            let chip = (byNumber + scored.filter { !$0.fromNumber }).map(\.hit)
+            // of those than the card a misread name dragged in. Behind them,
+            // the cards the picture liked, nearest first — with the words this
+            // far gone the picture is the best ordering left, and a card the
+            // camera recognised should be one tap away, not buried under the
+            // name search that just failed.
+            let byNumber = scored.filter(\.fromNumber).map(\.hit)
+            let numbered = Set(byNumber.map(\.productId))
+            let pictured = byArt.map(\.0.hit).filter { !numbered.contains($0.productId) }
+            let shown = numbered.union(pictured.map(\.productId))
+            let chip = byNumber + pictured + scored.map(\.hit).filter { !shown.contains($0.productId) }
             // Assign nothing. Neither signal can be trusted: the name is junk,
             // and a number with no name to corroborate it is one misread digit
             // away from a real card in another set. 070/196 is a Sableye in
@@ -200,7 +315,12 @@ struct CardMatcher: Sendable {
         }
 
         var confidence: MatchConfidence
-        if top.fromNumber, top.fromName, top.similarity >= nameAgreement {
+        if top.fromNumber, artIsDecisive {
+            // The number and the picture picked the same card. Two independent
+            // signals, neither derived from the other, and the one pair that
+            // survives both glare over the text and a reprint of the artwork.
+            confidence = .certain
+        } else if top.fromNumber, top.fromName, top.similarity >= nameAgreement {
             confidence = .certain
         } else if scored.count == 1 {
             if top.fromNumber {
@@ -233,7 +353,12 @@ struct CardMatcher: Sendable {
         // name every time, so a pattern card was logged as the plain one and
         // looked certain doing it. Ask instead, and lead the chip with the
         // family so the answer is one tap away.
-        let family = scored.filter { isVariantSibling($0.hit, of: product) }
+        // The chosen card first, then its siblings. The order matters: the
+        // separation test below measures every other printing against this
+        // one, and artwork may have chosen a card the score did not rank top.
+        let siblings = scored.filter { isVariantSibling($0.hit, of: product) }
+        let family = siblings.filter { $0.hit.productId == product.productId }
+            + siblings.filter { $0.hit.productId != product.productId }
         var chipOrder = ordered
         if family.count > 1 {
             // Artwork is the one thing that can separate these, and it can: the
@@ -310,6 +435,18 @@ struct CardMatcher: Sendable {
         return a.cleanName.hasPrefix(b.cleanName + " ") || b.cleanName.hasPrefix(a.cleanName + " ")
     }
 
+    /// True when two products carry the same picture.
+    ///
+    /// A card reprinted in another set is the same picture in a second row,
+    /// and so is a promo of it, and so is a pattern printing of it. None of
+    /// them is a rival for "which card is this" — the picture cannot tell them
+    /// apart and is not asked to. Same name is the test, because TCGplayer
+    /// files a reprint under the name it was first printed with, and a pattern
+    /// printing under that name plus a qualifier.
+    static func isSameArtwork(_ a: SearchHit, as b: SearchHit) -> Bool {
+        a.productId == b.productId || a.cleanName == b.cleanName || isVariantSibling(a, of: b)
+    }
+
     /// The line that reads best as a card name, and what it found.
     ///
     /// Each candidate is scored by how well the catalog's answer matches the
@@ -370,6 +507,8 @@ struct CardMatcher: Sendable {
         var similarity: Double
         var fromNumber: Bool
         var fromName: Bool
+        /// True when the artwork shortlist proposed this candidate.
+        var fromArt: Bool
         /// How far the card in the frame is from this candidate's artwork. Nil
         /// when the frame held no card, or the catalog holds no image for it.
         var artDistance: Float?
