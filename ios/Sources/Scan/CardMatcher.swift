@@ -719,6 +719,19 @@ struct CardMatcher: Sendable {
             ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setCode = ? AND numberNum = ? AND isSealed = 0\(category) LIMIT 50", arguments: [code, n])
         } else if let total = parsed.setTotal {
             ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setTotal = ? AND numberNum = ? AND isSealed = 0\(category) LIMIT 50", arguments: [total, n])
+            // A Chinese total comes from the Mac build, not from the card.
+            // Terastal Gathering prints 208 where the catalog held 207, and a
+            // start deck prints 330/414 where the catalog holds no total. With
+            // no exact hit, a Chinese card within one of the total, or with no
+            // total, is a candidate. The name and the picture decide.
+            if ids.isEmpty, categoryId == TCGCategory.pokemonChinese {
+                ids = try Int.fetchAll(db, sql: """
+                    SELECT productId FROM product
+                    WHERE numberNum = ? AND isSealed = 0 AND categoryId = ?
+                      AND (setTotal BETWEEN ? AND ? OR setTotal IS NULL)
+                    ORDER BY setTotal IS NULL, productId LIMIT 50
+                    """, arguments: [n, TCGCategory.pokemonChinese, total - 1, total + 1])
+            }
         } else {
             return []
         }

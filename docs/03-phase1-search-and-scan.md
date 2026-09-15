@@ -229,6 +229,12 @@ name becomes its English name through the `productLocalName` table. A Gem Pack
 number prints as `0101/07`, and `FrameInterpreter` reads it. An English or a
 Japanese session never offers a Chinese card.
 
+A Chinese card prints its rarity letter against the total, and Vision reads
+`071/129C`. `FrameInterpreter` drops the letter. The Mac build calculates each Chinese
+total, and a start deck or a promo set gets no total. In a Chinese session with no
+exact hit, the matcher accepts a total wrong by one, or no total. The name and the
+artwork then decide.
+
 Three things are read now, not two:
 
 - **Card name**

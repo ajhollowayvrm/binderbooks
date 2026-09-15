@@ -34,6 +34,14 @@ import Testing
         #expect(CollectorNumber.parse("0101/07") == CollectorNumber(numberNum: 101, setTotal: 7))
     }
 
+    /// A Chinese card prints its rarity letter against the total, and Vision
+    /// reads the two as one word.
+    @Test func theRarityLetterAfterTheTotalIsNotPartOfTheNumber() {
+        #expect(FrameInterpreter.number(in: ["列阵兵", "071/129C"])?.value == "071/129")
+        #expect(FrameInterpreter.number(in: ["188/208R"])?.value == "188/208")
+        #expect(FrameInterpreter.number(in: ["2202/07C"])?.value == "2202/07")
+    }
+
     @Test func aTwoCharacterChineseNameIsAName() {
         #expect(FrameInterpreter.isPlausibleName("耿鬼"))
         #expect(!FrameInterpreter.isPlausibleName("HP"))
@@ -91,6 +99,21 @@ import Testing
         let result = try match(observation(number: "125/197", name: nil), language: .chineseSimplified)
         #expect(result.productId == nil)
         #expect(result.candidates.isEmpty)
+    }
+
+    /// The build can get a total wrong by one. Terastal Gathering prints 208,
+    /// and the catalog held 207. An English session keeps the exact total.
+    @Test func aTotalWrongByOneStillFindsTheChineseCard() throws {
+        let chinese = try match(observation(number: "026/198", name: nil), language: .chineseSimplified)
+        #expect(chinese.productId == Fixture.chineseCharmander)
+        let english = try match(observation(number: "026/198", name: nil), language: .english)
+        #expect(english.productId == nil)
+    }
+
+    /// A start deck card prints 330/414, and the catalog holds 330 with no total.
+    @Test func aCardWithNoTotalInTheCatalogIsFoundByItsNumber() throws {
+        let result = try match(observation(number: "330/414", name: nil), language: .chineseSimplified)
+        #expect(result.productId == Fixture.chineseMeowth)
     }
 
     /// PikaQian lists the Poké Ball printing as its own card, and the Mac build

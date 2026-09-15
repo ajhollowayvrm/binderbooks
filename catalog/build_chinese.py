@@ -74,8 +74,9 @@ TIMEOUT_SECONDS = 60
 
 # The rarities that sit inside the printed total. A numbered set prints
 # "001/128", and the API gives only "001". On csv6c the last card of these
-# rarities is 128 and the first Art Rare is 129.
-TOTAL_RARITIES = {"common", "uncommon", "rare", "double rare"}
+# rarities is 128 and the first Art Rare is 129. An ACE SPEC card is inside the
+# total too: Terastal Gathering prints 208, and its last Uncommon is 207.
+TOTAL_RARITIES = {"common", "uncommon", "rare", "double rare", "ace spec rare"}
 
 # PikaQian lists a pattern printing as its own card. TCGplayer lists it as its
 # own product under the base name plus this qualifier, and the matcher knows

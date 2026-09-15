@@ -70,13 +70,15 @@ struct RecognizedText: Equatable, Sendable {
 /// tallest string near the top of the card. Everything else is noise.
 enum FrameInterpreter {
     private static let numberPatterns: [Regex<AnyRegexOutput>] = [
-        try! Regex(#"\b\d{1,3}\s*/\s*\d{1,3}\b"#),
+        // A Chinese card prints its rarity letter against the total, and Vision
+        // reads "071/129C" as one word. The letter is not part of the number.
+        try! Regex(#"\b\d{1,3}\s*/\s*\d{1,3}(?=[A-Z]?\b)"#),
         try! Regex(#"\b\d{1,3}\s*/\s*[A-Z]{1,3}-?[A-Z]{0,3}\b"#),
         try! Regex(#"\b(?:SWSH|SVP|SM|XY|BW|DP|HGSS|MEP|ME)\s?\d{1,3}[a-z]?\b"#),
         try! Regex(#"\b(?:BT|EX|ST|LM|RB|P)-?\d{1,2}-\d{3}\b"#),
         try! Regex(#"\b[A-Z]{2,3}\d{2}[A-Z]{2}/[A-Z]{2,5}-\d{1,2}-(?:AP)?\d{2,3}\b"#),
         // A Simplified Chinese Gem Pack card: slot 01, art 07 of 7 prints "0107/07".
-        try! Regex(#"\b\d{4}\s*/\s*\d{2}\b"#),
+        try! Regex(#"\b\d{4}\s*/\s*\d{2}(?=[A-Z]?\b)"#),
     ]
 
     /// Digits, optionally with a space around the slash. OCR reads "114/ 084".

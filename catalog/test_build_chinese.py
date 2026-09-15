@@ -55,6 +55,14 @@ class NumberTests(unittest.TestCase):
         self.assertEqual(bz.printed_number("001", 128, {}), "001/128")
         self.assertEqual(bz.printed_number("163", 128, {}), "163/128")
 
+    def test_an_ace_spec_card_is_inside_the_total(self):
+        cards = [
+            card("1", "207", rarity="Uncommon"),
+            card("2", "208", rarity="ACE SPEC Rare"),
+            card("3", "209", rarity="Super Rare"),
+        ]
+        self.assertEqual(bz.set_total(cards), 208)
+
     def test_a_gem_pack_prints_slot_art_and_art_count(self):
         cards = [card(str(i), f"01 0{i}") for i in range(1, 8)] + [card("9", "02 01")]
         slots = bz.slot_totals(cards)

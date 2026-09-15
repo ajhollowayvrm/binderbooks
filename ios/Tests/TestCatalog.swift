@@ -55,6 +55,8 @@ enum Fixture {
     static let chineseSurskit = 1_000_000_201
     static let chineseSurskitPokeBall = 1_000_000_202
     static let chineseCharmander = 1_000_000_301
+    static let chineseStartDeck = 1_000_000_902
+    static let chineseMeowth = 1_000_000_401
 
     /// Added by `make(chinese: true)`, the way `ChineseCatalog` merges them.
     static let chineseProducts: [Product] = [
@@ -65,12 +67,15 @@ enum Fixture {
         // A Chinese card at an English card's number and name: Charmander,
         // 026/197, the same as product 3.
         Product(id: chineseCharmander, groupId: chineseSetSix, categoryId: TCGCategory.pokemonChinese, name: "Charmander", number: "026/197", rarity: "Common", sealed: false, prices: [("Normal", 25)]),
+        // A start deck card. It prints 330/414, and the build finds no total.
+        Product(id: chineseMeowth, groupId: chineseStartDeck, categoryId: TCGCategory.pokemonChinese, name: "Meowth", number: "330", rarity: nil, sealed: false, prices: [("Normal", 5)]),
     ]
 
     static let chineseNames: [Int: String] = [
         chinesePonyta: "小火马", chinesePonytaArtRare: "小火马",
         chineseSurskit: "溜溜糖球", chineseSurskitPokeBall: "溜溜糖球",
         chineseCharmander: "小火龙",
+        chineseMeowth: "喵喵",
     ]
 
     /// The catalog tables, as catalog/build_catalog.py writes them.
@@ -115,13 +120,15 @@ enum Fixture {
             103: "M6: Storm Emeralda", 104: "Timeless Bonds", 105: "SV04: Paradox Rift", 106: "SV08: Surging Sparks",
             107: "SV: Black Bolt", 108: "SV: Prismatic Evolutions",
             chineseGemPack: "Gem Pack Vol 4", chineseSetSix: "Scarlet & Violet 6",
+            chineseStartDeck: "Start Deck 100",
         ]
             if chinese {
                 try db.execute(sql: """
                 INSERT INTO category VALUES (\(TCGCategory.pokemonChinese), 'Pokemon Simplified Chinese', 'Pokemon Simplified Chinese');
                 INSERT INTO cardSet VALUES
                     (\(chineseGemPack), \(TCGCategory.pokemonChinese), 'Gem Pack Vol 4', 'CBB4C', '2026-02-06'),
-                    (\(chineseSetSix), \(TCGCategory.pokemonChinese), 'Scarlet & Violet 6', 'CSV6C', '2025-05-30');
+                    (\(chineseSetSix), \(TCGCategory.pokemonChinese), 'Scarlet & Violet 6', 'CSV6C', '2025-05-30'),
+                    (\(chineseStartDeck), \(TCGCategory.pokemonChinese), 'Start Deck 100', 'CS4DAC', '2024-06-01');
                 CREATE TABLE productLocalName (productId INTEGER PRIMARY KEY, localName TEXT NOT NULL);
                 """)
             }

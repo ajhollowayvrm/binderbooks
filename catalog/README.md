@@ -50,8 +50,10 @@ Facts about PikaQian, verified 2026-09-14:
 - **The API number is not the printed number.** A Gem Pack card is `"01 01"` in the
   API and prints `0101/07`: slot 01, art 01 of 7. A numbered card is `"001"` and
   prints `001/128`. The build writes the printed form. The total is the highest
-  number among Common, Uncommon, Rare, and Double Rare cards. That rule gives 128
-  for `csv6c`, which matches the card.
+  number among Common, Uncommon, Rare, Double Rare, and ACE SPEC Rare cards. That
+  rule gives 128 for `csv6c` and 208 for Terastal Gathering, which match the cards.
+  A set with none of these rarities, such as a start deck or a promo set, gets no
+  total. Start Deck 100 prints `/414`, but its numbers go to 433.
 - **A pattern printing is its own card.** `variant` is `pokeball` or `masterball`
   with `is_variant: true`. The build names it `Surskit (Poke Ball Pattern)`, the way
   TCGplayer does, so `CardMatcher.isVariantSibling` works unchanged.
