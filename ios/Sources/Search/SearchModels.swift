@@ -132,15 +132,30 @@ struct CategorySummary: Identifiable, Hashable, Sendable {
     }
 }
 
-/// One printing's price. The market price is the only number the app keeps.
-/// TCGplayer's low, mid, high, and direct-low columns stay in the catalog and
-/// out of the app, because AJ values a card at market.
+/// One printing's price: TCGplayer's market price and its low price. The mid,
+/// high, and direct-low columns stay in the catalog and out of the app.
 struct ProductPrice: Identifiable, Hashable, Sendable {
     var subTypeName: String
     var marketCents: Int?
     var asOf: String
+    /// TCGplayer's lowest listing price, not counting shipping. Nil for a
+    /// Chinese card, whose price is an eBay average.
+    var lowCents: Int? = nil
 
     var id: String { subTypeName }
+
+    /// At this market price and above, a card lists at market and is valued
+    /// at market.
+    static let marketRuleCents = 500
+
+    /// What the card sells for, the way he lists it. AJ's rule, 2026-09-15: at
+    /// $5 and up the market price. Under $5 the low price, because he lists a
+    /// cheap card at the cheapest listing. With no low price, the market price.
+    var valueCents: Int? {
+        guard let marketCents else { return lowCents }
+        if marketCents >= Self.marketRuleCents { return marketCents }
+        return lowCents ?? marketCents
+    }
 }
 
 struct ProductDetail: Sendable {

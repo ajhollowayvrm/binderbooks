@@ -46,10 +46,10 @@ final class ScanSessionModel {
     /// Market value for the card's printing, else the lowest printing.
     func marketCents(for card: OwnedCard) -> Int? {
         guard let rows = prices[card.productId], !rows.isEmpty else { return nil }
-        if let exact = rows.first(where: { $0.subTypeName == card.printing })?.marketCents {
+        if let exact = rows.first(where: { $0.subTypeName == card.printing })?.valueCents {
             return exact
         }
-        return rows.compactMap(\.marketCents).min()
+        return rows.compactMap(\.valueCents).min()
     }
 
     /// True when the card has no price because it has no eBay sales, not

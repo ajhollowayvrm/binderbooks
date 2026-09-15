@@ -572,6 +572,13 @@ AJ's rules:
 
 - **Price:** the cheapest live listing of the same SKU, by price plus shipping, less
   the shipping he charges. A SKU with no live listing takes the catalog market price.
+  Amended 2026-09-15: a card worth $5 or more lists at its market price. On one
+  upload the cheapest-listing rule put 9 such cards $19 under market.
+- **Floor:** amended 2026-09-15. A card whose cheapest listing is under $0.20, not
+  counting shipping, stays out of the file and takes no `listed` tag.
+- **Value in the app:** amended 2026-09-15. Every screen shows a card's value by the
+  same rule: market at $5 and up, the catalog's TCGplayer low price under $5, and the
+  market price when there is no low price. `ProductPrice.valueCents` holds the rule.
 - **Skipped:** graded slabs, sealed products, personal collection, cards at a grader,
   and sold cards. A card with no printing, on a product with several, is skipped too.
 - **He picks** which of the rest go in the file. A card tagged `listed` starts unticked.
@@ -613,6 +620,23 @@ What the file holds:
 - An eBay row has no set, number, or SKU. The card is in the listing title, and the
   grade is in "Condition".
 - The import never reads "Buyer Name".
+
+**Order list and pull sheet.** Amended 2026-09-15: AJ cannot get the Sold Items CSV by
+himself. TCGplayer's Orders page exports an order list and a pull sheet, and he picks
+both files together. `TCGplayerOrderExports` in `SalesOrderCSV.swift` joins them into
+the same orders:
+
+- The order list has one row per order: number, date, status, product amount, and
+  shipping. It has no cards.
+- The pull sheet has one row per SKU. "Order Quantity" names each order that holds
+  the SKU, with its count: `62955D06-A:1 | 62955D06-B:2`. Each order's count is the
+  line's quantity, because "Quantity" can be less than the counts add up to.
+- The pull sheet ends with an "Orders Contained in Pull Sheet:" row. It is not a card.
+- A custom listing puts its title after the name: "Team Rocket's Wobbuffet: Team
+  Rocket's Wobbuffet #203 SV Promo Destined Rivals". The import keeps the name before
+  ": " when the title repeats it.
+- On 2026-09-15 the pull sheet held 100 of the 149 orders in the list. The other 49
+  (46 older orders and 3 canceled) came through with no cards.
 
 Each order goes to one of four places:
 

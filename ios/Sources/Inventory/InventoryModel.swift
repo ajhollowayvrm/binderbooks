@@ -288,8 +288,8 @@ final class InventoryModel {
     func marketCents(for card: OwnedCard) -> Int? {
         if card.productId == 0 { return card.manualMarketCents }
         guard let rows = prices[card.productId], !rows.isEmpty else { return nil }
-        if let exact = rows.first(where: { $0.subTypeName == card.printing })?.marketCents { return exact }
-        return rows.compactMap(\.marketCents).min()
+        if let exact = rows.first(where: { $0.subTypeName == card.printing })?.valueCents { return exact }
+        return rows.compactMap(\.valueCents).min()
     }
 
     func load(for cards: [OwnedCard]) async {

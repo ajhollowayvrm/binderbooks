@@ -22,7 +22,7 @@ struct InventoryMetricsSheet: View {
                 }
 
                 Section("Value") {
-                    row("Market", summary.marketCents.asCurrency)
+                    row("Value", summary.marketCents.asCurrency)
                     row("Basis", summary.basisCents.asCurrency)
                 }
 

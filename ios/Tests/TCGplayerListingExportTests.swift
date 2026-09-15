@@ -48,6 +48,15 @@ import Testing
         #expect(skus.first == .init(skuId: 4_780_851, condition: "Near Mint", printing: "Holofoil", language: "English"))
     }
 
+    /// Seller Portal rejected 26 rows on 2026-09-15 with "does not match
+    /// product details". TCGplayer names them "Yveltal ex - 053/088", and the
+    /// catalog names them "Yveltal ex". The details carry TCGplayer's name.
+    @Test func theDetailsCarryTCGplayersExactName() throws {
+        let product = try TCGplayerMarketClient.parseDetails(Data(details.utf8))
+        #expect(product.productName == "Crobat VMAX - SWSH099")
+        #expect(product.skus.count == 2)
+    }
+
     @Test func theRequestAsksForOneSkuCheapestFirst() throws {
         let data = try TCGplayerMarketClient.listingsBody(condition: "Lightly Played", printing: "Reverse Holofoil", language: "Japanese")
         let body = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -162,6 +171,37 @@ import Testing
         #expect(Export.price(lowest: nil, marketCents: 0, shippingChargedCents: 0) == nil)
     }
 
+    /// His upload of 2026-09-15: Mega Gengar ex was $51.73 at market and went
+    /// up at $47.21. At $5 and up the card lists at market and waits.
+    @Test func aCardWorthFiveDollarsOrMoreListsAtMarket() {
+        let low = TCGplayerMarketClient.Listing(skuId: 1, priceCents: 4_700, shippingCents: 99)
+        let gengar = Export.price(lowest: low, marketCents: 5_173, shippingChargedCents: 78)
+        #expect(gengar?.cents == 5_173)
+        #expect(gengar?.source == .atMarket)
+        #expect(Export.price(lowest: nil, marketCents: 500, shippingChargedCents: 78)?.source == .atMarket)
+        #expect(Export.price(lowest: low, marketCents: 499, shippingChargedCents: 78)?.source == .liveLow)
+    }
+
+    /// His rule: a card whose cheapest listing is under 20 cents is not worth
+    /// an order. Shipping does not count toward the floor.
+    @Test func aCardUnderTheFloorStaysOut() {
+        func listing(_ cents: Int) -> TCGplayerMarketClient.Listing { .init(skuId: 1, priceCents: cents, shippingCents: 149) }
+        #expect(Export.isBelowFloor(lowest: listing(15), marketCents: 59))
+        #expect(!Export.isBelowFloor(lowest: listing(20), marketCents: 59))
+        #expect(Export.isBelowFloor(lowest: nil, marketCents: 10))
+        #expect(Export.isBelowFloor(lowest: nil, marketCents: nil))
+        #expect(!Export.isBelowFloor(lowest: listing(10), marketCents: 600))
+    }
+
+    /// The app shows what a card sells for: market at $5 and up, TCGplayer's
+    /// low price under it. A price with no low keeps its market price.
+    @Test func theValueFollowsTheListingRule() {
+        #expect(ProductPrice(subTypeName: "Holofoil", marketCents: 5_173, asOf: "", lowCents: 4_700).valueCents == 5_173)
+        #expect(ProductPrice(subTypeName: "Holofoil", marketCents: 59, asOf: "", lowCents: 15).valueCents == 15)
+        #expect(ProductPrice(subTypeName: "Holofoil", marketCents: 59, asOf: "").valueCents == 59)
+        #expect(ProductPrice(subTypeName: "Holofoil", marketCents: nil, asOf: "", lowCents: 15).valueCents == 15)
+    }
+
     // MARK: - The file
 
     @Test func theFileHasTheSixteenColumnsTheImportRequires() {
@@ -182,6 +222,11 @@ import Testing
         #expect(lines[0] == "TCGplayer Id,Product Line,Set Name,Product Name,Title,Number,Rarity,Condition,TCG Market Price,TCG Direct Low,TCG Low Price With Shipping,TCG Low Price,Total Quantity,Add to Quantity,TCG Marketplace Price,Photo URL")
         #expect(lines[1] == "4780851,Pokemon,SWSH: Sword & Shield Promo Cards,\"Crobat VMAX, promo\",,SWSH099,Promo,Near Mint Holofoil,2.02,,3.53,2.04,,2,3.53,")
         #expect(lines[2] == "")
+
+        // TCGplayer's exact name wins over the catalog's.
+        var named = row
+        named.productName = "Crobat VMAX - SWSH099"
+        #expect(Export.csv([named], categoryNames: [3: "Pokemon"]).contains(",SWSH: Sword & Shield Promo Cards,Crobat VMAX - SWSH099,,SWSH099,"))
     }
 
     @Test func theConditionReadsLikeTCGplayersOwnExport() {
@@ -196,24 +241,33 @@ import Testing
         let sold = Export.SkuKey(productId: 1, condition: "Near Mint", printing: "Holofoil", language: "English")
         let unsold = Export.SkuKey(productId: 2, condition: "Lightly Played", printing: "Normal", language: "English")
         let unknown = Export.SkuKey(productId: 3, condition: "Near Mint", printing: "Normal", language: "English")
-        let plan = Export.Plan(lines: [line(sold, market: 202), line(unsold, market: 150), line(unknown, market: 50)], skipped: [.slab: 2])
+        let cheap = Export.SkuKey(productId: 4, condition: "Near Mint", printing: "Holofoil", language: "English")
+        let plan = Export.Plan(
+            lines: [line(sold, market: 202), line(unsold, market: 150), line(unknown, market: 50), line(cheap, market: 59)],
+            skipped: [.slab: 2]
+        )
         let market = StubMarket(
-            listings: [1: .init(skuId: 11, priceCents: 204, shippingCents: 149)],
+            listings: [1: .init(skuId: 11, priceCents: 204, shippingCents: 149), 4: .init(skuId: 41, priceCents: 15, shippingCents: 149)],
             skuLists: [
                 2: [.init(skuId: 21, condition: "Near Mint", printing: "Normal", language: "English"),
                     .init(skuId: 22, condition: "Lightly Played", printing: "Normal", language: "English")],
                 3: [],
-            ]
+            ],
+            names: [1: "Card 1 - 001/100"]
         )
 
         let outcome = await TCGplayerListingBuilder().build(plan, shippingChargedCents: 99, market: market, pause: .zero)
 
         #expect(outcome.rows.map(\.skuId) == [11, 22])
+        // A card with a live listing still takes TCGplayer's exact name.
+        #expect(outcome.rows.map(\.productName) == ["Card 1 - 001/100", nil])
         #expect(outcome.rows.map(\.priceCents) == [254, 150])
         #expect(outcome.rows.map(\.source) == [.liveLow, .market])
         #expect(outcome.report.liveLow == 1)
         #expect(outcome.report.market == 1)
         #expect(outcome.report.noSku == 1)
+        // The 15-cent card is under the floor, so it is not in the file.
+        #expect(outcome.report.belowFloor == 1)
         #expect(outcome.report.skipped == [.slab: 2])
     }
 
@@ -249,6 +303,7 @@ import Testing
 private struct StubMarket: TCGplayerMarket {
     var listings: [Int: TCGplayerMarketClient.Listing] = [:]
     var skuLists: [Int: [TCGplayerMarketClient.Sku]] = [:]
+    var names: [Int: String] = [:]
     var refuse = false
 
     func cheapestListing(productId: Int, condition: String, printing: String, language: String) async throws -> TCGplayerMarketClient.Listing? {
@@ -256,7 +311,7 @@ private struct StubMarket: TCGplayerMarket {
         return listings[productId]
     }
 
-    func skus(productId: Int) async throws -> [TCGplayerMarketClient.Sku] {
-        skuLists[productId] ?? []
+    func details(productId: Int) async throws -> TCGplayerMarketClient.Details {
+        TCGplayerMarketClient.Details(productName: names[productId], skus: skuLists[productId] ?? [])
     }
 }

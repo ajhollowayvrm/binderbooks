@@ -133,7 +133,7 @@ struct TCGplayerExportSheet: View {
                         .frame(maxWidth: 80)
                 }
             } footer: {
-                Text("Each card is priced at the cheapest live listing of the same condition and printing, plus that listing's shipping, less what you charge to ship. A card nobody sells takes its market price.")
+                Text("A card worth $5 or more lists at its market price. A cheaper card lists at the cheapest live listing of the same condition and printing, plus that listing's shipping, less what you charge to ship. A card whose cheapest listing is under $0.20 stays out of the file. A card nobody sells takes its market price.")
             }
 
             Section {
@@ -276,6 +276,8 @@ struct TCGplayerExportSheet: View {
             return row.lowest.map { "low \($0.priceCents.asCurrency) + \($0.shippingCents.asCurrency) ship" } ?? "cheapest listing"
         case .market:
             return "market, no listings"
+        case .atMarket:
+            return "market, $5 and up"
         }
     }
 

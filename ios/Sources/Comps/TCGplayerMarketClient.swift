@@ -4,7 +4,7 @@ import Foundation
 /// run with no network.
 protocol TCGplayerMarket: Sendable {
     func cheapestListing(productId: Int, condition: String, printing: String, language: String) async throws -> TCGplayerMarketClient.Listing?
-    func skus(productId: Int) async throws -> [TCGplayerMarketClient.Sku]
+    func details(productId: Int) async throws -> TCGplayerMarketClient.Details
 }
 
 /// TCGplayer's storefront endpoints: the ones its own product page calls.
@@ -43,6 +43,15 @@ struct TCGplayerMarketClient: TCGplayerMarket {
         var language: String
     }
 
+    /// A product the way TCGplayer's own page names it, with every SKU.
+    struct Details: Equatable, Sendable {
+        /// TCGplayer's exact name: "Yveltal ex - 053/088". Seller Portal's
+        /// import rejects a row whose "Product Name" differs ("does not match
+        /// product details"), and the catalog drops the number from the name.
+        var productName: String?
+        var skus: [Sku]
+    }
+
     /// Ranked by price plus shipping, the order a buyer sees. Nil when nobody
     /// sells that SKU. The listing carries its SKU id, so a SKU with a listing
     /// needs no second call.
@@ -55,11 +64,12 @@ struct TCGplayerMarketClient: TCGplayerMarket {
         return try Self.parseCheapest(try await send(request))
     }
 
-    /// Every SKU of a product. For a SKU that nobody sells.
-    func skus(productId: Int) async throws -> [Sku] {
+    /// The product's exact name and every SKU. The SKUs are for a SKU that
+    /// nobody sells.
+    func details(productId: Int) async throws -> Details {
         var request = URLRequest(url: Self.base.appending(path: "v2/product/\(productId)/details"))
         request.timeoutInterval = 20
-        return try Self.parseSkus(try await send(request))
+        return try Self.parseDetails(try await send(request))
     }
 
     private func send(_ request: URLRequest) async throws -> Data {
@@ -108,13 +118,18 @@ struct TCGplayerMarketClient: TCGplayerMarket {
         return Listing(skuId: sku, priceCents: cents(price), shippingCents: row.shippingPrice.map(cents) ?? 0)
     }
 
-    static func parseSkus(_ data: Data) throws -> [Sku] {
-        guard let rows = try? JSONDecoder().decode(DetailsEnvelope.self, from: data).skus else {
+    static func parseDetails(_ data: Data) throws -> Details {
+        guard let envelope = try? JSONDecoder().decode(DetailsEnvelope.self, from: data), let rows = envelope.skus else {
             throw Failure.unreadable
         }
-        return rows.compactMap { row in
+        let skus = rows.compactMap { row in
             Int(exactly: row.sku).map { Sku(skuId: $0, condition: row.condition, printing: row.variant, language: row.language) }
         }
+        return Details(productName: envelope.productName, skus: skus)
+    }
+
+    static func parseSkus(_ data: Data) throws -> [Sku] {
+        try parseDetails(data).skus
     }
 
     /// Dollars to cents through `Decimal`, rounded to the nearest cent. The
@@ -145,6 +160,7 @@ struct TCGplayerMarketClient: TCGplayerMarket {
     }
 
     struct DetailsEnvelope: Decodable {
+        var productName: String?
         var skus: [Row]?
 
         struct Row: Decodable {

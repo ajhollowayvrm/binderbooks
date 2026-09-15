@@ -3,10 +3,12 @@ import Observation
 
 /// Prices each line of a listing plan against TCGplayer, one line at a time.
 ///
-/// One call per line finds the cheapest listing and its SKU id. A line that
-/// nobody sells costs a second call, for the product's SKU list, and that list
-/// is kept for the other lines of the same product. The pause is courtesy to
-/// an endpoint that has no published rate limit.
+/// One call per line finds the cheapest listing and its SKU id. One call per
+/// product reads TCGplayer's exact name and its SKU list, and both are kept for
+/// the other lines of the same product. Every product needs that call, because
+/// Seller Portal rejects a row whose name is not TCGplayer's exact name, and a
+/// line that nobody sells takes its SKU id from the list. The pause is courtesy
+/// to an endpoint that has no published rate limit.
 @MainActor
 @Observable
 final class TCGplayerListingBuilder {
@@ -31,7 +33,7 @@ final class TCGplayerListingBuilder {
         total = plan.lines.count
         done = 0
         defer { isRunning = false }
-        var skuLists: [Int: [TCGplayerMarketClient.Sku]] = [:]
+        var productDetails: [Int: TCGplayerMarketClient.Details] = [:]
 
         for line in plan.lines {
             if Task.isCancelled {
@@ -42,18 +44,19 @@ final class TCGplayerListingBuilder {
             let key = line.key
             do {
                 let lowest = try await market.cheapestListing(productId: key.productId, condition: key.condition, printing: key.printing, language: key.language)
-                var skuId = lowest?.skuId
-                if skuId == nil {
-                    let skus: [TCGplayerMarketClient.Sku]
-                    if let known = skuLists[key.productId] {
-                        skus = known
-                    } else {
-                        skus = try await market.skus(productId: key.productId)
-                        skuLists[key.productId] = skus
-                    }
-                    skuId = TCGplayerListingExport.sku(in: skus, for: key)?.skuId
+                // Checked before the details call, which such a card does not need.
+                if TCGplayerListingExport.isBelowFloor(lowest: lowest, marketCents: line.marketCents) {
+                    outcome.report.belowFloor += 1
+                    continue
                 }
-                guard let skuId else {
+                let details: TCGplayerMarketClient.Details
+                if let known = productDetails[key.productId] {
+                    details = known
+                } else {
+                    details = try await market.details(productId: key.productId)
+                    productDetails[key.productId] = details
+                }
+                guard let skuId = lowest?.skuId ?? TCGplayerListingExport.sku(in: details.skus, for: key)?.skuId else {
                     outcome.report.noSku += 1
                     continue
                 }
@@ -61,10 +64,14 @@ final class TCGplayerListingBuilder {
                     outcome.report.unpriced += 1
                     continue
                 }
-                outcome.rows.append(.init(line: line, skuId: skuId, priceCents: price.cents, source: price.source, lowest: lowest))
+                outcome.rows.append(.init(
+                    line: line, skuId: skuId, priceCents: price.cents, source: price.source, lowest: lowest,
+                    productName: details.productName
+                ))
                 switch price.source {
                 case .liveLow: outcome.report.liveLow += 1
                 case .market: outcome.report.market += 1
+                case .atMarket: outcome.report.atMarket += 1
                 }
             } catch TCGplayerMarketClient.Failure.http(let code) where code == 403 || code == 429 {
                 // A refusal applies to every later call too.

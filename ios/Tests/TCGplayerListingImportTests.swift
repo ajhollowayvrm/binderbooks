@@ -263,3 +263,43 @@ import Testing
         #expect(!again.hasWork)
     }
 }
+
+/// His order list and pull sheet of 2026-09-15 against the real catalog. Runs
+/// only when the files are on the Mac. `build/` is never committed, and the
+/// order list holds buyer names.
+@Suite struct RealTCGplayerOrderExportsTests {
+    static let orderList = RealTCGplayerListingImportTests.root.appendingPathComponent("build/sales/order-list-2026-09-15.csv")
+    static let pullSheet = RealTCGplayerListingImportTests.root.appendingPathComponent("build/sales/pull-sheet-2026-09-15.csv")
+
+    @Test func hisExportsJoinAndNameTheirCards() throws {
+        try #require(FileManager.default.fileExists(atPath: Self.pullSheet.path), "no build/sales/pull-sheet-2026-09-15.csv")
+        let joined = try TCGplayerOrderExports.join(
+            orderList: try String(contentsOf: Self.orderList, encoding: .utf8),
+            pullSheet: try String(contentsOf: Self.pullSheet, encoding: .utf8)
+        )
+        let orders = joined.contents.orders
+        #expect(orders.count == 149)
+        #expect(joined.contents.unreadableRows.isEmpty)
+        #expect(joined.unreadablePullSheetRows.isEmpty)
+        #expect(joined.unknownOrders.isEmpty)
+        #expect(joined.ordersWithoutCards.count == 46)
+        #expect(orders.reduce(0) { $0 + $1.cardCount } == 207)
+        #expect(orders.filter { $0.status == "Ready to Ship" }.allSatisfy { !$0.lines.isEmpty })
+
+        try #require(FileManager.default.fileExists(atPath: RealCatalogMatchTests.catalogPath), "no scripts/catalog.sqlite")
+        var configuration = Configuration()
+        configuration.readonly = true
+        let catalog = try DatabaseQueue(path: RealCatalogMatchTests.catalogPath, configuration: configuration)
+        let unnamed = try catalog.read { db in
+            let categories = try SalesOrderCatalog.categoryIds(db)
+            return try orders.flatMap(\.lines).filter { line in
+                try SalesOrderCatalog.tcgplayerProduct(db, line: line, categories: categories) == nil
+            }
+        }
+        // The catalog carries no Palworld cards.
+        #expect(
+            unnamed.allSatisfy { $0.productLine.hasPrefix("Palworld") },
+            "not named: \(unnamed.map { "\($0.setName) | \($0.productName) | \($0.number)" })"
+        )
+    }
+}

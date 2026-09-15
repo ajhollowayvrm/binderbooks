@@ -59,6 +59,80 @@ import Testing
         #expect(ebay.lines.first?.condition == "CGC Pristine 10")
     }
 
+    // MARK: - Order list and pull sheet
+
+    static let orderList = """
+    Order #,Buyer Name,Order Date,Status,Shipping Type,Product Amt,Shipping Amt,Total Amt,Buyer Paid,Carrier Information
+    62955D06-A,Someone,"Friday, 03 July 2026",Completed - Paid,Standard,10.68,0.78,11.46,True,
+    62955D06-B,Someone,"Sunday, 05 July 2026",Canceled,Standard,10.60,0.99,11.59,True,
+    62955D06-C,Someone,"Monday, 14 September 2026",Ready to Ship,Standard,5.87,1.49,7.36,True,
+    62955D06-D,Someone,"Monday, 27 July 2026",Completed - Paid,Standard,2.00,0.78,2.78,True,
+
+    """
+
+    /// Charmander's "Quantity" says 1, and its orders add up to 3: his real
+    /// pull sheet has rows like that.
+    static let pullSheet = """
+    Product Line,Product Name,Condition,Number,Set,Rarity,Quantity,Main Photo URL,Set Release Date,SkuId,Order Quantity
+    Pokemon,Charizard ex - 125/197,Near Mint Holofoil,125/197,SV03: Obsidian Flames,Double Rare,1,,08/11/2023 00:00:00,5001,62955D06-A:1
+    Pokemon,Charmander,Near Mint Reverse Holofoil,026/197,SV03: Obsidian Flames,Common,1,,08/11/2023 00:00:00,5003,62955D06-A:2 | 62955D06-C:1
+    Pokemon,Pidgeot ex - 164/197,Near Mint Holofoil,164/197,SV03: Obsidian Flames,Ultra Rare,1,,08/11/2023 00:00:00,5002,62955D06-Z:1
+    Orders Contained in Pull Sheet:,62955D06-A|62955D06-C|62955D06-Z
+
+    """
+
+    @Test func theTwoOrderExportsAreToldApart() {
+        #expect(TCGplayerOrderExports.kind(of: Self.orderList) == .orderList)
+        #expect(TCGplayerOrderExports.kind(of: Self.pullSheet) == .pullSheet)
+        #expect(TCGplayerOrderExports.kind(of: Self.tcgplayerOnly) == nil)
+    }
+
+    @Test func theOrderListAndPullSheetJoinIntoOrders() throws {
+        let joined = try TCGplayerOrderExports.join(orderList: Self.orderList, pullSheet: Self.pullSheet)
+        let orders = joined.contents.orders
+        #expect(orders.map(\.orderId) == ["62955D06-A", "62955D06-B", "62955D06-C", "62955D06-D"])
+        #expect(joined.contents.unreadableRows.isEmpty)
+        #expect(joined.unreadablePullSheetRows.isEmpty)
+
+        let a = orders[0]
+        #expect(a.channel == .tcgplayer)
+        #expect(a.soldAt == day("2026-07-03"))
+        #expect(a.productCents == 1_068)
+        #expect(a.shippingChargedCents == 78)
+        #expect(a.lines.map(\.skuId) == [5001, 5003])
+        #expect(a.lines.map(\.quantity) == [1, 2])
+        #expect(a.lines[1].setName == "SV03: Obsidian Flames")
+        #expect(a.lines[1].condition == "Near Mint Reverse Holofoil")
+
+        #expect(orders[1].isCanceled && orders[1].lines.isEmpty)
+        #expect(orders[2].status == "Ready to Ship")
+        #expect(orders[2].lines.map(\.quantity) == [1])
+        #expect(joined.ordersWithoutCards == ["62955D06-D"])
+        #expect(joined.unknownOrders == ["62955D06-Z"])
+    }
+
+    @Test func aBadOrderQuantityIsReportedNotHalfRead() throws {
+        let text = Self.pullSheet.replacingOccurrences(of: "62955D06-Z:1", with: "62955D06-Z")
+        let joined = try TCGplayerOrderExports.join(orderList: Self.orderList, pullSheet: text)
+        #expect(joined.unreadablePullSheetRows == [4])
+        #expect(joined.unknownOrders.isEmpty)
+    }
+
+    /// His pull sheet of 2026-09-15 names two custom listings with their
+    /// titles. Each number holds several cards there, so the name decides.
+    @Test func aCustomListingTitleIsNotPartOfTheName() {
+        #expect(TCGplayerOrderExports.productName("Team Rocket's Wobbuffet: Team Rocket's Wobbuffet #203 SV Promo Destined Rivals") == "Team Rocket's Wobbuffet")
+        #expect(TCGplayerOrderExports.productName("Fezandipiti (Master Ball Pattern): Fezandipiti 045/131 Prismatic Evolutions Master Ball Holo") == "Fezandipiti (Master Ball Pattern)")
+        #expect(TCGplayerOrderExports.productName("Dark Bell - 106/084") == "Dark Bell - 106/084")
+        #expect(TCGplayerOrderExports.productName("Pokemon Card Game: Classic") == "Pokemon Card Game: Classic")
+    }
+
+    @Test func theFilesInTheWrongRolesAreRefused() {
+        #expect(throws: TCGplayerOrderExports.JoinError.notTheTwoFiles) {
+            try TCGplayerOrderExports.join(orderList: Self.pullSheet, pullSheet: Self.orderList)
+        }
+    }
+
     @Test func aFileWithoutTheOrderColumnsIsRefused() {
         #expect(throws: SalesOrderCSV.ReadError.missingColumns(["Order #", "Product Amt"])) {
             try SalesOrderCSV.read("Order Date,Status,Product Name\n2026-07-03,Paid,Charizard\n")

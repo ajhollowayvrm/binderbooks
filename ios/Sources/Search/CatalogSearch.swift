@@ -239,8 +239,8 @@ struct CatalogSearch: Sendable {
         return try await database.asyncRead { db in
             let placeholders = ids.map { String($0) }.joined(separator: ",")
             var out: [Int: [ProductPrice]] = [:]
-            for row in try Row.fetchAll(db, sql: "SELECT productId, subTypeName, marketPriceCents, asOf FROM price WHERE productId IN (\(placeholders)) ORDER BY subTypeName") {
-                let price = ProductPrice(subTypeName: row["subTypeName"], marketCents: row["marketPriceCents"], asOf: row["asOf"])
+            for row in try Row.fetchAll(db, sql: "SELECT productId, subTypeName, marketPriceCents, lowPriceCents, asOf FROM price WHERE productId IN (\(placeholders)) ORDER BY subTypeName") {
+                let price = ProductPrice(subTypeName: row["subTypeName"], marketCents: row["marketPriceCents"], asOf: row["asOf"], lowCents: row["lowPriceCents"])
                 out[row["productId"], default: []].append(price)
             }
             return out
@@ -257,10 +257,10 @@ struct CatalogSearch: Sendable {
             )
             let prices = try Row.fetchAll(
                 db,
-                sql: "SELECT subTypeName, marketPriceCents, asOf FROM price WHERE productId = ? ORDER BY subTypeName",
+                sql: "SELECT subTypeName, marketPriceCents, lowPriceCents, asOf FROM price WHERE productId = ? ORDER BY subTypeName",
                 arguments: [productId]
             ).map {
-                ProductPrice(subTypeName: $0["subTypeName"], marketCents: $0["marketPriceCents"], asOf: $0["asOf"])
+                ProductPrice(subTypeName: $0["subTypeName"], marketCents: $0["marketPriceCents"], asOf: $0["asOf"], lowCents: $0["lowPriceCents"])
             }
             return ProductDetail(
                 hit: hit,

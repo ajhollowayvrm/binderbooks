@@ -175,7 +175,7 @@ private struct OwnedCardDetailBody: View {
 
     private var basis: some View {
         Section("Value") {
-            LabeledContent(card.isHandEntered ? "Your value" : "Market", value: model.marketCents(for: card)?.asCurrency ?? "—")
+            LabeledContent(card.isHandEntered ? "Your value" : "Value", value: model.marketCents(for: card)?.asCurrency ?? "—")
             // What it might come back worth, per grader, from the comps he
             // entered. The grader it is out at is the one that matters now.
             let atGrader = GradedComps.graderAtGrader(tags: card.tags)

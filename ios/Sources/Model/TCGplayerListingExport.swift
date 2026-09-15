@@ -159,13 +159,26 @@ enum TCGplayerListingExport {
         case liveLow
         /// Nobody sells the SKU, so the catalog's market price.
         case market
+        /// Worth $5 or more, so the market price, whatever the cheapest
+        /// listing asks.
+        case atMarket
     }
 
-    /// AJ's rule, 2026-09-11: match the cheapest listing's price plus its
-    /// shipping. His own shipping comes off, so the buyer's total for his
-    /// copy equals the cheapest total. With no live listing the price is the
-    /// market price. Nil when neither exists.
+    /// AJ's rule, 2026-09-15: a card with no listing under 20 cents is not
+    /// worth an order. A single cheap order leaves about 31 cents after fees
+    /// and postage, nearly all of it from the shipping he charges.
+    static let floorCents = 20
+
+    /// AJ's rule, 2026-09-11, amended 2026-09-15. At $5 and up the card lists
+    /// at its market price and waits: matching the cheapest listing sold nine
+    /// such cards $19 under market on one upload. Under $5 it matches the
+    /// cheapest listing's price plus its shipping, less his own shipping, so
+    /// the buyer's total for his copy equals the cheapest total. With no live
+    /// listing the price is the market price. Nil when neither exists.
     static func price(lowest: TCGplayerMarketClient.Listing?, marketCents: Int?, shippingChargedCents: Int) -> (cents: Int, source: PriceSource)? {
+        if let marketCents, marketCents >= ProductPrice.marketRuleCents {
+            return (marketCents, .atMarket)
+        }
         if let lowest {
             return (max(minimumPriceCents, lowest.totalCents - shippingChargedCents), .liveLow)
         }
@@ -175,12 +188,24 @@ enum TCGplayerListingExport {
         return nil
     }
 
+    /// True when the card stays out of the file: its cheapest listing, not
+    /// counting shipping, is under the floor. With no listing the market price
+    /// decides. A card worth $5 or more is never under it.
+    static func isBelowFloor(lowest: TCGplayerMarketClient.Listing?, marketCents: Int?) -> Bool {
+        if let marketCents, marketCents >= ProductPrice.marketRuleCents { return false }
+        if let lowest { return lowest.priceCents < floorCents }
+        return (marketCents ?? 0) < floorCents
+    }
+
     struct Priced: Identifiable, Equatable, Sendable {
         var line: Line
         var skuId: Int
         var priceCents: Int
         var source: PriceSource
         var lowest: TCGplayerMarketClient.Listing?
+        /// TCGplayer's exact product name. The import rejects the catalog's
+        /// name when TCGplayer's has the number on it. Nil falls back to it.
+        var productName: String? = nil
 
         var id: SkuKey { line.key }
     }
@@ -196,7 +221,7 @@ enum TCGplayerListingExport {
                 String(row.skuId),
                 categoryNames[hit.categoryId] ?? "",
                 hit.setName,
-                hit.name,
+                row.productName ?? hit.name,
                 "",
                 hit.number ?? "",
                 hit.rarity ?? "",
@@ -240,6 +265,8 @@ enum TCGplayerListingExport {
     struct Report: Equatable {
         var liveLow = 0
         var market = 0
+        var atMarket = 0
+        var belowFloor = 0
         var noSku = 0
         var unpriced = 0
         var failed = 0
@@ -247,7 +274,8 @@ enum TCGplayerListingExport {
         var stoppedBy: String?
 
         var summary: String {
-            var parts = ["\(liveLow + market) rows priced: \(liveLow) at the cheapest listing, \(market) at market"]
+            var parts = ["\(liveLow + market + atMarket) rows priced: \(atMarket) at market because they are worth $5 or more, \(liveLow) at the cheapest listing, \(market) at market with no listing"]
+            if belowFloor > 0 { parts.append("\(belowFloor) left out because the cheapest listing is under \(floorCents.asCurrency)") }
             if noSku > 0 { parts.append("\(noSku) have no SKU on TCGplayer") }
             if unpriced > 0 { parts.append("\(unpriced) have no listing and no market price") }
             if failed > 0 { parts.append("\(failed) lookups failed") }

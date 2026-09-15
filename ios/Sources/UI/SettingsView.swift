@@ -93,7 +93,7 @@ struct SettingsView: View {
                 } label: {
                     Label("Import sold orders", systemImage: "cart.badge.plus")
                 }
-                .fileImporter(isPresented: $showSalesImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+                .fileImporter(isPresented: $showSalesImporter, allowedContentTypes: [.commaSeparatedText, .plainText], allowsMultipleSelection: true) { result in
                     handleSalesImport(result)
                 }
                 .sheet(item: $pendingSales) { file in
@@ -102,7 +102,7 @@ struct SettingsView: View {
             } header: {
                 Text("Orders")
             } footer: {
-                Text("Reads TCGplayer's Sold Items CSV, with or without eBay rows. You review every change before the app saves it.")
+                Text("Pick TCGplayer's order list and pull sheet together, from Orders, Export Orders and Export Pull Sheet. A Sold Items CSV, with or without eBay rows, also works on its own. You review every change before the app saves it.")
             }
 
             Section {
@@ -256,14 +256,27 @@ struct SettingsView: View {
         }
     }
 
-    private func handleSalesImport(_ result: Result<URL, Error>) {
+    /// One file is a Sold Items CSV. Two files are TCGplayer's order list and
+    /// pull sheet, picked in either order.
+    private func handleSalesImport(_ result: Result<[URL], Error>) {
         importError = nil
         do {
-            let url = try result.get()
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            let text = try String(contentsOf: url, encoding: .utf8)
-            pendingSales = PendingSalesFile(contents: try SalesOrderCSV.read(text))
+            let texts = try result.get().map { url in
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                return try String(contentsOf: url, encoding: .utf8)
+            }
+            switch texts.count {
+            case 1:
+                pendingSales = PendingSalesFile(contents: try SalesOrderCSV.read(texts[0]))
+            case 2:
+                guard let list = texts.first(where: { TCGplayerOrderExports.kind(of: $0) == .orderList }),
+                      let sheet = texts.first(where: { TCGplayerOrderExports.kind(of: $0) == .pullSheet })
+                else { throw TCGplayerOrderExports.JoinError.notTheTwoFiles }
+                pendingSales = PendingSalesFile(contents: try TCGplayerOrderExports.join(orderList: list, pullSheet: sheet).contents)
+            default:
+                throw TCGplayerOrderExports.JoinError.notTheTwoFiles
+            }
         } catch {
             importError = error.localizedDescription
         }
