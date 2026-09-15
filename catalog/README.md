@@ -54,6 +54,12 @@ Facts about PikaQian, verified 2026-09-14:
   rule gives 128 for `csv6c` and 208 for Terastal Gathering, which match the cards.
   A set with none of these rarities, such as a start deck or a promo set, gets no
   total. Start Deck 100 prints `/414`, but its numbers go to 433.
+- **Most cards have no eBay sales.** On 2026-09-14, `/v1/cards?has_price=true` listed
+  6,393 of 20,252 cards, at 100 a page. The build writes those cards to `productSales`
+  and sets `meta.salesCheckedAt`. The app shows "No sales" for a Chinese card that is
+  not in the table. A `--sets` build does not ask, so its file claims nothing. For a
+  card with no sales, `/cards/{id}/prices` returns 404. The price run records no price
+  and continues.
 - **A pattern printing is its own card.** `variant` is `pokeball` or `masterball`
   with `is_variant: true`. The build names it `Surskit (Poke Ball Pattern)`, the way
   TCGplayer does, so `CardMatcher.isVariantSibling` works unchanged.

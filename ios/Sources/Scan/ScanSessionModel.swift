@@ -14,6 +14,8 @@ final class ScanSessionModel {
     /// Catalog rows for every product the session touches, by productId.
     private(set) var hits: [Int: SearchHit] = [:]
     private(set) var prices: [Int: [ProductPrice]] = [:]
+    /// Chinese cards with no eBay sales on PikaQian. They never get a price.
+    private(set) var noSales: Set<Int> = []
     private(set) var inFlight = 0
     private(set) var lastError: String?
     /// Copies already in inventory, by productId, then printing. Read once when
@@ -48,6 +50,12 @@ final class ScanSessionModel {
             return exact
         }
         return rows.compactMap(\.marketCents).min()
+    }
+
+    /// True when the card has no price because it has no eBay sales, not
+    /// because no one priced it yet.
+    func hasNoSales(_ card: OwnedCard) -> Bool {
+        marketCents(for: card) == nil && noSales.contains(card.productId)
     }
 
     // MARK: - Copies he already holds
@@ -386,6 +394,9 @@ final class ScanSessionModel {
         guard !missing.isEmpty, let db = catalog.database else { return }
         if let rows = try? await CatalogSearch(database: db).prices(for: missing) {
             for id in missing { prices[id] = rows[id] ?? [] }
+        }
+        if let none = try? await db.asyncRead({ try ChineseCatalog.cardsWithNoSales($0, among: missing) }) {
+            noSales.formUnion(none)
         }
     }
 

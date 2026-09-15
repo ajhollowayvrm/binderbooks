@@ -757,7 +757,10 @@ struct CardMatcher: Sendable {
     /// an exact name counts.
     static func englishName(_ db: Database, printed: String) throws -> String? {
         guard FrameInterpreter.isJapanese(printed), try db.tableExists("productLocalName") else { return nil }
-        let text = printed.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = printed.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Vision reads some characters in their Traditional form: 夢 for the
+        // 梦 in 梦歌仙人掌, Cacturne. The catalog holds only Simplified names.
+        let text = trimmed.applyingTransform(StringTransform("Hant-Hans"), reverse: false) ?? trimmed
         // The plain card first: "Surskit", not "Surskit (Poke Ball Pattern)".
         guard let name = try String.fetchOne(db, sql: """
             SELECT p.name FROM productLocalName l JOIN product p ON p.productId = l.productId

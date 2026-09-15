@@ -93,13 +93,13 @@ class NameTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
-    def build(self, directory, previous=None):
+    def build(self, directory, previous=None, with_sales=None):
         data = [bz.SetData(
             set={"id": "cbb4c", "name": "Gem Pack Vol 4", "local_name": "宝石包4", "release_date": "2026-02-06"},
             cards=[card("u1", "01 01"), card("u2", "01 02", rarity="Rare")],
         )]
         path = Path(directory) / bz.FILE_NAME
-        bz.build_sqlite(path, data, previous or bz.Previous({}, {}, {}, {}), "2026-09-14T00:00:00Z", lambda _: None)
+        bz.build_sqlite(path, data, previous or bz.Previous({}, {}, {}, {}), "2026-09-14T00:00:00Z", lambda _: None, with_sales)
         return path
 
     def test_the_file_has_the_catalog_schema_and_the_chinese_tables(self):
@@ -138,6 +138,22 @@ class BuildTests(unittest.TestCase):
             conn.close()
 
 
+    def test_the_file_lists_the_cards_with_sales(self):
+        with tempfile.TemporaryDirectory() as d:
+            conn = sqlite3.connect(self.build(d, with_sales={"u1"}))
+            pid = conn.execute("SELECT productId FROM pikaqianCard WHERE cardId = 'u1'").fetchone()[0]
+            self.assertEqual(conn.execute("SELECT productId FROM productSales").fetchall(), [(pid,)])
+            self.assertIsNotNone(conn.execute("SELECT value FROM meta WHERE key = 'salesCheckedAt'").fetchone())
+            conn.close()
+
+    def test_a_build_that_did_not_check_sales_claims_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            conn = sqlite3.connect(self.build(d))
+            self.assertEqual(conn.execute("SELECT count(*) FROM productSales").fetchone()[0], 0)
+            self.assertIsNone(conn.execute("SELECT value FROM meta WHERE key = 'salesCheckedAt'").fetchone())
+            conn.close()
+
+
 class PriceTests(unittest.TestCase):
     def test_owned_cards_skip_sold_and_non_chinese_cards(self):
         export = {"cards": [
@@ -158,6 +174,40 @@ class PriceTests(unittest.TestCase):
 
     def test_a_card_never_sold_has_no_price(self):
         self.assertEqual(bz.price_summary({"grades": {"raw": None}}), (None, None, None))
+
+    def test_a_card_with_no_sales_does_not_stop_the_price_run(self):
+        class FakeClient:
+            requests = 0
+
+            def __init__(self, prices):
+                self.prices = prices
+
+            def log(self, _):
+                pass
+
+            def get(self, path, params=None):
+                card_id = path.split("/")[2]
+                if card_id not in self.prices:
+                    raise bz.PikaQianNotFound(f"{path}: HTTP 404")
+                return {"grades": {"raw": {"price_cents": self.prices[card_id]}}, "recent_sale_count": 2}
+
+        with tempfile.TemporaryDirectory() as d:
+            path = BuildTests().build(d, with_sales={"u1", "u2"})
+            conn = sqlite3.connect(path)
+            ids = dict(conn.execute("SELECT cardId, productId FROM pikaqianCard"))
+            conn.close()
+            export = Path(d) / "export.json"
+            export.write_text(json.dumps({"cards": [
+                {"productId": ids["u1"], "statusRaw": "owned"},
+                {"productId": ids["u2"], "statusRaw": "owned"},
+            ]}))
+            summary = bz.price(path, export, Path(d) / "prices.csv", FakeClient({"u1": 1850}), "2026-09-15T00:00:00Z")
+            self.assertEqual((summary["products"], summary["priced"]), (2, 1))
+            conn = sqlite3.connect(path)
+            prices = dict(conn.execute("SELECT productId, marketPriceCents FROM price"))
+            self.assertEqual((prices[ids["u1"]], prices[ids["u2"]]), (1850, None))
+            self.assertEqual(conn.execute("SELECT productId FROM productSales").fetchall(), [(ids["u1"],)])
+            conn.close()
 
 
 if __name__ == "__main__":

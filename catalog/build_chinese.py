@@ -135,6 +135,13 @@ CREATE TABLE ftsText (
     number     TEXT NOT NULL,
     setName    TEXT NOT NULL
 );
+
+-- The cards PikaQian lists with eBay sales (has_price=true). Only a build that
+-- asked writes meta.salesCheckedAt. With it, a card not in this table has no
+-- sales, and the app shows "No sales" for it.
+CREATE TABLE productSales (
+    productId  INTEGER PRIMARY KEY
+);
 """
 
 
@@ -251,6 +258,10 @@ class PikaQianError(RuntimeError):
     pass
 
 
+class PikaQianNotFound(PikaQianError):
+    """HTTP 404. On /cards/{id}/prices it means the card has no eBay sales."""
+
+
 def read_key() -> str:
     key = os.environ.get("PIKAQIAN_API_KEY", "").strip()
     if not key and KEY_FILE.exists():
@@ -286,7 +297,7 @@ class Client:
                 if err.code in (401, 403):
                     raise PikaQianError(f"{path}: HTTP {err.code}. Check the key and the plan.") from err
                 if err.code == 404:
-                    raise PikaQianError(f"{path}: HTTP 404") from err
+                    raise PikaQianNotFound(f"{path}: HTTP 404") from err
                 if err.code == 429:
                     retry_after = err.headers.get("Retry-After")
                     delay = max(delay, float(retry_after)) if retry_after and retry_after.isdigit() else delay
@@ -369,7 +380,14 @@ def fts_values(name: str, local: str | None, number: str, set_name: str, set_loc
     return name_text, number, set_text
 
 
-def build_sqlite(path: Path, data: list[SetData], previous: Previous, built_at: str, log: Callable[[str], None]) -> dict[str, Any]:
+def build_sqlite(
+    path: Path,
+    data: list[SetData],
+    previous: Previous,
+    built_at: str,
+    log: Callable[[str], None],
+    with_sales: set[str] | None = None,
+) -> dict[str, Any]:
     if path.exists():
         path.unlink()
     conn = sqlite3.connect(path)
@@ -440,6 +458,14 @@ def build_sqlite(path: Path, data: list[SetData], previous: Previous, built_at: 
             product_count += 1
         log(f"  {s['id']}: {len(slots)} Gem Pack slots" if slots else f"  {s['id']}: printed total {total}")
 
+    # None when the build did not ask PikaQian which cards sell. Then the table
+    # stays empty and meta has no salesCheckedAt, so the app claims nothing.
+    sales_count = 0
+    if with_sales is not None:
+        rows = [(pid,) for card_id, pid in product_ids.items() if card_id in with_sales]
+        conn.executemany("INSERT INTO productSales VALUES (?)", rows)
+        sales_count = len(rows)
+
     meta = {
         "schemaVersion": str(bc.SCHEMA_VERSION),
         "kind": KIND,
@@ -452,6 +478,8 @@ def build_sqlite(path: Path, data: list[SetData], previous: Previous, built_at: 
             separators=(",", ":"),
         ),
     }
+    if with_sales is not None:
+        meta["salesCheckedAt"] = built_at
     conn.executemany("INSERT INTO meta VALUES (?, ?)", meta.items())
     conn.commit()
     conn.execute("INSERT INTO product_fts(product_fts) VALUES('optimize')")
@@ -459,7 +487,7 @@ def build_sqlite(path: Path, data: list[SetData], previous: Previous, built_at: 
     conn.commit()
     conn.execute("VACUUM")
     conn.close()
-    return {"productCount": product_count, "keptArt": kept_art, "keptPrices": kept_prices}
+    return {"productCount": product_count, "keptArt": kept_art, "keptPrices": kept_prices, "withSales": sales_count}
 
 
 # ----------------------------------------------------------------------- price
@@ -539,13 +567,23 @@ def price(catalog: Path, export_path: Path, report: Path, client: Client, fetche
     conn = sqlite3.connect(catalog)
     try:
         card_ids = dict(conn.execute("SELECT productId, cardId FROM pikaqianCard"))
+        sales_checked = conn.execute("SELECT 1 FROM meta WHERE key = 'salesCheckedAt'").fetchone() is not None
         owned = owned_chinese_cards(export, set(card_ids))
         client.log(f"{len(owned)} Chinese products held, {sum(o.quantity for o in owned.values())} cards")
         priced = 0
         for index, pid in enumerate(sorted(owned), start=1):
-            body = client.get(f"/cards/{card_ids[pid]}/prices")
-            raw, sales, updated = price_summary(body)
+            try:
+                raw, sales, updated = price_summary(client.get(f"/cards/{card_ids[pid]}/prices"))
+            except PikaQianNotFound:
+                # price_not_found: the card has no eBay sales. Most Chinese
+                # cards have none, so one of them must not stop the run.
+                raw, sales, updated = None, 0, None
             conn.execute("INSERT OR REPLACE INTO pikaqianPrice VALUES (?,?,?,?,?)", (pid, raw, sales, updated, fetched_at))
+            if sales_checked:
+                if raw is None:
+                    conn.execute("DELETE FROM productSales WHERE productId = ?", (pid,))
+                else:
+                    conn.execute("INSERT OR IGNORE INTO productSales VALUES (?)", (pid,))
             conn.execute(
                 "UPDATE price SET marketPriceCents = ?, asOf = ? WHERE productId = ?",
                 (raw, (updated or fetched_at)[:10], pid),
@@ -610,12 +648,16 @@ def main(argv: list[str] | None = None) -> int:
             if not data or not any(sd.cards for sd in data):
                 print("PikaQian returned no cards. Nothing written.", file=sys.stderr)
                 return 1
+            # Which cards have eBay sales: about 64 requests at 100 cards a page.
+            # A --sets test build skips it, so its file claims no "No sales".
+            with_sales = None if only else {c["id"] for c in client.paginate("/cards", {"has_price": "true"})}
             staging = out / (FILE_NAME + ".new")
-            summary = build_sqlite(staging, data, previous, now, client.log)
+            summary = build_sqlite(staging, data, previous, now, client.log, with_sales)
             shutil.move(staging, final)
             client.log(
                 f"wrote {summary['productCount']} products to {final} "
-                f"(kept {summary['keptArt']} signatures, {summary['keptPrices']} prices); "
+                f"(kept {summary['keptArt']} signatures, {summary['keptPrices']} prices; "
+                f"{summary['withSales']} cards with sales); "
                 f"{client.requests} requests, quota left {client.quota_remaining}, "
                 f"{time.monotonic() - started:.0f}s"
             )

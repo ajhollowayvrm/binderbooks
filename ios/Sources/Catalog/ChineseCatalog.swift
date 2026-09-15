@@ -91,6 +91,18 @@ enum ChineseCatalog {
         try String.fetchOne(db, sql: "SELECT value FROM meta WHERE key = ?", arguments: [mergedKey])
     }
 
+    /// The Chinese cards among `ids` that have no eBay sales on PikaQian, so
+    /// they never get a price. Empty when the merged file did not check sales.
+    static func cardsWithNoSales(_ db: Database, among ids: [Int]) throws -> Set<Int> {
+        guard !ids.isEmpty, try db.tableExists("productSales") else { return [] }
+        let placeholders = ids.map { String($0) }.joined(separator: ",")
+        return Set(try Int.fetchAll(db, sql: """
+            SELECT productId FROM product
+            WHERE productId IN (\(placeholders)) AND categoryId = ?
+              AND productId NOT IN (SELECT productId FROM productSales)
+            """, arguments: [TCGCategory.pokemonChinese]))
+    }
+
     /// Replace the Chinese rows of a catalog file with the rows of `chinese`,
     /// in one transaction. Nil takes them out and puts nothing in.
     ///
@@ -123,6 +135,17 @@ enum ChineseCatalog {
                 }
                 if let incoming {
                     try db.execute(sql: insertSQL)
+                    // Only a build that asked PikaQian which cards sell has
+                    // salesCheckedAt. Without it, no card is known to have no sales.
+                    let salesChecked = try Bool.fetchOne(
+                        db, sql: "SELECT EXISTS (SELECT 1 FROM zh.meta WHERE key = 'salesCheckedAt')"
+                    ) ?? false
+                    if salesChecked {
+                        try db.execute(sql: """
+                            CREATE TABLE IF NOT EXISTS main.productSales (productId INTEGER PRIMARY KEY);
+                            INSERT INTO main.productSales (productId) SELECT productId FROM zh.productSales;
+                            """)
+                    }
                     try db.execute(
                         sql: "INSERT INTO main.meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                         arguments: [mergedKey, incoming.builtAt]
@@ -148,6 +171,7 @@ enum ChineseCatalog {
     DELETE FROM main.price WHERE productId IN (SELECT productId FROM main.product WHERE categoryId = ?);
     DELETE FROM main.productArt WHERE productId IN (SELECT productId FROM main.product WHERE categoryId = ?);
     DROP TABLE IF EXISTS main.productLocalName;
+    DROP TABLE IF EXISTS main.productSales;
     DELETE FROM main.product WHERE categoryId = ?;
     DELETE FROM main.cardSet WHERE categoryId = ?;
     DELETE FROM main.category WHERE categoryId = ?;

@@ -83,6 +83,15 @@ import Testing
         #expect(names.2 == nil)
     }
 
+    /// Vision read Cacturne as 夢歌仙人掌, with the Traditional 夢. The catalog
+    /// holds 梦歌仙人掌. The Traditional form still finds the card.
+    @Test func aTraditionalCharacterStillFindsTheSimplifiedName() throws {
+        let name = try Fixture.make(chinese: true).read { db in
+            try CardMatcher.englishName(db, printed: "小火龍")
+        }
+        #expect(name == "Charmander")
+    }
+
     @Test func aChineseSessionTakesTheChineseCard() throws {
         let result = try match(observation(number: "026/197", name: "小火龙"), language: .chineseSimplified)
         #expect(result.productId == Fixture.chineseCharmander)
@@ -177,7 +186,9 @@ import Testing
     }
 
     /// A file in the shape catalog/build_chinese.py writes.
-    private static func chineseFile(in dir: URL, named name: String, builtAt: String, cards: [Card]) throws -> URL {
+    /// `salesChecked` lists the cards with eBay sales, the way a build that
+    /// asked PikaQian writes them. Nil is a build that did not ask.
+    private static func chineseFile(in dir: URL, named name: String, builtAt: String, cards: [Card], salesChecked: [Int]? = nil) throws -> URL {
         let url = dir.appendingPathComponent(name)
         let queue = try DatabaseQueue(path: url.path)
         try queue.write { db in
@@ -208,6 +219,13 @@ import Testing
             ]
             for (key, value) in meta {
                 try db.execute(sql: "INSERT INTO meta VALUES (?, ?)", arguments: [key, value])
+            }
+            if let salesChecked {
+                try db.execute(sql: "CREATE TABLE productSales (productId INTEGER PRIMARY KEY)")
+                try db.execute(sql: "INSERT INTO meta VALUES ('salesCheckedAt', ?)", arguments: [builtAt])
+                for id in salesChecked {
+                    try db.execute(sql: "INSERT INTO productSales VALUES (?)", arguments: [id])
+                }
             }
             for card in cards {
                 let parsed = CollectorNumber.parse(card.number)
@@ -329,6 +347,30 @@ import Testing
         #expect(count == Fixture.products.count)
         #expect(!hasNames)
         #expect(merged == nil)
+        try Self.checkIndexes(catalog)
+    }
+
+    /// A build that asked PikaQian lists the cards with eBay sales. Every other
+    /// Chinese card has none, and the scan says "No sales".
+    @Test func aChineseCardWithNoSalesIsKnown() throws {
+        let dir = try Self.directory()
+        let catalog = try Self.catalogFile(in: dir)
+        let ids = [Fixture.chinesePonyta, Fixture.chineseSurskit, 1]
+        try ChineseCatalog.apply(
+            try Self.chineseFile(
+                in: dir, named: "a.sqlite", builtAt: "2026-09-14T00:00:00Z",
+                cards: [Self.ponyta, Self.surskit], salesChecked: [Fixture.chinesePonyta]
+            ),
+            to: catalog
+        )
+        #expect(try Self.read(catalog) { try ChineseCatalog.cardsWithNoSales($0, among: ids) } == [Fixture.chineseSurskit])
+
+        // A build that did not ask claims nothing.
+        try ChineseCatalog.apply(
+            try Self.chineseFile(in: dir, named: "b.sqlite", builtAt: "2026-09-15T00:00:00Z", cards: [Self.ponyta, Self.surskit]),
+            to: catalog
+        )
+        #expect(try Self.read(catalog) { try ChineseCatalog.cardsWithNoSales($0, among: ids) }.isEmpty)
         try Self.checkIndexes(catalog)
     }
 
