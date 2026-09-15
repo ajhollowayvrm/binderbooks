@@ -250,6 +250,30 @@ import Testing
         #expect(!ghost && !ghostAgain)
     }
 
+    /// His report: automatic mode logged nothing on Perfect Order. The reader
+    /// signs a card every tenth of a second and reads words every quarter
+    /// second, so the picture often arrives first. Two picture-only frames
+    /// passed the gate, and the gate recorded the card as logged. The
+    /// controller logs only with a number, so it logged nothing. When the
+    /// number came, the picture matched the card the gate already held.
+    @Test func aPictureBeforeTheNumberDoesNotUseUpTheCard() {
+        var gate = DuplicateGate(absence: 1.5)
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        let tyrunt = Fixture.artDescriptor(seed: 0x7A7A)
+        func see(_ number: String?, at seconds: Double) -> Bool {
+            gate.shouldAccept(
+                DuplicateGate.Reading(number: number, art: tyrunt, sawCard: true),
+                at: t0.addingTimeInterval(seconds)
+            )
+        }
+        let first = see(nil, at: 0)
+        let second = see(nil, at: 0.1)
+        _ = see("044/088", at: 0.25)
+        let logged = see("044/088", at: 0.5)
+        #expect(!first && !second)
+        #expect(logged)
+    }
+
     /// The next card in the stack looks like nothing the last one looked like,
     /// so it logs, and it logs without the lens ever seeing an empty chute.
     @Test func theNextCardInTheStackLogs() {

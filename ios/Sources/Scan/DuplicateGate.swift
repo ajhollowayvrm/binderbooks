@@ -80,6 +80,11 @@ struct DuplicateGate {
             pending = nil
             return false
         }
+        // A picture with no number cannot be logged, so it must not use up the
+        // card. The reader signs every tenth of a second and reads words every
+        // quarter second, so the picture often comes first. It still holds the
+        // visit open, above.
+        guard reading.number != nil else { return false }
         guard !visits.contains(where: { isSameCard($0, reading) }) else {
             pending = nil
             return false
