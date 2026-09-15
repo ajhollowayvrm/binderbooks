@@ -64,6 +64,14 @@ import Testing
         #expect(contents.rows.map(\.skuId) == [5001, 7001, 9001])
     }
 
+    /// The stock check needs the SKUs TCGplayer listed once and has no stock
+    /// for. A lettered id cannot match a SKU, so it is not kept.
+    @Test func aSkuWithNoStockIsKeptForTheStockCheck() throws {
+        let contents = try TCGplayerPricingCSV.read(Self.export)
+        #expect(contents.emptyRows.map(\.skuId) == [5002])
+        #expect(contents.emptyRows.first?.line.quantity == 0)
+    }
+
     @Test func aSoldOrdersFileIsRefused() {
         #expect(throws: TCGplayerPricingCSV.ReadError.missingColumns(["TCGplayer Id", "Set Name", "Total Quantity"])) {
             try TCGplayerPricingCSV.read(SalesOrderImportTests.tcgplayerOnly)
@@ -155,6 +163,45 @@ import Testing
         let again = TCGplayerListingImport.plan(contents, cards: all, products: products)
         #expect(!again.hasWork)
         #expect(again.alreadyListedCount == 6)
+    }
+
+    // MARK: - Stock check
+
+    /// His situation, 2026-09-15: open orders the app has not imported, and
+    /// cards he listed by hand.
+    @Test @MainActor func theStockCheckTagsHandListingsAndFlagsWhatMaySold() throws {
+        let store = try CollectionStore.container(inMemory: true)
+        let context = store.mainContext
+
+        // Charizard ex: three copies tagged listed, and TCGplayer has two left.
+        for day in ["2026-07-01", "2026-07-02", "2026-07-03"] {
+            _ = card(context, 1, printing: "Holofoil", acquired: day, tags: ["listed"])
+        }
+        // Charmander: one tagged copy and three untagged, against a stock of
+        // three. He listed two by hand.
+        _ = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-05-01", tags: ["listed"])
+        let oldest = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-05-02")
+        let middle = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-05-03")
+        let newest = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-05-04")
+        // Pidgeot ex: TCGplayer listed it once and has none left.
+        let pidgeot = card(context, 9, printing: "Holofoil", acquired: "2026-06-01")
+        _ = card(context, 9, printing: "Holofoil", acquired: "2026-06-02", tags: ["sold"])
+        // Base Set Charizard: TCGplayer never listed it.
+        let fresh = card(context, 2, printing: "Holofoil", acquired: "2026-08-01")
+        try context.save()
+
+        let contents = try TCGplayerPricingCSV.read(Self.export)
+        let products = try Fixture.make().read { db in
+            try TCGplayerPricingCSV.products(db, rows: contents.rows + contents.emptyRows)
+        }
+        let result = TCGplayerStockCheck.check(contents, cards: try context.fetch(FetchDescriptor<OwnedCard>()), products: products)
+
+        #expect(result.soldOnTCGplayer == 1)
+        #expect(result.toTag == [oldest.id, middle.id])
+        #expect(result.toCheck == [newest.id, pidgeot.id])
+        #expect(!result.toTag.contains(fresh.id) && !result.toCheck.contains(fresh.id))
+        // Missingno has stock and no product.
+        #expect(result.unmatchedRows == 1)
     }
 
     @Test @MainActor func noCostLeavesTheBasisEmpty() throws {

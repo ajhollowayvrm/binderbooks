@@ -6,8 +6,13 @@ import UniformTypeIdentifiers
 ///
 /// Every inventory card that can be listed is on the list. A card tagged
 /// `listed` starts unticked, because the import adds quantity and a second
-/// upload lists the card twice. The cards that cannot be listed show as a count
-/// for each reason, so no card leaves the file in silence.
+/// upload lists the card twice. The cards in the file take the tag when the
+/// file is made. The cards that cannot be listed show as a count for each
+/// reason, so no card leaves the file in silence.
+///
+/// "Check against TCGplayer" reads the pricing export first. It tags the cards
+/// he listed by hand and unticks the ones that may have sold. See
+/// `TCGplayerStockCheck`.
 struct TCGplayerExportSheet: View {
     /// The cards to tick at the start. Nil ticks every listable card that is
     /// not already tagged `listed`.
@@ -30,6 +35,13 @@ struct TCGplayerExportSheet: View {
     @State private var outcome: TCGplayerListingBuilder.Outcome?
     @State private var categoryNames: [Int: String] = [:]
     @State private var taggedCount: Int?
+    /// The cards this export tagged, so Undo takes the tag off only those.
+    @State private var taggedIds: [UUID] = []
+    @State private var pickingStock = false
+    @State private var checking = false
+    @State private var stockCheck: TCGplayerStockCheck.Result?
+    @State private var stockTagged = 0
+    @State private var checkError: String?
 
     /// Sold cards are already gone from these rows.
     private var rows: [InventoryRow] { model.rows(from: cards, applyFilter: false) }
@@ -68,6 +80,9 @@ struct TCGplayerExportSheet: View {
         }
         .interactiveDismissDisabled(builder.isRunning)
         .onAppear { seed() }
+        .fileImporter(isPresented: $pickingStock, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+            Task { await checkStock(result) }
+        }
         .onDisappear { run?.cancel() }
         .task(id: catalog.database?.path) { await loadCategories() }
     }
@@ -79,6 +94,33 @@ struct TCGplayerExportSheet: View {
         let skipped = skippedCounts
         let allTicked = !listable.isEmpty && listable.allSatisfy { selection.contains($0.card.id) }
         return List {
+            Section {
+                Button {
+                    pickingStock = true
+                } label: {
+                    Label(
+                        checking ? "Checking…" : (stockCheck == nil ? "Check against TCGplayer…" : "Check again…"),
+                        systemImage: "arrow.triangle.2.circlepath"
+                    )
+                }
+                .disabled(checking || builder.isRunning)
+                if let stockCheck {
+                    LabeledContent("Listed by hand, now tagged", value: "\(stockTagged)")
+                    LabeledContent("Was on TCGplayer, check", value: "\(stockCheck.toCheck.count)")
+                    LabeledContent("Sold on TCGplayer", value: "\(stockCheck.soldOnTCGplayer)")
+                    if stockCheck.unmatchedRows > 0 {
+                        LabeledContent("TCGplayer rows not matched", value: "\(stockCheck.unmatchedRows)")
+                    }
+                }
+                if let checkError {
+                    Text(checkError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            } footer: {
+                Text("In Seller Portal, export your pricing file, then pick it here. TCGplayer takes a card off its stock when a buyer pays, so open orders count. A card TCGplayer listed before and has no stock for now stays unticked.")
+            }
+
             Section {
                 HStack {
                     Text("Shipping you charge")
@@ -102,7 +144,14 @@ struct TCGplayerExportSheet: View {
                         HStack(spacing: 10) {
                             Image(systemName: selection.contains(row.card.id) ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(selection.contains(row.card.id) ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
-                            OwnedCardRow(row: row)
+                            VStack(alignment: .leading, spacing: 2) {
+                                OwnedCardRow(row: row)
+                                if stockCheck?.toCheck.contains(row.card.id) == true {
+                                    Label("Was on TCGplayer. Check that you still have it.", systemImage: "exclamationmark.triangle")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
+                            }
                         }
                     }
                     .buttonStyle(.plain)
@@ -170,15 +219,23 @@ struct TCGplayerExportSheet: View {
                     ShareLink(item: file, preview: SharePreview(name, image: Image(systemName: "tablecells"))) {
                         Label("Share CSV (\(outcome.rows.count) rows)", systemImage: "square.and.arrow.up")
                     }
-                    Button {
-                        tagListed(cardIds)
-                    } label: {
-                        Label(taggedCount.map { "Tagged \($0) cards listed" } ?? "Tag these \(cardIds.count) cards listed", systemImage: "tag")
+                    if let taggedCount {
+                        HStack {
+                            Label("Tagged \(taggedCount) cards listed", systemImage: "tag")
+                            Spacer()
+                            Button("Undo") { undoTags() }
+                                .buttonStyle(.borderless)
+                        }
+                    } else {
+                        Button {
+                            tagListed(cardIds)
+                        } label: {
+                            Label("Tag these \(cardIds.count) cards listed", systemImage: "tag")
+                        }
                     }
-                    .disabled(taggedCount != nil)
                 }
             } footer: {
-                Text("In Seller Portal, open Inventory and choose Import Inventory. Check the staged inventory before it goes live. The import adds to the quantity you already list.")
+                Text("In Seller Portal, open Inventory and choose Import Inventory. Check the staged inventory before it goes live. The import adds to the quantity you already list. The cards in this file are tagged listed, so they are not offered again. If you do not upload the file, tap Undo.")
             }
 
             Section("Rows") {
@@ -244,16 +301,64 @@ struct TCGplayerExportSheet: View {
         let shipping = Money.cents(from: shippingText) ?? 0
         run = Task {
             let result = await builder.build(plan, shippingChargedCents: shipping, market: TCGplayerMarketClient())
-            if !Task.isCancelled { outcome = result }
+            if !Task.isCancelled {
+                outcome = result
+                // Tagged now, not after he taps a button. A card in the file
+                // that stays untagged is offered again, and sold twice.
+                tagListed(result.rows.flatMap(\.line.cardIds))
+            }
         }
     }
 
+    /// Only the cards with no tag yet, so Undo leaves an older tag alone.
     private func tagListed(_ ids: [UUID]) {
         let wanted = Set(ids)
-        let tagged = cards.filter { wanted.contains($0.id) }
-        CardTagEditor(context: modelContext).add(ReservedTag.listed, to: tagged)
-        taggedCount = tagged.count
+        let newly = cards.filter { wanted.contains($0.id) && !CardTagIndex.has(ReservedTag.listed, on: $0) }
+        CardTagEditor(context: modelContext).add(ReservedTag.listed, to: newly)
+        taggedIds = newly.map(\.id)
+        taggedCount = newly.count
         onTagged()
+    }
+
+    private func undoTags() {
+        let wanted = Set(taggedIds)
+        CardTagEditor(context: modelContext).remove(ReservedTag.listed, from: cards.filter { wanted.contains($0.id) })
+        taggedIds = []
+        taggedCount = nil
+        onTagged()
+    }
+
+    private func checkStock(_ result: Result<URL, Error>) async {
+        checkError = nil
+        checking = true
+        defer { checking = false }
+        do {
+            let url = try result.get()
+            let scoped = url.startAccessingSecurityScopedResource()
+            let text: String
+            do {
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                text = try String(contentsOf: url, encoding: .utf8)
+            }
+            let contents = try TCGplayerPricingCSV.read(text)
+            guard let database = catalog.database else {
+                checkError = "Install the catalog first. The check matches each TCGplayer row to a catalog card."
+                return
+            }
+            let rows = contents.rows + contents.emptyRows
+            let products = try await database.asyncRead { db in try TCGplayerPricingCSV.products(db, rows: rows) }
+            let check = TCGplayerStockCheck.check(contents, cards: cards, products: products)
+            let toTag = Set(check.toTag)
+            let handListed = cards.filter { toTag.contains($0.id) }
+            CardTagEditor(context: modelContext).add(ReservedTag.listed, to: handListed)
+            stockTagged = handListed.count
+            selection.subtract(toTag)
+            selection.subtract(check.toCheck)
+            stockCheck = check
+            onTagged()
+        } catch {
+            checkError = error.localizedDescription
+        }
     }
 
     private func loadCategories() async {

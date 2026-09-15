@@ -576,6 +576,23 @@ AJ's rules:
   and sold cards. A card with no printing, on a product with several, is skipped too.
 - **He picks** which of the rest go in the file. A card tagged `listed` starts unticked.
   The import adds quantity, so a second upload of the same card lists it twice.
+- **Tagged on export.** Amended 2026-09-15: the cards in the file take the `listed` tag
+  when the file is made. Undo takes the tag off again.
+
+**Check against TCGplayer.** Built 2026-09-15. TCGplayer takes a copy off its stock when
+a buyer pays, so its pricing export counts what is still for sale, open orders
+included. AJ lists some cards by hand, and he often has open orders that the app has
+not imported. Before an export he picks the pricing export in the sheet. For each SKU:
+
+| Copies in the app | Meaning | What the check does |
+|---|---|---|
+| More tagged `listed` than TCGplayer's stock | Sold on TCGplayer, order maybe not imported | Counts them. The export already leaves them unticked. |
+| Untagged, while TCGplayer has stock left over | Listed by hand | Tags them `listed`. |
+| The other untagged copies of a SKU in the file | Probably a hand listing that sold | Unticks them and marks them "Was on TCGplayer". |
+| Untagged, SKU not in the file | New | No change. |
+
+The check is `TCGplayerStockCheck` in `ios/Sources/Model/TCGplayerListingImport.swift`.
+It needs no sold-orders import first.
 
 ### Sold-orders import
 

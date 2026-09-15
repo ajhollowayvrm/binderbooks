@@ -27,6 +27,9 @@ enum TCGplayerPricingCSV {
         var skuCount: Int
         /// Line numbers in the file, with the header as line 1.
         var unreadableRows: [Int]
+        /// The SKUs TCGplayer listed once and has no stock for now. The stock
+        /// check reads them. The import does not.
+        var emptyRows: [Row] = []
 
         var copyCount: Int { rows.reduce(0) { $0 + $1.line.quantity } }
     }
@@ -73,20 +76,26 @@ enum TCGplayerPricingCSV {
             contents.skuCount += 1
             // The stock decides first. His export holds 24 rows with an id such
             // as "C-4505111", and every one of them has no stock.
-            guard quantity > 0 else { continue }
-            guard let skuId = Int(idText) else {
+            let skuId = Int(idText)
+            func makeRow(_ skuId: Int) -> Row {
+                Row(
+                    lineNumber: offset + 2,
+                    skuId: skuId,
+                    line: SalesOrderCSV.Line(
+                        productLine: value("Product Line"), setName: value("Set Name"), number: value("Number"),
+                        productName: value("Product Name"), condition: value("Condition"), skuId: skuId, quantity: quantity
+                    )
+                )
+            }
+            guard quantity > 0 else {
+                if let skuId { contents.emptyRows.append(makeRow(skuId)) }
+                continue
+            }
+            guard let skuId else {
                 contents.unreadableRows.append(offset + 2)
                 continue
             }
-
-            contents.rows.append(Row(
-                lineNumber: offset + 2,
-                skuId: skuId,
-                line: SalesOrderCSV.Line(
-                    productLine: value("Product Line"), setName: value("Set Name"), number: value("Number"),
-                    productName: value("Product Name"), condition: value("Condition"), skuId: skuId, quantity: quantity
-                )
-            ))
+            contents.rows.append(makeRow(skuId))
         }
         return contents
     }
@@ -248,5 +257,62 @@ enum TCGplayerListingImport {
         CardTagEditor(context: context).add(ReservedTag.listed, to: tagged + added)
         try context.save()
         return Report(tagged: tagged.count, added: added.count)
+    }
+}
+
+/// The pricing export against the cards the listing export would upload.
+///
+/// TCGplayer takes a copy off its stock the moment a buyer pays, so the
+/// pricing export counts what is still for sale, open orders included. He lists
+/// some cards by hand, and he often has open orders the app has not imported.
+/// The listing export uploads only copies with no `listed` tag, so only those
+/// copies need a decision:
+///
+/// - **To tag.** TCGplayer has more stock than he has tagged. He listed those
+///   copies by hand, so they take the tag.
+/// - **To check.** The other untagged copies of a SKU TCGplayer has listed.
+///   Probably a hand listing that sold, but a copy he never listed looks the
+///   same, so he decides.
+///
+/// Tagged copies beyond the stock sold on TCGplayer. The export already leaves
+/// them unticked, so they are only counted.
+@MainActor
+enum TCGplayerStockCheck {
+    struct Result: Equatable {
+        var toTag: [UUID] = []
+        var toCheck: Set<UUID> = []
+        var soldOnTCGplayer = 0
+        /// Rows with stock that the catalog cannot name, or with a condition
+        /// the app does not read.
+        var unmatchedRows = 0
+        var unreadableRows: [Int] = []
+    }
+
+    static func check(_ contents: TCGplayerPricingCSV.Contents, cards: [OwnedCard], products: [Int: Int]) -> Result {
+        var result = Result(unreadableRows: contents.unreadableRows)
+        let pool = Dictionary(grouping: cards.filter(SalesOrderImport.isSellable), by: \.productId)
+        var used: Set<UUID> = []
+        // Rows with stock first, so a copy with no printing counts against stock
+        // before it counts against a SKU that has none.
+        for row in contents.rows + contents.emptyRows {
+            let wanted = SoldCondition.parse(row.line.condition, channel: .tcgplayer)
+            guard let productId = products[row.skuId], wanted.condition != nil, wanted.printing != nil else {
+                if row.line.quantity > 0 { result.unmatchedRows += 1 }
+                continue
+            }
+            let copies = (pool[productId] ?? []).filter { !used.contains($0.id) && wanted.fits($0) }
+            used.formUnion(copies.map(\.id))
+
+            let tagged = copies.filter { CardTagIndex.has(ReservedTag.listed, on: $0) }
+            let untagged = copies
+                .filter { !CardTagIndex.has(ReservedTag.listed, on: $0) }
+                .sorted { ($0.acquiredAt, $0.id.uuidString) < ($1.acquiredAt, $1.id.uuidString) }
+            let stock = row.line.quantity
+            result.soldOnTCGplayer += max(0, tagged.count - stock)
+            let handListed = max(0, stock - tagged.count)
+            result.toTag += untagged.prefix(handListed).map(\.id)
+            result.toCheck.formUnion(untagged.dropFirst(handListed).map(\.id))
+        }
+        return result
     }
 }
