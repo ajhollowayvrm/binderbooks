@@ -78,7 +78,8 @@ enum FrameInterpreter {
         try! Regex(#"\b(?:BT|EX|ST|LM|RB|P)-?\d{1,2}-\d{3}\b"#),
         try! Regex(#"\b[A-Z]{2,3}\d{2}[A-Z]{2}/[A-Z]{2,5}-\d{1,2}-(?:AP)?\d{2,3}\b"#),
         // A Simplified Chinese Gem Pack card: slot 01, art 07 of 7 prints "0107/07".
-        try! Regex(#"\b\d{4}\s*/\s*\d{2}(?=[A-Z]?\b)"#),
+        // The symbol printed after the total can read as a digit: "1302/074".
+        try! Regex(#"\b\d{4}\s*/\s*\d{2}(?=\d?[A-Z]?\b)"#),
     ]
 
     /// Digits, optionally with a space around the slash. OCR reads "114/ 084".

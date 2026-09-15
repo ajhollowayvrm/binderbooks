@@ -40,6 +40,8 @@ import Testing
         #expect(FrameInterpreter.number(in: ["列阵兵", "071/129C"])?.value == "071/129")
         #expect(FrameInterpreter.number(in: ["188/208R"])?.value == "188/208")
         #expect(FrameInterpreter.number(in: ["2202/07C"])?.value == "2202/07")
+        // A Gem Pack total is two digits. The ◎ after it read as a 4.
+        #expect(FrameInterpreter.number(in: ["1302/074"])?.value == "1302/07")
     }
 
     @Test func aTwoCharacterChineseNameIsAName() {
