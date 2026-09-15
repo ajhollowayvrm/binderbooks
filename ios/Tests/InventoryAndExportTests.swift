@@ -542,23 +542,25 @@ private func seed(_ context: ModelContext) throws {
 
     /// Every order, on four hand-entered cards. A card with no figure sorts
     /// last in both directions, ties keep the newest card first, and the
-    /// collection section of a search ignores the sort.
+    /// collection section of a search ignores the sort. Mew is on a purchase
+    /// from 40 days ago but he added it last, so it is still the newest.
     @Test @MainActor func sortOrdersThePageAndPutsMissingFiguresLast() throws {
         let context = container.mainContext
-        func card(_ name: String, market: Int?, basis: Int, daysAgo: Double, set: String?, number: String) {
+        func card(_ name: String, market: Int?, basis: Int, daysAgo: Double, acquiredDaysAgo: Double? = nil, set: String?, number: String) {
             let card = OwnedCard(productId: 0, printing: "", condition: "Near Mint", confidence: .manual)
             card.manualName = name
             card.manualSetName = set ?? ""
             card.manualNumber = number
             card.manualMarketCents = market
             card.acquisitionBasisCents = basis
-            card.acquiredAt = Date(timeIntervalSinceNow: -daysAgo * 86_400)
+            card.acquiredAt = Date(timeIntervalSinceNow: -(acquiredDaysAgo ?? daysAgo) * 86_400)
+            card.scannedAt = Date(timeIntervalSinceNow: -daysAgo * 86_400)
             context.insert(card)
         }
         card("Umbreon", market: 10_000, basis: 2_000, daysAgo: 3, set: "Evolving Skies", number: "215/203")
         card("Venusaur", market: 900, basis: 400, daysAgo: 1, set: "Base Set", number: "15/102")
         card("Charizard", market: nil, basis: 1_000, daysAgo: 2, set: "Base Set", number: "4/102")
-        card("Mew", market: 900, basis: 2_000, daysAgo: 0, set: nil, number: "151")
+        card("Mew", market: 900, basis: 2_000, daysAgo: 0, acquiredDaysAgo: 40, set: nil, number: "151")
         try context.save()
 
         let model = InventoryModel()

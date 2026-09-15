@@ -140,6 +140,9 @@ value low to high, gain high to low, gain low to high, name, and set and number.
 - A value sort reads the figure the row leads with: the graded value, then the low
   end of a projection, then the market price. A gain sort reads the gain the row
   shows, so a card under a projection has no gain.
+- Newest first is the order he added the cards, from `scannedAt`. It is not the
+  purchase date. A card he adds today to an old purchase still leads the page.
+  Cards he added at the same moment fall back to `acquiredAt`.
 - A card with no figure sorts last in both directions. Ties keep newest first.
 - The collection section of a search ignores the sort and stays newest first.
 

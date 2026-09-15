@@ -140,8 +140,12 @@ enum InventorySort: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Newest means the card he added last. A card on a purchase takes the
+    /// purchase date as `acquiredAt`, so a card he adds today to an old
+    /// purchase must not sort behind the rest. `scannedAt` records when the
+    /// card came into the app.
     private static func newerFirst(_ a: InventoryRow, _ b: InventoryRow) -> Bool {
-        a.card.acquiredAt == b.card.acquiredAt ? a.card.scannedAt > b.card.scannedAt : a.card.acquiredAt > b.card.acquiredAt
+        a.card.scannedAt == b.card.scannedAt ? a.card.acquiredAt > b.card.acquiredAt : a.card.scannedAt > b.card.scannedAt
     }
 
     /// Each figure is read once per row, not once per comparison. A row with
