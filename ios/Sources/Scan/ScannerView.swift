@@ -221,15 +221,14 @@ struct ScannerView: UIViewControllerRepresentable {
             let (observation, _) = FrameInterpreter.interpret(texts)
             latest = observation
             accumulator.add(observation)
-            switch mode {
-            case .automatic:
-                if gate.shouldAccept(observation.number) {
-                    onObservation(observation)
-                }
-            case .manual:
-                // Keep the gate's clock honest so a switch back to automatic
-                // does not re-log the card already in view.
-                _ = gate.shouldAccept(observation.number)
+            // VisionKit gives words and no card outline, so "a card is in
+            // view" is only ever "a number is in view" on this path.
+            let seen = DuplicateGate.Reading(number: observation.number, sawCard: observation.number != nil)
+            // Fed in both modes, so a switch back to automatic does not re-log
+            // the card already in view.
+            let accepted = gate.shouldAccept(seen)
+            if mode == .automatic, accepted {
+                onObservation(observation)
             }
         }
     }

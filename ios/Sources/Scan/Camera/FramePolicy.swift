@@ -78,4 +78,21 @@ struct FramePolicy {
         lastText = nil
         lastCard = nil
     }
+
+    /// Whether this frame holds something he is trying to scan, and no card.
+    ///
+    /// A card held so close that its left and right edges leave the frame has
+    /// no quadrilateral for Vision to find, and since everything is read from
+    /// inside that quadrilateral, such a frame reads nothing at all: no words,
+    /// no signature, no outline, no card logged. Measured on a 1080 by 1920
+    /// frame, a card fills the width at 0.79 of the frame's height, and above
+    /// that the detection stops: at 0.85 the number no longer reads, and at
+    /// 0.90 no rectangle is found at all.
+    ///
+    /// An empty chute also has no card in it, and it is not a problem. The two
+    /// are told apart by how much detail the frame holds, which is the same
+    /// score that decides whether a frame is worth signing.
+    func looksFilledButUnread(sawCard: Bool, sharpness: Double) -> Bool {
+        !sawCard && sharpness >= minimumSharpness
+    }
 }

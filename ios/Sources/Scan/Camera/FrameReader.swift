@@ -30,10 +30,17 @@ struct FrameReader {
 
     var policy: FramePolicy
 
+    /// The catalogue he said he is scanning. Vision is given that language and
+    /// no other: every extra alphabet is another thing for glare and foil to be
+    /// misread as, and one invented kana is enough to move a card into the
+    /// wrong catalogue.
+    var language: ScanLanguage = .english
+
     private let context = CIContext(options: [.useSoftwareRenderer: false])
 
-    init(policy: FramePolicy = FramePolicy()) {
+    init(policy: FramePolicy = FramePolicy(), language: ScanLanguage = .english) {
         self.policy = policy
+        self.language = language
     }
 
     /// Read a frame according to what the policy allows, and what the cheap
@@ -92,11 +99,18 @@ struct FrameReader {
             }
         }
 
-        guard decision.findCard, let rectangle else { return reading }
+        guard decision.findCard else { return reading }
+
+        // Scored whether or not a card was found, because the frames with no
+        // card in them are the ones worth telling apart: an empty chute scores
+        // nothing, and a card held so close that its edges leave the frame
+        // scores like any other card. The second is a card he is trying to
+        // scan, and it reads nothing until he moves back.
+        reading.sharpness = FrameSharpness.score(of: frame)
 
         // The lens is moving, so whatever this frame shows is in transit. The
         // outline is drawn from it, but it is not signed.
-        reading.sharpness = FrameSharpness.score(of: frame)
+        guard let rectangle else { return reading }
         guard !isFocusing, policy.shouldSign(sharpness: reading.sharpness, bestSoFar: bestSharpness) else {
             return reading
         }
@@ -112,7 +126,11 @@ struct FrameReader {
     // MARK: - The requests
 
     private func readText(_ frame: CGImage) -> ScanObservation {
-        guard let items = try? StillFrameReader.readNow(frame, longestSide: StillFrameReader.workingSize) else {
+        guard let items = try? StillFrameReader.readNow(
+            frame,
+            languages: language.recognitionLanguages,
+            longestSide: StillFrameReader.workingSize
+        ) else {
             return ScanObservation()
         }
         return FrameInterpreter.interpret(items).observation

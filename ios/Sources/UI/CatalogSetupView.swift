@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// First run. The app is useless without a catalog, so this is the whole screen
 /// until the download finishes.
@@ -49,6 +50,7 @@ struct CatalogSetupView: View {
 /// Installed catalog details and a manual check. Reached from the toolbar.
 struct CatalogStatusView: View {
     @Environment(CatalogController.self) private var catalog
+    @State private var pickingChinese = false
 
     var body: some View {
         List {
@@ -102,7 +104,46 @@ struct CatalogStatusView: View {
             } footer: {
                 Text("The app also checks on every launch. A new catalog is published daily at about 21:30 UTC.")
             }
+
+            chineseSection
         }
         .navigationTitle("Catalog")
+        .fileImporter(isPresented: $pickingChinese, allowedContentTypes: [.data]) { result in
+            if case .success(let url) = result {
+                Task { await catalog.importChinese(from: url) }
+            }
+        }
+    }
+
+    private var chineseSection: some View {
+        Section {
+            if let chinese = catalog.chinese {
+                LabeledContent("Cards", value: chinese.productCount.formatted())
+                LabeledContent("Built", value: chinese.builtAt)
+                LabeledContent("Priced", value: chinese.pricedAt ?? "Not yet")
+            }
+            Button {
+                pickingChinese = true
+            } label: {
+                HStack {
+                    Text(catalog.chinese == nil ? "Import the Chinese catalog…" : "Replace the Chinese catalog…")
+                    Spacer()
+                    if catalog.isChangingChinese {
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(catalog.isChangingChinese || !catalog.isReady)
+            if catalog.chinese != nil {
+                Button("Remove the Chinese cards", role: .destructive) {
+                    Task { await catalog.removeChinese() }
+                }
+                .disabled(catalog.isChangingChinese)
+            }
+        } header: {
+            Text("Simplified Chinese")
+        } footer: {
+            Text("TCGplayer does not sell Chinese cards. Build chinese-catalog.sqlite on the Mac with scripts/build-chinese-catalog.sh, which copies it to Box, then pick it here. Prices are eBay sales from PikaQian.")
+        }
     }
 }

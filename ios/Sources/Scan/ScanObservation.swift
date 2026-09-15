@@ -75,6 +75,8 @@ enum FrameInterpreter {
         try! Regex(#"\b(?:SWSH|SVP|SM|XY|BW|DP|HGSS|MEP|ME)\s?\d{1,3}[a-z]?\b"#),
         try! Regex(#"\b(?:BT|EX|ST|LM|RB|P)-?\d{1,2}-\d{3}\b"#),
         try! Regex(#"\b[A-Z]{2,3}\d{2}[A-Z]{2}/[A-Z]{2,5}-\d{1,2}-(?:AP)?\d{2,3}\b"#),
+        // A Simplified Chinese Gem Pack card: slot 01, art 07 of 7 prints "0107/07".
+        try! Regex(#"\b\d{4}\s*/\s*\d{2}\b"#),
     ]
 
     /// Digits, optionally with a space around the slash. OCR reads "114/ 084".
@@ -192,9 +194,11 @@ enum FrameInterpreter {
     private static let trailingNumber = #/^(?<name>.+?)\s+\d{2,3}$/#
 
     static func isPlausibleName(_ text: String) -> Bool {
-        guard text.count >= 3, text.count <= 32 else { return false }
+        // A Chinese name is two characters as often as three: 耿鬼 is Gengar.
+        let shortest = isJapanese(text) ? 2 : 3
+        guard text.count >= shortest, text.count <= 32 else { return false }
         let letters = text.filter(\.isLetter).count
-        guard letters >= 3, letters * 2 >= text.count else { return false }
+        guard letters >= shortest, letters * 2 >= text.count else { return false }
         let upper = text.uppercased()
         if upper.hasPrefix("BASIC") || upper.hasPrefix("STAGE") || upper.hasPrefix("TRAINER") || upper.hasPrefix("ILLUS") { return false }
         if upper.contains("POKÉMON") || upper.contains("POKEMON") { return false }
@@ -220,5 +224,50 @@ enum FrameInterpreter {
             .filter { $0.count >= 6 }
         guard let cert = digits.last else { return nil }
         return (cert, grader)
+    }
+}
+
+/// Which catalogue the cards in front of the lens come from. He sets it before
+/// a run, by hand.
+///
+/// Nothing on the card says this reliably. Vision reads kana out of the foil
+/// and the holo pattern of an English card, and one invented kana used to send
+/// the matcher into the Japanese catalogue, where his English Dedenne does not
+/// exist. He knows which pile he is scanning, so he says so, and the reader and
+/// the matcher both take him at his word.
+enum ScanLanguage: String, CaseIterable, Sendable {
+    case english = "en"
+    case japanese = "ja"
+    /// Simplified Chinese. These cards come from the Chinese catalog he
+    /// imports, not from TCGplayer: see `ChineseCatalog`.
+    case chineseSimplified = "zh-Hans"
+
+    var title: String {
+        switch self {
+        case .english: return "English"
+        case .japanese: return "Japanese"
+        case .chineseSimplified: return "Chinese"
+        }
+    }
+
+    /// What Vision is allowed to recognise. Only the language he chose, because
+    /// every language added is another alphabet for glare to be misread as.
+    /// A Japanese or a Chinese card keeps English too: it prints its collector
+    /// number in ASCII, and that number is the strongest key the matcher has.
+    var recognitionLanguages: [String] {
+        switch self {
+        case .english: return ["en"]
+        case .japanese: return ["ja", "en"]
+        case .chineseSimplified: return ["zh-Hans", "en"]
+        }
+    }
+
+    /// The catalog category a card of this language is filed under.
+    var categoryId: Int {
+        switch self {
+        case .english: return TCGCategory.pokemon
+        case .japanese: return TCGCategory.pokemonJapan
+        case .chineseSimplified: return TCGCategory.pokemonChinese
+        }
     }
 }

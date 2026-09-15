@@ -15,6 +15,51 @@ that have none. Nothing runs on a schedule. A GitHub Action did this until
 The design is in `docs/01-catalog-pipeline.md`. This file records what the live
 TCGCSV data looks like and where the build deviates from the design.
 
+## The Simplified Chinese catalog
+
+TCGplayer does not sell Simplified Chinese cards, so TCGCSV has none. On 2026-09-14
+AJ approved PikaQian (https://pikaqian.com/docs/) as a second source, for these
+cards only. `build_chinese.py` writes `chinese-catalog.sqlite` with the same schema
+as `catalog.sqlite`. The app imports the file through Files and merges its rows into
+the live catalog (`ios/Sources/Catalog/ChineseCatalog.swift`).
+
+The file never goes to GitHub. PikaQian publishes no terms of use, and the data is
+for AJ alone. `scripts/build-chinese-catalog.sh` builds it, signs the artwork, and
+copies it to Box.
+
+```sh
+caffeinate -i scripts/build-chinese-catalog.sh              # every set, about 200 requests
+scripts/build-chinese-catalog.sh --price collection.json    # price the cards he holds
+```
+
+The key is in `~/.config/binderbooks/pikaqian-key` or `PIKAQIAN_API_KEY`. Never put
+it in the repo.
+
+Facts about PikaQian, verified 2026-09-14:
+
+- **The plan is Hobby.** The response header `x-ratelimit-quota` is 5,000 requests a
+  month. Graded prices need Pro and come back `null` on Hobby.
+- **132 sets.** `/v1/sets` and `/v1/cards` use cursor pages of at most 100 rows.
+- **A card id is a UUID.** The build hashes it into a product id from 1,000,000,000
+  to 1,999,999,999. The artwork index stores ids as `Int32`. A rebuild reads the
+  previous file's `pikaqianCard` table first, so an id never moves.
+- **The card list has no price.** A price is one request to
+  `/v1/cards/{id}/prices`: `grades.raw.price_cents`, the eBay average of the last 7
+  days, and `recent_sale_count`. That is why the build prices only the cards he
+  holds.
+- **The API number is not the printed number.** A Gem Pack card is `"01 01"` in the
+  API and prints `0101/07`: slot 01, art 01 of 7. A numbered card is `"001"` and
+  prints `001/128`. The build writes the printed form. The total is the highest
+  number among Common, Uncommon, Rare, and Double Rare cards. That rule gives 128
+  for `csv6c`, which matches the card.
+- **A pattern printing is its own card.** `variant` is `pokeball` or `masterball`
+  with `is_variant: true`. The build names it `Surskit (Poke Ball Pattern)`, the way
+  TCGplayer does, so `CardMatcher.isVariantSibling` works unchanged.
+- **Images need no key.** They are 300×419 PNGs on `images.pikaqian.com`, larger
+  than TCGplayer's 200×280 thumbnails.
+- **Chinese category id 10,000.** It is not a TCGplayer id. The app names it
+  `TCGCategory.pokemonChinese`.
+
 ## Run it locally
 
 ```sh

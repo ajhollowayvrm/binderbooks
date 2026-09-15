@@ -20,12 +20,18 @@ struct CameraScannerView: UIViewControllerRepresentable {
     /// flag it passes is always false.
     var onCaptureEnded: (Bool) -> Void = { _ in }
     var onCapturedWithoutNumber: () -> Void = {}
+    /// The frame is full of something the rectangle detector cannot call a
+    /// card. He is almost always too close: a card whose edges leave the frame
+    /// has no quadrilateral, and nothing is read from a frame with no card.
+    var onCardNotFramed: () -> Void = {}
     /// The torch, on or off. A card slinger is a closed chute, and the light in
     /// it is whatever leaks past the phone.
     var torchOn: Bool = false
     /// How far to zoom in, counted from the scanner's own framing. 1 is that
     /// framing; above it crops further into the sensor.
     var zoom: Double = 1
+    /// The catalogue he is scanning. Vision reads that language and no other.
+    var language: ScanLanguage = .english
 
     static var isSupported: Bool {
         CameraSession.closestFocusingCamera() != nil
@@ -40,17 +46,21 @@ struct CameraScannerView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> CameraScannerController {
         let controller = CameraScannerController()
         controller.onObservation = onObservation
+        controller.onCardNotFramed = onCardNotFramed
         controller.mode = mode
         controller.torchOn = torchOn
         controller.zoom = zoom
+        controller.language = language
         return controller
     }
 
     func updateUIViewController(_ controller: CameraScannerController, context: Context) {
         controller.onObservation = onObservation
+        controller.onCardNotFramed = onCardNotFramed
         controller.mode = mode
         controller.torchOn = torchOn
         controller.zoom = zoom
+        controller.language = language
 
         if captureCount != controller.handledCaptureCount {
             controller.handledCaptureCount = captureCount
@@ -76,6 +86,7 @@ struct CameraScannerView: UIViewControllerRepresentable {
 @MainActor
 final class CameraScannerController: UIViewController {
     var onObservation: ((ScanObservation) -> Void)?
+    var onCardNotFramed: (() -> Void)?
     var mode: ScanMode = .automatic
     var handledCaptureCount = 0
 
@@ -102,9 +113,27 @@ final class CameraScannerController: UIViewController {
     private let camera = CameraSession()
     private var preview: AVCaptureVideoPreviewLayer?
     private let outline = CAShapeLayer()
+    /// Where the card has to sit. Drawn always, because the one framing fault
+    /// that costs him a card is invisible otherwise: too close reads nothing
+    /// and looks exactly like an empty chute.
+    private let guideBox = CAShapeLayer()
+
+    /// When the frame last held detail and no card. Held so the hint waits for
+    /// the fault to persist rather than firing on the frame he is mid-swap on.
+    private var unreadSince: Date?
+    private var lastHintAt: Date?
 
     /// Reading state. Touched only on the frame queue, except where noted.
     private let state = ReadingState()
+
+    /// Set from SwiftUI. The reader holds it behind the same lock the frames
+    /// go through, because he can change it while the camera is running.
+    var language: ScanLanguage = .english {
+        didSet {
+            guard language != oldValue else { return }
+            state.language = language
+        }
+    }
 
     private var gate = DuplicateGate()
 
@@ -116,6 +145,11 @@ final class CameraScannerController: UIViewController {
         outline.strokeColor = UIColor.systemGreen.withAlphaComponent(0.9).cgColor
         outline.lineWidth = 3
         outline.lineJoin = .round
+
+        guideBox.fillColor = UIColor.clear.cgColor
+        guideBox.strokeColor = UIColor.white.withAlphaComponent(0.35).cgColor
+        guideBox.lineWidth = 2
+        guideBox.lineDashPattern = [10, 8]
 
         Task { await start() }
     }
@@ -139,8 +173,10 @@ final class CameraScannerController: UIViewController {
         }
         layer.frame = view.bounds
         view.layer.insertSublayer(layer, at: 0)
+        layer.addSublayer(guideBox)
         layer.addSublayer(outline)
         preview = layer
+        layoutGuide()
 
         let state = self.state
         camera.setFrameHandler { [weak self] pixels, _ in
@@ -176,7 +212,38 @@ final class CameraScannerController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         preview?.frame = view.bounds
+        layoutGuide()
     }
+
+    /// The card has to fit, whole, inside the frame Vision reads. The preview
+    /// is `.resizeAspectFill` and therefore shows *less* than the buffer holds,
+    /// so a card inside this box is inside the buffer with room to spare.
+    private func layoutGuide() {
+        guard let preview else { return }
+        let bounds = preview.bounds
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let aspect = CGFloat(CardRectifier.cardAspect)
+        var height = bounds.height * 0.78
+        var width = height * aspect
+        let widest = bounds.width * 0.86
+        if width > widest {
+            width = widest
+            height = width / aspect
+        }
+        let box = CGRect(
+            x: bounds.midX - width / 2,
+            y: bounds.midY - height / 2,
+            width: width,
+            height: height
+        )
+        guideBox.path = UIBezierPath(roundedRect: box, cornerRadius: width * 0.05).cgPath
+    }
+
+    /// How long the frame must stay full and unreadable before he is told, and
+    /// how long before he is told again. Long enough that turning a card over
+    /// never trips it.
+    private static let framingHintDelay: TimeInterval = 1.2
+    private static let framingHintRepeat: TimeInterval = 4
 
     func setRunning(_ running: Bool) {
         // A stopped session leaves the torch burning, and the screen it returns
@@ -194,25 +261,58 @@ final class CameraScannerController: UIViewController {
 
     private func received(_ reading: FrameReader.Reading) {
         draw(reading.cardCorners, frameSize: reading.frameSize)
+        noteFraming(reading)
 
         // A slab is its own thing: read once per visit, by barcode.
         if let cert = reading.observation.certNumber {
-            if gate.shouldAccept(cert, at: Date()) {
+            if gate.shouldAccept(cert: cert, at: Date()) {
                 onObservation?(reading.observation)
             }
             return
         }
 
         state.accumulate(reading.observation)
+        let merged = state.merged()
+
+        // Every frame reaches the gate, including the frames that read no word
+        // off the card, and including the frames that arrive in manual mode.
+        // That is how it knows the card is still there: a number is unreadable
+        // far more often than a card is absent, and a gate that counted an
+        // unreadable number as "the card left" logged the card twice.
+        let seen = DuplicateGate.Reading(
+            number: merged.number,
+            art: merged.artDescriptor,
+            sawCard: merged.sawCard || reading.observation.sawCard
+        )
+        let accepted = gate.shouldAccept(seen, at: Date())
 
         // Automatic mode logs as soon as a card reads clearly, the way it
         // always has. Manual mode waits for the shutter.
         guard mode == .automatic else { return }
-        let merged = state.merged()
-        guard let number = merged.number, !merged.isEmpty else { return }
-        guard gate.shouldAccept(number, at: Date()) else { return }
+        // A card with no readable number is not worth logging yet, but the gate
+        // has still been told what the lens can see.
+        guard accepted, merged.number != nil, !merged.isEmpty else { return }
         onObservation?(merged)
         state.resetAccumulator()
+    }
+
+    /// A frame full of detail with no card in it. Nothing is read from such a
+    /// frame, and the usual cause is that he is too close for the card's edges
+    /// to fit. Tell him, rather than leaving a scanner that silently does
+    /// nothing.
+    private func noteFraming(_ reading: FrameReader.Reading) {
+        let now = Date()
+        guard reading.sharpness > 0 else { return }
+        guard state.policy.looksFilledButUnread(sawCard: reading.observation.sawCard, sharpness: reading.sharpness) else {
+            unreadSince = nil
+            return
+        }
+        let since = unreadSince ?? now
+        unreadSince = since
+        guard now.timeIntervalSince(since) >= Self.framingHintDelay else { return }
+        if let last = lastHintAt, now.timeIntervalSince(last) < Self.framingHintRepeat { return }
+        lastHintAt = now
+        onCardNotFramed?()
     }
 
     private func draw(_ corners: [CGPoint]?, frameSize: CGSize) {
@@ -250,6 +350,12 @@ final class CameraScannerController: UIViewController {
             return .nothing
         }
         onObservation?(merged)
+        // The gate has to know, or switching back to automatic with the same
+        // card still in the chute logs it a second time.
+        gate.note(
+            DuplicateGate.Reading(number: merged.number, art: merged.artDescriptor, sawCard: merged.sawCard),
+            at: Date()
+        )
         state.resetAccumulator()
         return merged.number == nil && merged.certNumber == nil ? .withoutNumber : .complete
     }
@@ -270,6 +376,24 @@ final class ReadingState: @unchecked Sendable {
     var isFocusing: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _isFocusing }
         set { lock.lock(); _isFocusing = newValue; lock.unlock() }
+    }
+
+    /// The cadences and the thresholds the reader works to. Read only.
+    var policy: FramePolicy {
+        lock.lock(); defer { lock.unlock() }; return reader.policy
+    }
+
+    /// Which language Vision reads. Changing it throws the window away: the
+    /// readings in it were read under the other alphabet.
+    var language: ScanLanguage {
+        get { lock.lock(); defer { lock.unlock() }; return reader.language }
+        set {
+            lock.lock()
+            reader.language = newValue
+            accumulator.reset()
+            bestSharpness = 0
+            lock.unlock()
+        }
     }
 
     func read(_ pixels: CVPixelBuffer, isFocusing: Bool) -> FrameReader.Reading {

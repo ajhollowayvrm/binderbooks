@@ -63,10 +63,16 @@ import Testing
     }
 
     /// The name-only bar must not throw away a name he actually read.
+    ///
+    /// It leads the chip rather than being assigned. Sableye is printed in
+    /// several sets from one illustration, so with no number there is nothing
+    /// to choose between them and the scanner no longer pretends otherwise —
+    /// measured over 300 real readings, asking here cut wrong answers in the
+    /// chute from 9.3% to 4.0% and *raised* right answers to 88.7%.
     @Test func aCleanNameStillMatchesWithNoNumber() throws {
         let result = try match(name: "Sableye", number: nil)
-        let hit = try #require(result.candidates.first { $0.productId == result.productId })
-        #expect(hit.name == "Sableye")
+        let top = try #require(result.candidates.first)
+        #expect(top.name == "Sableye")
     }
 
     /// Every string Vision actually read off that Sableye photo, in order.
@@ -80,10 +86,13 @@ import Testing
         }
 
         let sableye = try match(name: "Sableye", number: nil)
-        let hit = try #require(sableye.candidates.first { $0.productId == sableye.productId })
-        #expect(hit.name == "Sableye")
-        // Without the number it cannot know which Sableye, so it must not claim to.
+        let top = try #require(sableye.candidates.first)
+        #expect(top.name == "Sableye")
+        // Without the number it cannot know which Sableye, so it must not claim
+        // to — and it no longer assigns one of them either. The chip leads with
+        // the Sableyes and he taps the one he is holding.
         #expect(sableye.confidence == .uncertain)
+        #expect(sableye.productId == nil)
     }
 
     /// The hole the first fix left. A number that reads as something real, plus
@@ -121,8 +130,11 @@ import Testing
         let result = try queue().read { db in
             try CardMatcher.match(db, observation: observation, bias: [], defaultPrinting: nil)
         }
-        let hit = try #require(result.candidates.first { $0.productId == result.productId })
-        #expect(hit.name == "Sableye")
+        // The attack name loses and the card name wins, which is what this test
+        // is for. Which Sableye it is remains the number's question, so the card
+        // leads the chip rather than being assigned.
+        let top = try #require(result.candidates.first)
+        #expect(top.name == "Sableye")
     }
 
     @Test func loneNameMatchesStayHonest() throws {
@@ -264,4 +276,60 @@ import Testing
         let hit = try #require(result.hit)
         #expect(hit.name == "Sableye", "artwork hijacked a good reading: \(hit.name)")
     }
+
+    /// His report: 122/131 failed. Three English cards carry that number — a
+    /// Professor's Research and its Poke Ball printing in Prismatic Evolutions,
+    /// and a Lucario GX Full Art in Forbidden Light. With the name missed there
+    /// was nothing to choose on, so the oldest product id won and a Lucario GX
+    /// went into the ledger in place of a Common trainer.
+    ///
+    /// The picture answers it. The question here is not "which of 71,802 cards
+    /// is this", it is "which of these three", and a trainer is not near a
+    /// full-art Lucario by any measure.
+    @Test func thePictureChoosesAmongTheCardsSharingANumber() throws {
+        let professor = 610477
+        let descriptor = try queue().read { db in
+            try CatalogSearch.artDescriptors(db, ids: [professor])[professor]
+        }
+        let signature = try #require(descriptor, "the catalog carries no artwork for \(professor)")
+        var observation = ScanObservation(number: "122/131")
+        observation.artDescriptor = signature
+        let result = try queue().read { db in
+            try CardMatcher.match(db, observation: observation, bias: [], defaultPrinting: nil, language: .english)
+        }
+        #expect(result.productId == professor)
+    }
+
+    /// And with no picture to ask, it assigns nothing rather than the first row
+    /// back. docs/03: a wrong card that looks confident is worse than a card
+    /// marked unknown.
+    @Test func aNumberSeveralDifferentCardsShareAssignsNothingOnItsOwn() throws {
+        let result = try queue().read { db in
+            try CardMatcher.match(
+                db,
+                observation: ScanObservation(number: "122/131"),
+                bias: [],
+                defaultPrinting: nil,
+                language: .english
+            )
+        }
+        #expect(result.productId == nil)
+        #expect(result.confidence == .uncertain)
+        // The chip still offers all three, so one tap settles it.
+        #expect(result.candidates.count >= 3)
+    }
+
+    /// The sub-name in square brackets is not part of the title the card prints.
+    /// "Professor's Research [Professor Oak]" prints "Professor's Research", and
+    /// scoring the camera's reading against the bracketed name cost it enough
+    /// similarity to fall under the bar a name must clear when it stands alone.
+    @Test func aBracketedSubNameIsNotPartOfThePrintedName() throws {
+        let hits = try queue().read { db in
+            try CatalogSearch.fetchHits(db, ids: [610477, 610630], filter: SearchFilter())
+        }
+        for hit in hits {
+            #expect(CardMatcher.printedName(of: hit) == "professor s research", "got \(CardMatcher.printedName(of: hit))")
+        }
+    }
 }
+

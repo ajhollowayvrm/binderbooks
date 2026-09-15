@@ -21,6 +21,8 @@ struct ScanSessionView: View {
     @State private var scannerGeneration = 0
     @State private var numberHint = false
     @State private var numberHintTask: Task<Void, Never>?
+    @State private var framingHint = false
+    @State private var framingHintTask: Task<Void, Never>?
     @State private var nothingToCapture = false
     @AppStorage("scanMode") private var scanModeRaw = ScanMode.automatic.rawValue
     /// Kept between sessions. A slinger holds the card at one fixed distance,
@@ -137,8 +139,10 @@ struct ScanSessionView: View {
                         if usedStill { scannerGeneration += 1 }
                     },
                     onCapturedWithoutNumber: { showNumberHint() },
+                    onCardNotFramed: { showFramingHint() },
                     torchOn: torchOn,
-                    zoom: zoom
+                    zoom: zoom,
+                    language: model.session.scanLanguage
                 )
                 .id(scannerGeneration)
                 if scanMode == .manual {
@@ -146,6 +150,7 @@ struct ScanSessionView: View {
                 }
                 lensControls
                 numberHintBanner
+                framingHintBanner
             } else {
                 simulatorViewfinder(model)
             }
@@ -260,6 +265,38 @@ struct ScanSessionView: View {
             }
             .transition(.move(edge: .top).combined(with: .opacity))
             .allowsHitTesting(false)
+        }
+    }
+
+    /// The frame is full and holds no card he can be logged from. Almost always
+    /// he is too close: a card whose edges leave the frame has no quadrilateral
+    /// for Vision to find, and every word and every signature is read from
+    /// inside that quadrilateral. Measured on a 1080 by 1920 frame, the card
+    /// fills the width at 0.79 of the frame's height; at 0.85 the collector
+    /// number stops reading, and at 0.90 nothing is read at all.
+    @ViewBuilder private var framingHintBanner: some View {
+        if framingHint {
+            VStack {
+                Label("Move back. The whole card must fit inside the box.", systemImage: "viewfinder")
+                    .font(.footnote)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(.top, 8)
+                Spacer()
+            }
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .allowsHitTesting(false)
+        }
+    }
+
+    private func showFramingHint() {
+        framingHintTask?.cancel()
+        withAnimation(.snappy) { framingHint = true }
+        framingHintTask = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            withAnimation(.snappy) { framingHint = false }
         }
     }
 
@@ -424,6 +461,14 @@ struct SessionDefaultsRow: View {
                 ForEach(ScanMode.allCases, id: \.self) { mode in
                     Chip(title: mode.title, systemImage: mode == .automatic ? "bolt" : "hand.tap", isSelected: scanModeRaw == mode.rawValue) {
                         scanModeRaw = mode.rawValue
+                    }
+                }
+                Divider().frame(height: 20)
+                // Before the cards go through, not after. Vision reads the
+                // language he picks and no other.
+                ForEach(ScanLanguage.allCases, id: \.self) { language in
+                    Chip(title: language.title, isSelected: model.session.scanLanguage == language) {
+                        model.setLanguage(language)
                     }
                 }
                 Divider().frame(height: 20)

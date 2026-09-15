@@ -87,9 +87,14 @@ struct CardMatcher: Sendable {
     /// found above one the words found badly.
     static let artShortlistBonus = 0.15
 
-    func match(_ observation: ScanObservation, session bias: [Int], defaultPrinting: String?) async throws -> MatchResult {
+    func match(
+        _ observation: ScanObservation,
+        session bias: [Int],
+        defaultPrinting: String?,
+        language: ScanLanguage? = nil
+    ) async throws -> MatchResult {
         try await database.asyncRead { db in
-            try Self.match(db, observation: observation, bias: bias, defaultPrinting: defaultPrinting, art: art)
+            try Self.match(db, observation: observation, bias: bias, defaultPrinting: defaultPrinting, art: art, language: language)
         }
     }
 
@@ -98,15 +103,22 @@ struct CardMatcher: Sendable {
         observation: ScanObservation,
         bias: [Int],
         defaultPrinting: String?,
-        art: ArtIndex? = nil
+        art: ArtIndex? = nil,
+        /// What he set on the session. Nil where no one has said, and then the
+        /// script on the card is the only evidence there is.
+        language: ScanLanguage? = nil
     ) throws -> MatchResult {
         let parsed = CollectorNumber.parse(observation.number)
-        let numberHits = try numberCandidates(db, parsed: parsed)
+        // A Chinese session looks for the number among Chinese cards only. The
+        // query stops at 50 rows, and 001/128 is a card in English and Japanese
+        // sets too, which would otherwise fill it.
+        let chineseOnly = language == .chineseSimplified ? TCGCategory.pokemonChinese : nil
+        let numberHits = try numberCandidates(db, parsed: parsed, categoryId: chineseOnly)
 
         // Which line on the card is its name? The frame cannot tell, so every
         // plausible line is tried and the catalog decides: an attack name is
         // not a card name, and the catalog holds every card name there is.
-        let (chosenName, nameHits) = try readName(db, observation: observation, numberHits: numberHits)
+        let (chosenName, nameHits) = try readName(db, observation: observation, numberHits: numberHits, language: language)
         let cleanedName = chosenName.map(NameCleaner.clean).flatMap { $0.isEmpty ? nil : $0 }
 
         let numberIds = Set(numberHits.map(\.productId))
@@ -125,7 +137,7 @@ struct CardMatcher: Sendable {
         // proposes too, against every signed card in the catalog, and a card
         // the words missed entirely can still reach the shortlist.
         let neighbours = observation.artDescriptor.flatMap { descriptor in
-            art.map { $0.nearest(to: descriptor) }
+            art.map { $0.nearest(to: descriptor, scope: artScope(for: language)) }
         } ?? []
         let artIds = Set(neighbours.map(\.productId))
         if !artIds.isEmpty {
@@ -142,14 +154,42 @@ struct CardMatcher: Sendable {
             }
         }
 
-        // He is holding a Japanese card, so only a Japanese product can be the
-        // answer. Without this the number decides alone, and 034/190 is a
-        // Feebas in the Japanese catalogue and a different card in the English
-        // one. The reverse rule is unsafe and is not applied: glare can hide
-        // every kana on the card, and then only the number survives.
-        if observation.sawJapaneseText {
+        // Which catalogue the card is in. 034/190 is a Feebas in the Japanese
+        // catalogue and a different card in the English one, so this decides
+        // the answer whenever both hold the number.
+        //
+        // What he set on the session settles it, both ways. He knows which pile
+        // he is scanning, and the guess that stood in for him was bad in the
+        // one direction that mattered: Vision reads kana out of the foil of an
+        // English card, and a single invented kana sent an English Dedenne into
+        // the Japanese catalogue, where it does not exist.
+        //
+        // With nothing set, the old rule stands, and it runs one way only:
+        // Japanese script proves a Japanese card, while no Japanese script
+        // proves nothing, because glare hides every kana on a card often
+        // enough and then the number is all that is left.
+        //
+        // Chinese is the strict one. A Chinese card shares its English
+        // counterpart's name, and often its number, so an English answer is
+        // nearly always on offer, and it always carries the wrong price. With
+        // no Chinese card to offer, nothing is assigned and the chip asks.
+        switch language {
+        case .chineseSimplified:
+            merged = merged.filter { $0.categoryId == TCGCategory.pokemonChinese }
+        case .japanese:
             let japanese = merged.filter { $0.categoryId == TCGCategory.pokemonJapan }
             if !japanese.isEmpty { merged = japanese }
+        case .english:
+            let english = merged.filter { $0.categoryId != TCGCategory.pokemonJapan && $0.categoryId != TCGCategory.pokemonChinese }
+            if !english.isEmpty { merged = english }
+        case nil:
+            if observation.sawJapaneseText {
+                let japanese = merged.filter { $0.categoryId == TCGCategory.pokemonJapan }
+                if !japanese.isEmpty { merged = japanese }
+            }
+            // A Chinese card is the answer only when he says he is scanning them.
+            let tcgplayer = merged.filter { $0.categoryId != TCGCategory.pokemonChinese }
+            if !tcgplayer.isEmpty { merged = tcgplayer }
         }
 
         guard !merged.isEmpty else {
@@ -344,6 +384,88 @@ struct CardMatcher: Sendable {
             confidence = .uncertain
         }
 
+        // Several different cards carry this number and the words did not say
+        // which. Ask the picture, and ask it on an easier question than the one
+        // it is usually put.
+        //
+        // 122/131 is a Professor's Research in Prismatic Evolutions and a
+        // Lucario GX Full Art in Forbidden Light. With the name missed, nothing
+        // separated the two, so whichever sat on top was sitting there by the
+        // order the rows came back — the oldest product id, which owes nothing
+        // to the card in his hand. That logged the Lucario: a card he does not
+        // own, worth a great deal more than the trainer he was holding.
+        //
+        // The test above this one is `sameCard`, 0.78, and it is the bar for
+        // recognising a card against the whole catalog. That is not the
+        // question here. Here there are two or three known candidates and one
+        // of them is the card, so what matters is which picture is nearer, not
+        // whether either clears the bar for an unprompted identification. The
+        // absolute bar drops to `plausible`, which is the bar written for
+        // ranking, and the lead does the work — a trainer and a full-art
+        // Lucario are not near each other by any measure.
+        //
+        // A pattern printing of the same card is not such a rival. It is the
+        // same card, the assignment is nearly right either way, and the chip
+        // settles which printing. Nor is the confidence raised: the bar is the
+        // looser one, so the card is assigned and still reviewed.
+        //
+        // `wordsAgree` guards this the same way it guards the test above. A
+        // name the catalog holds and a number that finds that same card are two
+        // independent readings pointing one way, and the picture does not get
+        // to move an answer they agree on.
+        if confidence == .uncertain, !wordsAgree, !top.fromName, !artIsDecisive,
+           scored.contains(where: { !isVariantSibling($0.hit, of: top.hit) }) {
+            if let nearestArt, nearestArt.1 <= CardArtDescriptor.plausible, artLead >= artDecisiveLead {
+                if nearestArt.0.hit.productId != top.hit.productId {
+                    top = nearestArt.0
+                    let byPicture = byArt.map(\.0.hit)
+                    let pictured = Set(byPicture.map(\.productId))
+                    ordered = byPicture + ordered.filter { !pictured.contains($0.productId) }
+                }
+            } else if cleanedName == nil {
+                // No name and no usable picture. Nothing read distinguishes
+                // these cards, and docs/03 is clear that a wrong card looking
+                // confident is worse than a card marked unknown.
+                return MatchResult(
+                    productId: nil,
+                    confidence: .uncertain,
+                    candidates: Array(ordered.prefix(candidateCap)),
+                    printing: defaultPrinting ?? "",
+                    printingGuessed: false
+                )
+            }
+        }
+
+        // Two printings of one card, in two different sets, scoring the same.
+        // Neither the picture nor the number can separate them, so the score
+        // deciding it is deciding it by accident.
+        if confidence != .certain, !artIsDecisive, scored.count > 1,
+           let rival = scored.first(where: { candidate in
+               candidate.hit.productId != top.hit.productId
+                   && !isVariantSibling(candidate.hit, of: top.hit)
+                   && isSameArtwork(candidate.hit, as: top.hit)
+                   && top.score - candidate.score <= coinTossGap
+           }) {
+            // One last thing to try before asking: a set beats a shelf. He
+            // opens packs, so a card in his hand came out of the set far more
+            // often than out of a prize pack or a deck. Where exactly one of
+            // the two is a shelf listing, that settles it.
+            let shelves = try shelfGroups(db, groupIds: [top.hit.groupId, rival.hit.groupId])
+            let topIsShelf = shelves.contains(top.hit.groupId)
+            let rivalIsShelf = shelves.contains(rival.hit.groupId)
+            if topIsShelf, !rivalIsShelf {
+                top = rival
+            } else if topIsShelf == rivalIsShelf {
+                return MatchResult(
+                    productId: nil,
+                    confidence: .uncertain,
+                    candidates: Array(ordered.prefix(candidateCap)),
+                    printing: defaultPrinting ?? "",
+                    printingGuessed: false
+                )
+            }
+        }
+
         let product = top.hit
 
         // The pattern variants. Black Bolt prints Snivy three times at 001/086:
@@ -407,12 +529,68 @@ struct CardMatcher: Sendable {
         )
     }
 
-    /// The card's name with any parenthetical qualifier dropped, cleaned the
-    /// same way the catalog's own names are. "Snivy (Poke Ball Pattern)" is
-    /// printed "Snivy", and that is what the camera reads.
+    /// How many different set totals a group must hold before it is a shelf
+    /// rather than a set.
+    ///
+    /// A real set numbers every card out of one total: 165 of the English
+    /// groups hold exactly one, and Silver Tempest's 215 cards all say 195.
+    /// A catalogue shelf holds whatever was left over, from every era at once
+    /// — World Championship Decks holds 70 different totals and Prize Pack
+    /// Series Cards 31. Three keeps Aquapolis and the other two-numbering sets
+    /// on the right side of the line.
+    ///
+    /// This decides nothing on its own. Scoring every shelf card down was
+    /// measured over 300 readings and lost a card in each condition, because it
+    /// moved wrong answers around rather than fixing them. It earns its place
+    /// only inside the coin toss below, where the question is narrower and it
+    /// is the only thing left to answer it with.
+    static let shelfTotals = 3
+
+    /// How near the runner-up may score before the two are a coin toss.
+    ///
+    /// Reprints are what is left of the scanner's errors: one illustration
+    /// printed in two sets under one name, often carrying one collector number.
+    /// Nothing on the face of the card separates them — not the picture, which
+    /// is the same picture, and not the number, which is the same number. The
+    /// scanner was picking between them on the third decimal place of a score,
+    /// which is to say by accident, and it was wrong about as often as it was
+    /// right.
+    ///
+    /// The right card was in the chip every single time this happened. So ask,
+    /// rather than guess: a tap costs him a second, and a Prize Pack Froslass
+    /// filed as a Chilling Reign Froslass costs him a wrong price on a card he
+    /// will not look at again. docs/03: a wrong card that looks confident is
+    /// worse than a card marked unknown.
+    static let coinTossGap = 0.02
+
+    /// The groups, among those given, that are catalogue shelves rather than
+    /// sets: they hold cards numbered out of `shelfTotals` different totals or
+    /// more, which no print run does.
+    static func shelfGroups(_ db: Database, groupIds: Set<Int>) throws -> Set<Int> {
+        guard !groupIds.isEmpty else { return [] }
+        let placeholders = Array(repeating: "?", count: groupIds.count).joined(separator: ",")
+        let sql = "SELECT groupId FROM product WHERE groupId IN (\(placeholders))"
+            + " AND setTotal IS NOT NULL AND isSealed = 0"
+            + " GROUP BY groupId HAVING COUNT(DISTINCT setTotal) >= \(shelfTotals)"
+        return Set(try Int.fetchAll(db, sql: sql, arguments: StatementArguments(Array(groupIds))))
+    }
+
+    /// The card's name as the card prints it: the catalog's name with the
+    /// qualifier in parentheses and the sub-name in brackets both dropped, then
+    /// cleaned the way the catalog's own names are.
+    ///
+    /// TCGplayer uses the two brackets for two different things, and neither
+    /// belongs to the title the camera reads. "Snivy (Poke Ball Pattern)" is a
+    /// printing of Snivy, and the pattern is stamped, not written. "Professor's
+    /// Research [Professor Oak]" prints "Professor's Research" as its title and
+    /// "Professor Oak" as a separate line lower down, so the title alone scored
+    /// 0.75 against the catalog's name — under the bar a name must clear when
+    /// it is the only signal, which is why the card came back as nothing
+    /// whenever his hand covered the number.
     static func printedName(of hit: SearchHit) -> String {
-        guard let open = hit.name.firstIndex(of: "(") else { return hit.cleanName }
-        return NameCleaner.clean(String(hit.name[hit.name.startIndex..<open]))
+        let cut = [hit.name.firstIndex(of: "("), hit.name.firstIndex(of: "[")].compactMap { $0 }.min()
+        guard let cut else { return hit.cleanName }
+        return NameCleaner.clean(String(hit.name[hit.name.startIndex..<cut]))
     }
 
     /// The parenthetical part of a product's name, which is what distinguishes
@@ -454,10 +632,17 @@ struct CardMatcher: Sendable {
     /// "Scratch" finds a Scramble Switch and scores 0.53, so it loses to any
     /// line that names a real card. A line agreeing with the number wins
     /// outright, because that is two signals pointing the same way.
-    static func readName(_ db: Database, observation: ScanObservation, numberHits: [SearchHit]) throws -> (String?, [SearchHit]) {
-        let read = observation.nameCandidates.isEmpty
+    static func readName(_ db: Database, observation: ScanObservation, numberHits: [SearchHit], language: ScanLanguage? = nil) throws -> (String?, [SearchHit]) {
+        var read = observation.nameCandidates.isEmpty
             ? [observation.name].compactMap { $0 }
             : observation.nameCandidates
+        // A Chinese card's printed name is in the Chinese catalog's own table,
+        // so a Chinese line becomes the English name everything below reads.
+        // A line the table does not hold stays Chinese, and is dropped below.
+        let categoryId = language == .chineseSimplified ? TCGCategory.pokemonChinese : nil
+        if categoryId != nil {
+            read = try read.map { try englishName(db, printed: $0) ?? $0 }
+        }
         // A name printed in Japanese cannot match the catalog, which files the
         // card under its English name. Such a line is not a weak signal, it is
         // no signal, and scoring it dragged every Japanese card down to
@@ -476,7 +661,7 @@ struct CardMatcher: Sendable {
                 // The line names one of the number's cards. Two signals agree.
                 return (line, [])
             }
-            return (line, try nameCandidates(db, name: line))
+            return (line, try nameCandidates(db, name: line, categoryId: categoryId))
         }
 
         // Nothing he read is a card name. Fall back to the closest fuzzy match,
@@ -491,7 +676,7 @@ struct CardMatcher: Sendable {
                 return (line, [])
             }
 
-            let hits = try nameCandidates(db, name: line)
+            let hits = try nameCandidates(db, name: line, categoryId: categoryId)
             let score = hits.map { Similarity.dice(cleaned, $0.cleanName) }.max() ?? 0
             if best == nil || score > best!.score {
                 best = (line, hits, score)
@@ -526,13 +711,14 @@ struct CardMatcher: Sendable {
         try String.fetchAll(db, sql: "SELECT subTypeName FROM price WHERE productId = ? ORDER BY subTypeName", arguments: [productId])
     }
 
-    private static func numberCandidates(_ db: Database, parsed: CollectorNumber) throws -> [SearchHit] {
+    private static func numberCandidates(_ db: Database, parsed: CollectorNumber, categoryId: Int? = nil) throws -> [SearchHit] {
         guard let n = parsed.numberNum else { return [] }
         var ids: [Int]
+        let category = categoryId.map { " AND categoryId = \($0)" } ?? ""
         if let code = parsed.setCode {
-            ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setCode = ? AND numberNum = ? AND isSealed = 0 LIMIT 50", arguments: [code, n])
+            ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setCode = ? AND numberNum = ? AND isSealed = 0\(category) LIMIT 50", arguments: [code, n])
         } else if let total = parsed.setTotal {
-            ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setTotal = ? AND numberNum = ? AND isSealed = 0 LIMIT 50", arguments: [total, n])
+            ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setTotal = ? AND numberNum = ? AND isSealed = 0\(category) LIMIT 50", arguments: [total, n])
         } else {
             return []
         }
@@ -550,9 +736,37 @@ struct CardMatcher: Sendable {
         ) ?? false
     }
 
-    private static func nameCandidates(_ db: Database, name: String) throws -> [SearchHit] {
+    /// The English name of the card whose Chinese name is `printed`.
+    ///
+    /// Nil for a line with no Chinese in it, for a catalog with no Chinese
+    /// cards, and for a name no card carries. Vision misreads a character often
+    /// enough, and a near miss in Chinese is no near miss in English, so only
+    /// an exact name counts.
+    static func englishName(_ db: Database, printed: String) throws -> String? {
+        guard FrameInterpreter.isJapanese(printed), try db.tableExists("productLocalName") else { return nil }
+        let text = printed.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The plain card first: "Surskit", not "Surskit (Poke Ball Pattern)".
+        guard let name = try String.fetchOne(db, sql: """
+            SELECT p.name FROM productLocalName l JOIN product p ON p.productId = l.productId
+            WHERE l.localName = ? ORDER BY instr(p.name, '(') > 0, p.productId LIMIT 1
+            """, arguments: [text])
+        else { return nil }
+        let cut = [name.firstIndex(of: "("), name.firstIndex(of: "[")].compactMap { $0 }.min()
+        return cut.map { String(name[..<$0]).trimmingCharacters(in: .whitespaces) } ?? name
+    }
+
+    /// Where the artwork shortlist may look. See `ArtIndex.Scope`.
+    static func artScope(for language: ScanLanguage?) -> ArtIndex.Scope {
+        language == .chineseSimplified ? .only(TCGCategory.pokemonChinese) : .excluding(TCGCategory.pokemonChinese)
+    }
+
+    /// The English and the Japanese catalogs hold dozens of cards called
+    /// Ponyta, so the candidate cap would drop every Chinese one. A Chinese
+    /// session asks among Chinese cards only.
+    private static func nameCandidates(_ db: Database, name: String, categoryId: Int? = nil) throws -> [SearchHit] {
         var filter = SearchFilter()
         filter.kind = .singles
+        if let categoryId { filter.categoryIds = [categoryId] }
         // By relevance, not by value. The candidate cap must never drop the
         // closest name in favour of a dearer card that reads like it.
         let request = SearchRequest(text: name, context: .scanning, filter: filter, ranking: .byRelevance)

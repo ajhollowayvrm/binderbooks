@@ -17,6 +17,9 @@ struct CatalogLocations: Sendable {
     var pendingManifest: URL { directory.appendingPathComponent("pending-manifest.json") }
     /// Scratch space for downloads and decompression. Cleared on every start.
     var scratch: URL { directory.appendingPathComponent("scratch", isDirectory: true) }
+    /// The Simplified Chinese catalog he imported. Kept, because every new
+    /// download needs its cards merged in again. See `ChineseCatalog`.
+    var chinese: URL { directory.appendingPathComponent("chinese-catalog.sqlite") }
 
     static func standard() throws -> CatalogLocations {
         let support = try FileManager.default.url(

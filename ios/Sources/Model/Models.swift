@@ -337,6 +337,12 @@ final class ScanSession {
     var committedAt: Date?
     var defaultCondition: String = CardCondition.nearMint.rawValue
     var defaultPrinting: String?
+    /// The catalogue the cards in this run come from, `ScanLanguage.rawValue`.
+    ///
+    /// He sets it before he scans. Nothing on the card says it reliably: Vision
+    /// reads kana out of an English card's foil, and one invented kana used to
+    /// send the whole match into the Japanese catalogue.
+    var language: String = ScanLanguage.english.rawValue
     var purchase: Purchase?
     /// The sealed item this session is ripping, when it is one. Its cards join
     /// this item directly on commit, instead of each starting a new line, so
@@ -358,6 +364,12 @@ final class ScanSession {
     }
 
     var isCommitted: Bool { committedAt != nil }
+
+    /// English unless he said otherwise, including for a session written before
+    /// the setting existed.
+    var scanLanguage: ScanLanguage {
+        ScanLanguage(rawValue: language) ?? .english
+    }
 
     var cardsNewestFirst: [OwnedCard] {
         cards.sorted { $0.scannedAt > $1.scannedAt }

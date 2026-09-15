@@ -90,6 +90,23 @@ import UIKit
 
     /// Signing costs a feature print. Doing it again for a frame no better than
     /// the one already signed buys nothing.
+    /// The framing fault that cost him the Dedenne. A card held so close that
+    /// its left and right edges leave the frame has no quadrilateral for Vision
+    /// to find, and everything — the words, the signature, the outline — is read
+    /// from inside that quadrilateral. Measured on a 1080 by 1920 frame, the
+    /// card fills the width at 0.79 of the frame's height; at 0.85 the collector
+    /// number stops reading, and at 0.90 no rectangle is found at all. Such a
+    /// frame looks exactly like an empty chute unless he is told, so the detail
+    /// in it is what tells the two apart.
+    @Test func aFullFrameWithNoCardInItIsAFramingFault() {
+        let policy = FramePolicy()
+        #expect(policy.looksFilledButUnread(sawCard: false, sharpness: 400))
+        // A card was found. Whatever else is true, the scanner can read it.
+        #expect(!policy.looksFilledButUnread(sawCard: true, sharpness: 400))
+        // An empty chute. Nothing is wrong and he must not be nagged.
+        #expect(!policy.looksFilledButUnread(sawCard: false, sharpness: 3))
+    }
+
     @Test func onlyAnImprovementIsWorthSigning() {
         let policy = FramePolicy(minimumSharpness: 25, goodEnoughSharpness: 160)
         #expect(!policy.shouldSign(sharpness: 40, bestSoFar: 50))

@@ -692,6 +692,12 @@ marker reads it. The card detail screen edits these fields on any card with
 `productId` 0, which includes imported rows that never had a product. Export format
 version 8 carries the fields.
 
+**Amended 2026-09-14:** a Simplified Chinese card is now a catalog card when AJ
+imports the Chinese catalog. Its `productId` is from 1,000,000,000 to 1,999,999,999,
+and its category is `TCGCategory.pokemonChinese` (10,000). The TCGplayer listing
+export skips it as "not sold on TCGplayer", and the PPT comps fetch skips it. An
+Italian card, and a Chinese card entered before the import, still goes in by hand.
+
 ### Choosing a purchase
 
 **Built 2026-09-13.** Many cards reached inventory with no purchase: a scan

@@ -57,7 +57,7 @@ struct GradedCompsSection: View {
                     Label(card.compsFetchedAt == nil ? "Fetch from PPT" : "Fetch again from PPT", systemImage: "arrow.down.circle")
                 }
             }
-            .disabled(fetcher.isRunning || !card.isIdentified)
+            .disabled(fetcher.isRunning || !card.isIdentified || categoryId == TCGCategory.pokemonChinese)
         } header: {
             Text(knownGrade == nil ? "Graded values" : "Graded value")
         } footer: {

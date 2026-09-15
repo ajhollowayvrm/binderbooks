@@ -219,6 +219,13 @@ better.
 
 Recognition languages are still declared explicitly: **`en` and `ja`**.
 
+**Amended 2026-09-14:** a third session language, Chinese, reads **`zh-Hans` and
+`en`**. In a Chinese session the matcher looks for the number, the name, and the
+artwork among Chinese cards only, and never assigns an English card. A Chinese
+name becomes its English name through the `productLocalName` table. A Gem Pack
+number prints as `0101/07`, and `FrameInterpreter` reads it. An English or a
+Japanese session never offers a Chinese card.
+
 Three things are read now, not two:
 
 - **Card name**

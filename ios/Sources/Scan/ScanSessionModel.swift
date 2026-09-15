@@ -123,11 +123,12 @@ final class ScanSessionModel {
         inFlight += 1
         let bias = session.observedGroupIds
         let defaultPrinting = session.defaultPrinting
+        let language = session.scanLanguage
         Task {
             defer { inFlight -= 1 }
             do {
                 let matcher = CardMatcher(database: db, art: catalog.artIndex)
-                let result = try await matcher.match(observation, session: bias, defaultPrinting: defaultPrinting)
+                let result = try await matcher.match(observation, session: bias, defaultPrinting: defaultPrinting, language: language)
                 await insert(result, observation: observation)
             } catch {
                 lastError = error.localizedDescription
@@ -312,6 +313,12 @@ final class ScanSessionModel {
 
     func setDefaultPrinting(_ printing: String?) {
         session.defaultPrinting = printing
+        save()
+    }
+
+    /// Which catalogue this run is scanning. Set it before the cards go through.
+    func setLanguage(_ language: ScanLanguage) {
+        session.language = language.rawValue
         save()
     }
 

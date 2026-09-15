@@ -30,6 +30,27 @@ struct ArtIndex: Sendable {
         var distance: Float
     }
 
+    /// Which catalogues a search may answer from.
+    ///
+    /// A Chinese card reuses the artwork of its English and Japanese prints, so
+    /// one picture sits in the index two or three times over. Left to rank
+    /// them all, the thirty nearest for an English card fill up with its
+    /// Chinese twin, and the other way round. The session's language says
+    /// which one he holds, so the search looks only there.
+    enum Scope: Equatable, Sendable {
+        case all
+        case only(Int)
+        case excluding(Int)
+
+        func admits(_ categoryId: Int) -> Bool {
+            switch self {
+            case .all: return true
+            case .only(let wanted): return categoryId == wanted
+            case .excluding(let unwanted): return categoryId != unwanted
+            }
+        }
+    }
+
     /// How many neighbours the matcher asks for.
     ///
     /// Ten holds the right card nine times in ten and thirty holds it 94 times
@@ -47,14 +68,20 @@ struct ArtIndex: Sendable {
     /// Each signature's length, computed once at load. The search needs it for
     /// every row and it never changes.
     private let norms: [Float]
+    /// Each row's catalog category, for `Scope`. 0 where the catalog did not
+    /// say.
+    private let categoryIds: [Int32]
 
     var count: Int { productIds.count }
     var isEmpty: Bool { productIds.isEmpty }
 
-    init(productIds: [Int32], values: [Int8], norms: [Float]) {
+    init(productIds: [Int32], values: [Int8], norms: [Float], categoryIds: [Int32] = []) {
         self.productIds = productIds
         self.values = values
         self.norms = norms
+        self.categoryIds = categoryIds.count == productIds.count
+            ? categoryIds
+            : Array(repeating: 0, count: productIds.count)
     }
 
     /// Build from the signatures in a catalog. Empty when the catalog carries
@@ -67,8 +94,14 @@ struct ArtIndex: Sendable {
         var productIds: [Int32] = []
         var values: [Int8] = []
         var norms: [Float] = []
+        var categoryIds: [Int32] = []
 
-        let cursor = try Row.fetchCursor(db, sql: "SELECT productId, descriptor FROM productArt")
+        // The category rides along, for `Scope`. A catalog with no product
+        // table, which only a test builds, files every row under 0.
+        let sql = try db.tableExists("product")
+            ? "SELECT a.productId, a.descriptor, coalesce(p.categoryId, 0) AS categoryId FROM productArt a LEFT JOIN product p ON p.productId = a.productId"
+            : "SELECT productId, descriptor, 0 AS categoryId FROM productArt"
+        let cursor = try Row.fetchCursor(db, sql: sql)
         while let row = try cursor.next() {
             let data: Data = row["descriptor"]
             guard data.count == dimensions else { continue }
@@ -84,8 +117,9 @@ struct ArtIndex: Sendable {
             }
             productIds.append(row["productId"])
             norms.append(norm.squareRoot())
+            categoryIds.append(Int32(truncatingIfNeeded: row["categoryId"] as Int))
         }
-        return ArtIndex(productIds: productIds, values: values, norms: norms)
+        return ArtIndex(productIds: productIds, values: values, norms: norms, categoryIds: categoryIds)
     }
 
     /// The cards whose artwork is nearest to this signature, nearest first.
@@ -94,7 +128,7 @@ struct ArtIndex: Sendable {
     /// not worth its own correctness risk: 71,802 rows of 128 bytes is nine
     /// megabytes and a few milliseconds, and this runs once per card logged,
     /// not once per camera frame.
-    func nearest(to descriptor: [Int8], limit: Int = defaultLimit) -> [Neighbour] {
+    func nearest(to descriptor: [Int8], limit: Int = defaultLimit, scope: Scope = .all) -> [Neighbour] {
         let dimensions = CardArtDescriptor.dimensions
         guard descriptor.count == dimensions, limit > 0, !productIds.isEmpty else { return [] }
 
@@ -107,7 +141,7 @@ struct ArtIndex: Sendable {
         found.reserveCapacity(productIds.count)
         descriptor.withUnsafeBufferPointer { query in
             values.withUnsafeBufferPointer { stored in
-                for row in productIds.indices {
+                for row in productIds.indices where scope.admits(Int(categoryIds[row])) {
                     var dot: Int32 = 0
                     let base = row * dimensions
                     for i in 0..<dimensions {

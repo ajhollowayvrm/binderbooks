@@ -48,7 +48,8 @@ final class CompsFetcher {
 
         for card in cards {
             defer { done += 1 }
-            guard card.isIdentified else { report.skipped += 1; continue }
+            // PPT looks a card up by its TCGplayer id, and a Chinese card has none.
+            guard card.isIdentified, categoryId(card) != TCGCategory.pokemonChinese else { report.skipped += 1; continue }
             do {
                 let language = PPTClient.language(categoryId: categoryId(card), cardLanguage: card.language)
                 if let comps = try await client.gradedComps(tcgPlayerId: card.productId, language: language) {
