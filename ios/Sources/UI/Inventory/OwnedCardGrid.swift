@@ -3,16 +3,20 @@ import SwiftUI
 /// Owned cards as large art, three per row. It carries no scroll view, so it
 /// also works inside one row of a list.
 ///
+/// One cell per stack, not per card: nine identical packs are one cell with
+/// "×9" on the art. A tap on a stacked cell opens its copies.
+///
 /// A cell cannot hold the basis or the gain. Those stay in the list layout, in
 /// the summary tiles, and on the card detail screen.
 struct OwnedCardGrid: View {
-    var rows: [InventoryRow]
+    var stacks: [InventoryStack]
     var columns = 3
     var isSelecting = false
     var selection: Set<UUID> = []
-    var onToggle: (UUID) -> Void = { _ in }
-    /// Starts selection with this card ticked.
-    var onLongPress: (UUID) -> Void = { _ in }
+    /// Every card in the cell, because a cell stands for all of its copies.
+    var onToggle: ([UUID]) -> Void = { _ in }
+    /// Starts selection with the cell's cards ticked.
+    var onLongPress: ([UUID]) -> Void = { _ in }
 
     private var gridItems: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 10), count: columns)
@@ -20,35 +24,44 @@ struct OwnedCardGrid: View {
 
     var body: some View {
         LazyVGrid(columns: gridItems, spacing: 14) {
-            ForEach(rows) { row in
+            ForEach(stacks) { stack in
                 if isSelecting {
                     Button {
-                        onToggle(row.card.id)
+                        onToggle(stack.cardIds)
                     } label: {
-                        OwnedCardCard(row: row, isSelected: selection.contains(row.card.id), isSelecting: true)
+                        OwnedCardCard(stack: stack, isSelected: isSelected(stack), isSelecting: true)
                     }
                     .buttonStyle(.plain)
                 } else {
-                    NavigationLink(value: AppRoute.ownedCard(row.card.id)) {
-                        OwnedCardCard(row: row)
+                    NavigationLink(value: stack.route) {
+                        OwnedCardCard(stack: stack)
                     }
                     .buttonStyle(.plain)
                     // A simultaneous gesture, so the long press cannot swallow
                     // the tap that pushes the card.
                     .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.4).onEnded { _ in onLongPress(row.card.id) }
+                        LongPressGesture(minimumDuration: 0.4).onEnded { _ in onLongPress(stack.cardIds) }
                     )
                 }
             }
         }
     }
+
+    /// Ticked when every copy is, so the mark and the count agree.
+    private func isSelected(_ stack: InventoryStack) -> Bool {
+        stack.cardIds.allSatisfy(selection.contains)
+    }
 }
 
-/// One owned cell: art, market price, set, then a compact identity line.
+/// One owned cell: art, market price, set, then a compact identity line. It
+/// draws one card, or one stack of copies with a count on the art.
 struct OwnedCardCard: View {
-    var row: InventoryRow
+    var stack: InventoryStack
     var isSelected = false
     var isSelecting = false
+
+    /// The copy the cell draws. Every copy in a stack would draw the same one.
+    private var row: InventoryRow { stack.lead }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -85,8 +98,10 @@ struct OwnedCardCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The number, the condition, and the count. A slab shows the grader and
-    /// the cert number instead, because that is how he reads a slab.
+    /// The number and the condition. The count sits on the art, so it is read
+    /// the same on a stack of sealed packs as on a stack of singles. A slab
+    /// shows the grader and the cert number instead, because that is how he
+    /// reads a slab.
     @ViewBuilder
     private var identity: some View {
         HStack(spacing: 5) {
@@ -110,9 +125,6 @@ struct OwnedCardCard: View {
                 Text(CardCondition(rawValue: row.card.condition)?.short ?? row.card.condition)
                 if let language = CardLanguage.badge(row.card.language) {
                     Text(language)
-                }
-                if row.card.quantity > 1 {
-                    Text("×\(row.card.quantity)")
                 }
             }
         }
@@ -140,6 +152,17 @@ struct OwnedCardCard: View {
         .frame(maxWidth: .infinity)
         .aspectRatio(5.0 / 7.0, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(alignment: .topLeading) {
+            if stack.copies > 1 {
+                Text("×\(stack.copies)")
+                    .font(.caption.weight(.bold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.black.opacity(0.62), in: Capsule())
+                    .padding(4)
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if isSelecting {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")

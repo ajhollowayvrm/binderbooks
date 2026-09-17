@@ -21,6 +21,9 @@ struct RootView: View {
     @State private var path = NavigationPath()
     @State private var addingCard = false
     @State private var scanAfterAdd = false
+    /// The transaction the plus menu asked for, which is also the kind the
+    /// sheet opens on.
+    @State private var addingTransaction: AddTransactionSheet.Kind?
 
     var body: some View {
         @Bindable var search = search
@@ -49,10 +52,27 @@ struct RootView: View {
                 // Its own capsule, because it adds and the other two navigate.
                 ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        addingCard = true
+                    // The same four things the ledger's plus records, plus the
+                    // card. One plus on the landing screen adds anything, so
+                    // recording a purchase no longer means going to the ledger
+                    // first.
+                    Menu {
+                        Button {
+                            addingCard = true
+                        } label: {
+                            Label("Card or sealed product", systemImage: "rectangle.on.rectangle.angled")
+                        }
+                        Section {
+                            ForEach(AddTransactionSheet.Kind.allCases) { kind in
+                                Button {
+                                    addingTransaction = kind
+                                } label: {
+                                    Label(kind.rawValue, systemImage: kind.symbol)
+                                }
+                            }
+                        }
                     } label: {
-                        Label("Add a card", systemImage: "plus")
+                        Label("Add", systemImage: "plus")
                     }
                 }
             }
@@ -68,6 +88,14 @@ struct RootView: View {
                     scanAfterAdd = true
                 }
             }
+            // What he just recorded opens, because a purchase with nothing
+            // identified on it is the one he scans into next, and an order
+            // with no cards is the one he attaches them to.
+            .sheet(item: $addingTransaction) { kind in
+                AddTransactionSheet(kind: kind) { entry in
+                    path.append(entry)
+                }
+            }
             .navigationDestination(for: SearchHit.self) { hit in
                 ProductDetailView(productId: hit.productId)
             }
@@ -76,6 +104,7 @@ struct RootView: View {
                 case .settings: SettingsView()
                 case .catalogStatus: CatalogStatusView()
                 case .ownedCard(let id): OwnedCardDetailView(cardID: id)
+                case .cardStack(let id): CardStackView(leadCardID: id)
                 case .ledger:
                     LedgerView(tab: Self.debugLedgerTab, filter: Self.debugLedgerFilter, adding: Self.debugLedgerAdding)
                 }
@@ -207,9 +236,14 @@ struct RootView: View {
                 path.append(AppRoute.settings)
             }
         }
-        // `CT_OPEN_ADD_CARD=1` opens the plus button's sheet.
+        // `CT_OPEN_ADD_CARD=1` opens the plus menu's card sheet.
         if env["CT_OPEN_ADD_CARD"] == "1" {
             addingCard = true
+        }
+        // `CT_OPEN_ADD="Purchase"` opens the plus menu's transaction sheet on
+        // that kind, because simctl cannot open a menu.
+        if let kind = env["CT_OPEN_ADD"].flatMap({ AddTransactionSheet.Kind(rawValue: $0) }) {
+            addingTransaction = kind
         }
         if env["CT_OPEN_SCANNER"] == "1" {
             Task {

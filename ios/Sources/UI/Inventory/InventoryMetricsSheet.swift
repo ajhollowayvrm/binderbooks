@@ -7,7 +7,8 @@ import SwiftUI
 /// not the whole store, so the figures always match the cards behind the sheet.
 struct InventoryMetricsSheet: View {
     var summary: InventorySummary
-    var rowCount: Int
+    /// Lines on the page, not cards: copies of one thing are one line.
+    var lineCount: Int
 
     @Environment(\.dismiss) private var dismiss
 
@@ -16,9 +17,9 @@ struct InventoryMetricsSheet: View {
             List {
                 Section {
                     row("Cards", "\(summary.cardCount)")
-                    row("Lines", "\(rowCount)")
+                    row("Lines", "\(lineCount)")
                 } footer: {
-                    Text("A bulk line counts every copy in \"Cards\" and once in \"Lines\".")
+                    Text("Copies of the same card are one line. A bulk line counts every copy in \"Cards\" and once in \"Lines\".")
                 }
 
                 Section("Value") {

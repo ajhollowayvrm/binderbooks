@@ -111,6 +111,15 @@ same run.
 above it, and `ShellContentView` swaps the page for the result list as soon as he
 types. Nothing pushes the inventory any more.
 
+**The plus in the navigation bar adds anything.** It is a menu: a card or sealed
+product, which opens `AddCardSheet` with the camera and the catalog search, or a
+purchase, an order, a grading charge, or an expense, which opens
+`AddTransactionSheet` on that kind — the same sheet and the same four kinds the
+ledger's plus records, so recording a purchase no longer means going to the ledger
+first. What he just recorded opens, because a purchase with nothing identified on
+it is the one he scans into next and an order with no cards is the one he attaches
+them to.
+
 `InventoryView` lists committed cards newest first with market value from the
 catalog, the basis, and the difference. Filters are two chips: tags and set. Tags
 replaced the status chips, and he narrows by label more than by anything else.
@@ -129,6 +138,24 @@ status until `StatusTagBackfill` runs.
 A sold card is still reachable on its order in the Ledger, which is where it
 belongs. Its row, basis, tags and comps all stay in the store, so Unsell on the
 order puts it straight back.
+
+**Copies of one thing are one line.** Nine Destined Rivals packs off one purchase
+are nine `OwnedCard` rows — each pack is ripped on its own and carries its own
+share of what the purchase cost — and the page drew nine identical cells. It now
+draws one, with "×9" on the art, and the count in the list row. `InventoryStack`
+does the grouping: cards whose product, printing, condition, language, labels,
+kind and hand-entered price all match. A slab never stacks, because its cert, its
+grade and its value are its own. A tap on a stacked line pushes `CardStackView`,
+which derives the copies again from the live rows and pushes each one's own
+detail — the lead card's detail alone would hide the other eight, and each copy
+has its own cost, its own tags, and its own pack to rip.
+
+The grouping is display only. Nothing is written, and `InventoryModel.rows` still
+answers per card: the sort, the chips, the query, the selection and Metrics all
+read cards, and a stack sits where its first copy sorted. A stacked line keeps the
+price of one — the row must show the number the list sorted by — and carries the
+total value under it, with the cost and the gain covering every copy. Selecting a
+stacked line takes every copy on it, and Metrics counts it once under "Lines".
 
 The money sits behind the **Metrics** button, not above the cards. The sheet
 reports what the current chips and query left on the page, so its figures always
@@ -277,6 +304,8 @@ The simulator cannot type or tap for a script, so debug builds read these on lau
 | `CT_SET_COST=3000` | Prices the simulated session at that many cents, split evenly. |
 | `CT_SEARCH_LAYOUT` | `list` or `grid`. Grid is the default, so this mostly forces `list`. |
 | `CT_OPEN_CARD=1` | Pushes the newest card's detail. |
+| `CT_OPEN_ADD_CARD=1` | Opens the plus menu's card sheet. |
+| `CT_OPEN_ADD` | `Purchase`, `Order`, `Grading`, or `Expense` — opens the plus menu's transaction sheet on that kind. |
 | `CT_OPEN_SETTINGS=1` | Pushes Settings, which holds export. |
 | `CT_OPEN_METRICS=1` | Opens the inventory Metrics sheet. |
 | `CT_SELECT_ALL=1` | Enters selection with every row ticked. |

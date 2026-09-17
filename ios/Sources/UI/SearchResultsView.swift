@@ -50,20 +50,22 @@ struct SearchResultsView: View {
 
     @ViewBuilder
     private var results: some View {
-        let owned = ownedRows
+        // Copies of one thing are one line here too, the same as the
+        // inventory page.
+        let owned = InventoryStack.stacks(ownedRows)
         switch layout {
         case .list:
             List {
                 if !owned.isEmpty {
                     Section {
-                        ForEach(owned) { row in
-                            NavigationLink(value: AppRoute.ownedCard(row.card.id)) {
-                                OwnedCardRow(row: row)
+                        ForEach(owned) { stack in
+                            NavigationLink(value: stack.route) {
+                                OwnedCardRow(row: stack.lead, stack: stack)
                             }
                         }
                     } header: {
-                        // Rows, not the sum of quantity. A row shows its own ×N,
-                        // and the inventory tiles are the place that sums.
+                        // Lines, not the sum of quantity. A line shows its own
+                        // ×N, and the inventory tiles are the place that sums.
                         Text("In your collection (\(owned.count))").textCase(nil)
                     }
                 }
@@ -85,7 +87,7 @@ struct SearchResultsView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     if !owned.isEmpty {
                         CardSectionHeader(title: "In your collection (\(owned.count))")
-                        OwnedCardGrid(rows: owned)
+                        OwnedCardGrid(stacks: owned)
                             .padding(.horizontal, 12)
                     }
                     CardSectionHeader(title: "Catalog (\(catalogCount))")

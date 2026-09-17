@@ -255,6 +255,14 @@ final class InventoryModel {
         return (applyFilter ? sort : .newest).sorted(rows)
     }
 
+    /// The same rows, with the copies of one thing collapsed into one line.
+    /// Every page that draws cards reads this; `rows` stays per card, because
+    /// the sort, the filters, the query, the selection and Metrics all work on
+    /// cards.
+    func stacks(from cards: [OwnedCard], query: String = "", applyFilter: Bool = true) -> [InventoryStack] {
+        InventoryStack.stacks(rows(from: cards, query: query, applyFilter: applyFilter))
+    }
+
     /// Labels in use, most used first. Derived on every read, so a deleted card
     /// drops out of the suggestions at once.
     func tagUses(in cards: [OwnedCard]) -> [TagUse] {

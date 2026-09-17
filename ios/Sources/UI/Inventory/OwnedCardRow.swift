@@ -1,8 +1,16 @@
 import SwiftUI
 
 /// One inventory line. Dense: slab or thumbnail, identity, market, basis.
+///
+/// It draws one card, or one stack of copies: the price stays the price of one
+/// — the list sorted by it — and the cost and the gain are the stack's, with
+/// the total value under the price so the two are never read as one figure.
 struct OwnedCardRow: View {
     let row: InventoryRow
+    /// Set when the line stands for several copies of the same thing. Nil
+    /// wherever a screen lists cards one at a time: a picker, an export, the
+    /// copies inside a stack.
+    var stack: InventoryStack?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -35,7 +43,7 @@ struct OwnedCardRow: View {
                         Text(CardCondition(rawValue: row.card.condition)?.short ?? row.card.condition)
                         if let language = CardLanguage.badge(row.card.language) { Text(language) }
                     }
-                    if row.card.quantity > 1 { Text("×\(row.card.quantity)") }
+                    if copies > 1 { Text("×\(copies)") }
                     if row.card.isPersonalCollection { Text("PC") }
                 }
                 .font(.caption)
@@ -55,11 +63,16 @@ struct OwnedCardRow: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+                if isStacked, let total = stack?.totalValueCents {
+                    Text("\(total.asCurrency) total")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
                 if row.card.isBulk {
                     Text("bulk")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                } else if row.projectedRange == nil, let diff = row.unrealizedCents {
+                } else if row.projectedRange == nil, let diff = gainCents {
                     // The gain against what the card cost, split basis or not.
                     // This is the number he reads before he sells. Not shown
                     // under a projection, because it is a gain on the raw
@@ -67,8 +80,8 @@ struct OwnedCardRow: View {
                     Text((diff >= 0 ? "+" : "−") + abs(diff).asCurrency)
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(diff >= 0 ? .green : .red)
-                } else if row.card.totalBasisCents > 0 {
-                    Text("cost \(row.card.totalBasisCents.asCurrency)")
+                } else if basisCents > 0 {
+                    Text("cost \(basisCents.asCurrency)")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 } else {
@@ -80,6 +93,20 @@ struct OwnedCardRow: View {
         }
         .padding(.vertical, 2)
     }
+
+    /// Cards, not lines: a bulk line of 40 counts 40, and a stack of nine
+    /// packs counts nine.
+    private var copies: Int { stack?.copies ?? max(1, row.card.quantity) }
+
+    /// True only for a line that stands for more than one card. A bulk line of
+    /// 40 is one card, and its figures are already its own.
+    private var isStacked: Bool { stack?.isStacked ?? false }
+
+    /// The cost and the gain cover every copy the line stands for, so they can
+    /// be read against the total above them.
+    private var basisCents: Int { isStacked ? (stack?.totalBasisCents ?? 0) : row.card.totalBasisCents }
+
+    private var gainCents: Int? { isStacked ? stack?.unrealizedCents : row.unrealizedCents }
 }
 
 /// The look of a grader's label. PSA prints a red label with white text. CGC
