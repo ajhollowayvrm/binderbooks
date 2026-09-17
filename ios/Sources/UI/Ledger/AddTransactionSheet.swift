@@ -19,6 +19,16 @@ struct AddTransactionSheet: View {
 
         var id: String { rawValue }
         var isMoneyIn: Bool { self == .sale }
+        /// For the plus menu on the landing screen, where the four kinds are
+        /// rows instead of segments.
+        var symbol: String {
+            switch self {
+            case .purchase: return "cart"
+            case .sale: return "tag"
+            case .grading: return "seal"
+            case .expense: return "dollarsign.circle"
+            }
+        }
         /// An expense is one amount. Nothing rides on top of it and nothing
         /// comes off it, so the three extra fields would only be empty rows.
         var hasExtras: Bool { self != .expense }
@@ -26,11 +36,19 @@ struct AddTransactionSheet: View {
 
     var onAdded: (LedgerEntry.Kind) -> Void
 
+    /// The kind the sheet opens on. The ledger's plus opens on a purchase; the
+    /// plus menu on the landing screen names the kind, because there the
+    /// choice was already made.
+    init(kind: Kind = .purchase, onAdded: @escaping (LedgerEntry.Kind) -> Void) {
+        self.onAdded = onAdded
+        _kind = State(initialValue: kind)
+    }
+
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Environment(InventoryModel.self) private var inventory
 
-    @State private var kind: Kind = .purchase
+    @State private var kind: Kind
     @State private var date = Date()
     @State private var who = ""
     @State private var category = ""

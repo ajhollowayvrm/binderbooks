@@ -27,7 +27,8 @@ lines, 279 of 285 cards, and 131 sales. See `docs/04-seed-import.md`.
 
 The **ledger screen** shows money in and money out in one list, by month, with a
 detail for each order, purchase and grading charge, and a plus button that
-records a purchase, an order, or a grading charge by hand. Ripping starts from a
+records a purchase, an order, or a grading charge by hand. The plus on the
+landing screen records the same four kinds, beside adding a card. Ripping starts from a
 purchase and writes no rip record — see the amendment in `docs/02-data-model.md`.
 `GradingSubmission`, `GradingEntry`, `Sale` and `SaleLine` exist as models and
 travel in the export, but the grading and selling flows are not built.

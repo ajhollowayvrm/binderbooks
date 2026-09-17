@@ -44,6 +44,10 @@ struct InventoryView: View {
 
     var body: some View {
         let rows = rows
+        // Copies of one thing are one line. The rows behind them stay per
+        // card, because the sort, the chips, the query, the selection and
+        // Metrics all read cards.
+        let stacks = InventoryStack.stacks(rows)
         let summary = model.summary(of: rows)
         VStack(spacing: 0) {
             if !catalog.isReady {
@@ -54,7 +58,7 @@ struct InventoryView: View {
                 CardLayoutButton(layout: $layout, accessory: AnyView(sortMenu))
             }
             Divider()
-            list(rows)
+            list(stacks)
         }
         // A new default applies at once. Otherwise a change in Settings shows
         // nothing until the next launch.
@@ -162,7 +166,7 @@ struct InventoryView: View {
             TagFilterSheet(uses: tagUses, selected: Binding(get: { model.filter.tagKeys }, set: { model.filter.tagKeys = $0 }))
         }
         .sheet(isPresented: $showMetrics) {
-            InventoryMetricsSheet(summary: summary, rowCount: rows.count)
+            InventoryMetricsSheet(summary: summary, lineCount: stacks.count)
         }
         .sheet(item: $tagTarget) { target in
             TagSheet(target: target, uses: tagUses, allCards: committed) {
@@ -280,16 +284,16 @@ struct InventoryView: View {
     // MARK: - The list
 
     @ViewBuilder
-    private func list(_ rows: [InventoryRow]) -> some View {
+    private func list(_ stacks: [InventoryStack]) -> some View {
         switch layout {
         case .list:
             List {
-                if rows.isEmpty {
+                if stacks.isEmpty {
                     emptyState
                         .listRowSeparator(.hidden)
                 } else {
-                    ForEach(rows) { row in
-                        cardRow(row)
+                    ForEach(stacks) { stack in
+                        cardRow(stack)
                     }
                 }
                 recentlyViewedRows
@@ -301,13 +305,13 @@ struct InventoryView: View {
             // row draws a chevron on every cell.
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    if rows.isEmpty {
+                    if stacks.isEmpty {
                         emptyState
                             .frame(maxWidth: .infinity)
                             .padding(.top, 40)
                     } else {
                         OwnedCardGrid(
-                            rows: rows,
+                            stacks: stacks,
                             isSelecting: isSelecting,
                             selection: selection,
                             onToggle: toggleSelection,
@@ -333,34 +337,37 @@ struct InventoryView: View {
     }
 
     @ViewBuilder
-    private func cardRow(_ row: InventoryRow) -> some View {
+    private func cardRow(_ stack: InventoryStack) -> some View {
+        // A stacked line is ticked when every copy is, and ticking it takes
+        // all of them: the line is the nine packs, not one of them.
+        let ticked = stack.cardIds.allSatisfy(selection.contains)
         if isSelecting {
             Button {
-                toggleSelection(row.card.id)
+                toggleSelection(stack.cardIds)
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: selection.contains(row.card.id) ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(selection.contains(row.card.id) ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                    Image(systemName: ticked ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(ticked ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
                         .contentTransition(.symbolEffect(.replace))
                         .transition(.move(edge: .leading).combined(with: .opacity))
-                    OwnedCardRow(row: row)
+                    OwnedCardRow(row: stack.lead, stack: stack)
                 }
             }
             .buttonStyle(.plain)
         } else {
-            NavigationLink(value: AppRoute.ownedCard(row.card.id)) {
-                OwnedCardRow(row: row)
+            NavigationLink(value: stack.route) {
+                OwnedCardRow(row: stack.lead, stack: stack)
             }
             // A simultaneous gesture, so the long press cannot swallow the tap
             // that pushes the card.
-            .simultaneousGesture(longPress(row.card.id))
+            .simultaneousGesture(longPress(stack.cardIds))
         }
     }
 
-    /// Selection starts on a long press, with that card already ticked.
-    private func longPress(_ id: UUID) -> some Gesture {
+    /// Selection starts on a long press, with that line's cards already ticked.
+    private func longPress(_ ids: [UUID]) -> some Gesture {
         LongPressGesture(minimumDuration: 0.4).onEnded { _ in
-            beginSelection(id)
+            beginSelection(ids)
         }
     }
 
@@ -415,20 +422,26 @@ struct InventoryView: View {
 
     private var isFiltered: Bool { model.filter.isActive || !query.isEmpty }
 
-    private func toggleSelection(_ id: UUID) {
+    /// One line, every copy on it. A partly ticked line completes instead of
+    /// clearing, because a half-selected stack is not a state he asked for.
+    private func toggleSelection(_ ids: [UUID]) {
         withAnimation(.snappy(duration: 0.15)) {
-            if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+            if ids.allSatisfy(selection.contains) {
+                selection.subtract(ids)
+            } else {
+                selection.formUnion(ids)
+            }
         }
     }
 
     /// The long press lands here. One animation covers the Done button, the
     /// bottom bar, and every mark on the cards, so selection mode arrives as
     /// one movement instead of three pops.
-    private func beginSelection(_ id: UUID) {
+    private func beginSelection(_ ids: [UUID]) {
         guard !isSelecting else { return }
         withAnimation(.snappy(duration: 0.28)) {
             isSelecting = true
-            selection = [id]
+            selection = Set(ids)
         }
     }
 
