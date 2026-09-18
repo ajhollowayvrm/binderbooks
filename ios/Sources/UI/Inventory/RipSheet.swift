@@ -8,8 +8,9 @@ import SwiftUI
 /// a scan he discards leaves them sealed.
 struct RipSheet: View {
     let packs: [OwnedCard]
-    /// The scan to open once this sheet is gone. See `RipSheetPresenter`.
-    var onScan: (ScanSession) -> Void
+    /// The scan to open once this sheet is gone, and whether it opens with the
+    /// catalog search showing. See `RipSheetPresenter`.
+    var onScan: (ScanSession, Bool) -> Void
     var onChange: () -> Void
 
     @Environment(InventoryModel.self) private var model
@@ -79,6 +80,12 @@ struct RipSheet: View {
                         Label("Scan the pulls", systemImage: "camera")
                     }
                     .disabled(chosen.isEmpty)
+                    Button {
+                        scan(search: true)
+                    } label: {
+                        Label("Search the catalog for the pulls", systemImage: "magnifyingglass")
+                    }
+                    .disabled(chosen.isEmpty)
                     Button("Nothing to scan", role: .destructive) {
                         confirmNothing = true
                     }
@@ -126,7 +133,7 @@ struct RipSheet: View {
         return "\(vendor) · \(purchase.date.formatted(date: .abbreviated, time: .omitted))"
     }
 
-    private func scan() {
+    private func scan(search: Bool = false) {
         guard let home = RipPool.prepare(chosen, context: modelContext) else { return }
         let session = ScanSession()
         session.purchase = home.purchase
@@ -134,7 +141,7 @@ struct RipSheet: View {
         modelContext.insert(session)
         try? modelContext.save()
         onChange()
-        onScan(session)
+        onScan(session, search)
         dismiss()
     }
 
@@ -154,15 +161,16 @@ private struct RipSheetPresenter: ViewModifier {
 
     @Environment(ScannerLauncher.self) private var launcher
     @State private var pending: ScanSession?
+    @State private var pendingSearch = false
 
     func body(content: Content) -> some View {
         content.sheet(item: $target, onDismiss: {
             if let pending {
-                launcher.session = pending
+                launcher.open(pending, search: pendingSearch)
                 self.pending = nil
             }
         }) { target in
-            RipSheet(packs: target.cards, onScan: { pending = $0 }, onChange: onChange)
+            RipSheet(packs: target.cards, onScan: { pending = $0; pendingSearch = $1 }, onChange: onChange)
         }
     }
 }

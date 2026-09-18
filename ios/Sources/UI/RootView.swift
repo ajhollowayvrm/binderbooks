@@ -129,8 +129,9 @@ struct RootView: View {
         .environment(selection)
         .environment(\.pushRoute) { path.append($0) }
         .fullScreenCover(item: $launcher.session) { session in
-            ScanSessionView(session: session) {
+            ScanSessionView(session: session, startWithSearch: launcher.startWithSearch) {
                 launcher.session = nil
+                launcher.startWithSearch = false
             }
             .environment(catalog)
         }
@@ -186,12 +187,12 @@ struct RootView: View {
     /// Resume the open session if there is one. Otherwise start a new one.
     private func openScanner() {
         if let open = openSessions.first {
-            launcher.session = open
+            launcher.open(open)
         } else {
             let session = ScanSession()
             modelContext.insert(session)
             try? modelContext.save()
-            launcher.session = session
+            launcher.open(session)
         }
     }
 

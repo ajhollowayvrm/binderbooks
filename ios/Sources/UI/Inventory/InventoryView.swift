@@ -271,6 +271,13 @@ struct InventoryView: View {
     private var filterRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                // The same three as the search page, in the same place.
+                ForEach(SearchFilter.Kind.allCases, id: \.self) { kind in
+                    Chip(title: kind.title, isSelected: model.filter.kind == kind) {
+                        model.filter.kind = kind
+                    }
+                }
+                Divider().frame(height: 20)
                 Chip(title: tagChipTitle, systemImage: "tag", isSelected: !model.filter.tagKeys.isEmpty) {
                     showTagFilter = true
                 }

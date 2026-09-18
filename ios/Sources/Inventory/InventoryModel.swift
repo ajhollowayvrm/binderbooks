@@ -188,11 +188,13 @@ struct InventoryFilter: Equatable {
     var tagKeys: Set<String> = []
     /// Only the cards with no purchase behind them, which have no cost to split.
     var noPurchaseOnly = false
+    /// Singles or sealed. The same choice as the search page's chips.
+    var kind: SearchFilter.Kind = .all
 
     /// True when a chip is on. The typed query is not part of this, because the
     /// search header owns the query and the Clear button must not wipe it.
     var isActive: Bool {
-        !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly || !tagKeys.isEmpty || noPurchaseOnly
+        !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly || !tagKeys.isEmpty || noPurchaseOnly || kind != .all
     }
 }
 
@@ -355,6 +357,12 @@ final class InventoryModel {
         return OwnedCardMatcher.matches(haystack: haystack, card: card, hit: hit, query: query)
     }
 
+    /// An unopened box or pack: the self-card of a sealed item, or a card
+    /// whose catalog product is sealed.
+    static func isSealed(_ card: OwnedCard, hit: SearchHit?) -> Bool {
+        card.isSealedSelf || hit?.isSealed == true
+    }
+
     private func matches(_ card: OwnedCard) -> Bool {
         if !filter.tagKeys.isEmpty, filter.tagKeys.isDisjoint(with: Set(card.tags.map(TagKey.of))) { return false }
         if !filter.confidences.isEmpty, !filter.confidences.contains(card.matchConfidence) { return false }
@@ -363,6 +371,7 @@ final class InventoryModel {
         if filter.hideBulk, card.isBulk { return false }
         if filter.personalOnly, !card.isPersonalCollection { return false }
         if filter.noPurchaseOnly, card.sourceItem?.purchase != nil { return false }
+        if filter.kind != .all, (filter.kind == .sealed) != Self.isSealed(card, hit: hits[card.productId]) { return false }
         return true
     }
 }

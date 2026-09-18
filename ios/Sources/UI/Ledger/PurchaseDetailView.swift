@@ -95,6 +95,11 @@ struct PurchaseDetailView: View {
                     } label: {
                         Label("Scan singles from this order", systemImage: "camera")
                     }
+                    Button {
+                        scanSingles(purchase, search: true)
+                    } label: {
+                        Label("Add singles from the catalog", systemImage: "magnifyingglass")
+                    }
                 } footer: {
                     Text("For cards you bought as singles. They are part of the buy, and the total splits over them. For what came out of a pack, rip the pack.")
                 }
@@ -278,9 +283,24 @@ struct PurchaseDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            HStack(spacing: 16) {
-                Button("Scan more pulls") { scanPulls(rip.home) }
-                Button("Add pulls from inventory…") { pullsTarget = rip.home }
+            Menu {
+                Button {
+                    scanPulls(rip.home)
+                } label: {
+                    Label("Scan them", systemImage: "camera")
+                }
+                Button {
+                    scanPulls(rip.home, search: true)
+                } label: {
+                    Label("Search the catalog", systemImage: "magnifyingglass")
+                }
+                Button {
+                    pullsTarget = rip.home
+                } label: {
+                    Label("From inventory…", systemImage: "rectangle.stack")
+                }
+            } label: {
+                Label("Add pulls", systemImage: "plus.circle")
             }
             .buttonStyle(.borderless)
             .font(.callout)
@@ -290,22 +310,23 @@ struct PurchaseDetailView: View {
 
     /// Start a session already attached to this purchase, so the commit sheet
     /// has nothing left to ask. Its cards are part of the buy.
-    private func scanSingles(_ purchase: Purchase) {
+    /// `search` opens it with the catalog search showing, in place of the camera.
+    private func scanSingles(_ purchase: Purchase, search: Bool = false) {
         let session = ScanSession()
         session.purchase = purchase
         modelContext.insert(session)
         try? modelContext.save()
-        launcher.session = session
+        launcher.open(session, search: search)
     }
 
     /// More pulls for a rip that already committed. They join its home line.
-    private func scanPulls(_ home: PurchaseItem) {
+    private func scanPulls(_ home: PurchaseItem, search: Bool = false) {
         let session = ScanSession()
         session.purchase = home.purchase
         session.ripTarget = home
         modelContext.insert(session)
         try? modelContext.save()
-        launcher.session = session
+        launcher.open(session, search: search)
     }
 }
 

@@ -184,6 +184,26 @@ final class ScanSessionModel {
         save()
     }
 
+    /// Logs a card he found by name in the catalog, in place of the camera.
+    /// It joins the session like a scanned card, so the commit treats it the
+    /// same: a purchase line, or a pull of the rip. He picked it, so it is
+    /// `.manual` and needs no review.
+    func add(_ hit: SearchHit) async {
+        hits[hit.productId] = hit
+        let card = OwnedCard(productId: hit.productId, printing: session.defaultPrinting ?? "", condition: session.defaultCondition, confidence: .manual)
+        card.candidateProductIds = [hit.productId]
+        card.scanSession = session
+        context.insert(card)
+        session.observe(groupId: hit.groupId)
+        save()
+        await loadPrices(for: [hit.productId])
+        let available = availablePrintings(for: card)
+        if !available.contains(card.printing) {
+            card.printing = PrintingRules.choose(available: available, rarity: hit.rarity, sessionDefault: session.defaultPrinting).printing
+            save()
+        }
+    }
+
     /// Logs the newest card again. For the copies he really does own.
     func duplicateLast() {
         guard let last = cards.first else { return }

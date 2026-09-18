@@ -5,6 +5,8 @@ import SwiftUI
 /// session defaults in one row. Nothing here blocks the scanner.
 struct ScanSessionView: View {
     let session: ScanSession
+    /// Open with the catalog search showing, for a stack he would rather type.
+    var startWithSearch = false
     var onClose: () -> Void
 
     @Environment(\.modelContext) private var modelContext
@@ -13,6 +15,7 @@ struct ScanSessionView: View {
     @State private var correcting: OwnedCard?
     @State private var showReview = false
     @State private var showDiscard = false
+    @State private var searching = false
     @State private var simulatedText = ""
     @State private var captureCount = 0
     @State private var capturing = false
@@ -85,6 +88,7 @@ struct ScanSessionView: View {
                 // happen while he is holding a card over the lens.
                 Task { await m.loadArtIndex() }
                 applyDebugScans(m)
+                if startWithSearch { searching = true }
             }
         }
         .onDisappear {
@@ -93,6 +97,11 @@ struct ScanSessionView: View {
         .sheet(item: $correcting) { card in
             if let model {
                 CardCorrectionView(card: card, model: model)
+            }
+        }
+        .sheet(isPresented: $searching) {
+            if let model {
+                ScanCatalogSheet(model: model)
             }
         }
     }
@@ -126,7 +135,7 @@ struct ScanSessionView: View {
             #if os(iOS)
             if CameraScannerView.isSupported {
                 CameraScannerView(
-                    isActive: correcting == nil && !showReview,
+                    isActive: correcting == nil && !showReview && !searching,
                     mode: scanMode,
                     captureCount: captureCount,
                     onObservation: { observation in model.handle(observation) },
@@ -178,6 +187,15 @@ struct ScanSessionView: View {
                         }
                     }
                     Spacer()
+                    // The camera's other half: a card it will not read, or
+                    // one he would rather type.
+                    Button {
+                        searching = true
+                    } label: {
+                        Label("Search", systemImage: "magnifyingglass")
+                            .font(.subheadline)
+                    }
+                    .buttonStyle(.bordered)
                     Button {
                         model.duplicateLast()
                     } label: {

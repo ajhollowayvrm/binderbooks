@@ -10,4 +10,13 @@ import Observation
 @Observable
 final class ScannerLauncher {
     var session: ScanSession?
+    /// True when the session opens with the catalog search showing, for a
+    /// button that adds by name. Cleared when the scanner closes.
+    var startWithSearch = false
+
+    /// Opens `session`. `search` opens it with the catalog search showing.
+    func open(_ session: ScanSession, search: Bool = false) {
+        startWithSearch = search
+        self.session = session
+    }
 }
