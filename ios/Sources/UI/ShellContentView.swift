@@ -26,11 +26,14 @@ struct ShellContentView: View {
             // Both states read the inventory caches, so the wiring lives here.
             // A launch straight into a query must still answer with art and
             // prices for the cards he owns.
-            .task(id: catalog.database?.path) {
+            // Keyed on the swap count too: a swap keeps the file's path, and a
+            // price refresh changes only the prices.
+            .task(id: "\(catalog.database?.path ?? "")#\(catalog.version)") {
                 inventory.database = { [weak catalog] in catalog?.database }
-                if inventory.catalogPath != catalog.database?.path {
+                let key = "\(catalog.database?.path ?? "")#\(catalog.version)"
+                if inventory.catalogPath != key {
                     inventory.invalidate()
-                    inventory.catalogPath = catalog.database?.path
+                    inventory.catalogPath = key
                 }
                 await inventory.load(for: committed)
             }

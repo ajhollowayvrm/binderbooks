@@ -1,5 +1,5 @@
+import SwiftData
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// First run. The app is useless without a catalog, so this is the whole screen
 /// until the download finishes.
@@ -50,6 +50,7 @@ struct CatalogSetupView: View {
 /// Installed catalog details and a manual check. Reached from the toolbar.
 struct CatalogStatusView: View {
     @Environment(CatalogController.self) private var catalog
+    @Query private var cards: [OwnedCard]
 
     var body: some View {
         List {
@@ -103,7 +104,18 @@ struct CatalogStatusView: View {
             } footer: {
                 Text("The app also checks on every launch. A new catalog is published daily at about 21:30 UTC.")
             }
+
+            Section {
+                PriceRefreshButton(productIds: pricedIds, inMenu: false)
+            } header: {
+                Text("Prices")
+            } footer: {
+                Text("New prices for the sets you own, from TCGCSV. It updates once a day, so Refresh is on only when it has newer prices. New cards and sets still come with a new catalog.")
+            }
         }
         .navigationTitle("Catalog")
+        .task { await catalog.checkPrices(for: pricedIds) }
     }
+
+    private var pricedIds: [Int] { PriceRefresh.productIds(of: cards) }
 }

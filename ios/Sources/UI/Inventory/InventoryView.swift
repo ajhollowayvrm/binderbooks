@@ -13,6 +13,7 @@ struct InventoryView: View {
     @Environment(RecentlyViewed.self) private var recents
     @Environment(\.modelContext) private var modelContext
     @Environment(InventorySelection.self) private var selection
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var cards: [OwnedCard]
     @State private var allSets: [SetSummary] = []
     @State private var showSetPicker = false
@@ -25,6 +26,7 @@ struct InventoryView: View {
     private var rows: [InventoryRow] { model.rows(from: cards, query: query) }
     private var tagUses: [TagUse] { model.tagUses(in: cards) }
     private var committed: [OwnedCard] { cards.filter(\.isCommitted) }
+    private var pricedIds: [Int] { PriceRefresh.productIds(of: cards) }
 
     var body: some View {
         let rows = rows
@@ -37,6 +39,9 @@ struct InventoryView: View {
             if !catalog.isReady {
                 catalogBanner
             }
+            if case .refreshing(let done, let total) = catalog.priceState {
+                refreshingBanner(done: done, total: total)
+            }
             HStack(spacing: 0) {
                 filterRow
                 CardLayoutButton(layout: $layout, accessory: AnyView(sortMenu))
@@ -48,6 +53,17 @@ struct InventoryView: View {
         // nothing until the next launch.
         .onChange(of: defaultSort) { _, sort in
             model.sort = sort
+        }
+        // One small request to TCGCSV, so Refresh prices is enabled only when
+        // it would change something. Again on return to the app, because
+        // TCGCSV updates once a day and the app can stay open across it.
+        .task(id: catalog.version) {
+            await catalog.checkPrices(for: pricedIds)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            if let checked = catalog.pricesCheckedAt, Date().timeIntervalSince(checked) < 15 * 60 { return }
+            Task { await catalog.checkPrices(for: pricedIds) }
         }
         .navigationBarTitleDisplayMode(.inline)
         .inventorySelectionChrome(rows: rows)
@@ -219,6 +235,19 @@ struct InventoryView: View {
 
     // MARK: - Header
 
+    private func refreshingBanner(done: Int, total: Int) -> some View {
+        HStack(spacing: 8) {
+            ProgressView(value: Double(done), total: Double(max(total, 1)))
+                .frame(width: 80)
+            Text("Refreshing prices: \(done) of \(total) sets")
+                .font(.footnote)
+                .monospacedDigit()
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+    }
+
     private var catalogBanner: some View {
         NavigationLink(value: AppRoute.catalogStatus) {
             HStack(spacing: 8) {
@@ -277,6 +306,9 @@ struct InventoryView: View {
                 ForEach(InventorySort.allCases) { sort in
                     Text(sort.title).tag(sort)
                 }
+            }
+            Section {
+                PriceRefreshButton(productIds: pricedIds)
             }
             // Here, not in the top bar. The plus took that place.
             Section {

@@ -33,6 +33,25 @@ final class CatalogController {
     /// signatures in it belong to that file.
     private(set) var artIndex: ArtIndex?
 
+    /// Goes up by one on every swap. The live file keeps its path through a
+    /// swap, so a cache keyed on the path would never see the new catalog.
+    private(set) var version = 0
+
+    /// Whether TCGCSV has prices newer than the ones on his cards.
+    enum PriceState: Equatable {
+        case unknown
+        case checking
+        /// Nothing newer. TCGCSV's last update, "2026-09-17".
+        case current(String)
+        /// TCGCSV is newer than the oldest price on his cards.
+        case available(source: String, oldest: String)
+        case refreshing(done: Int, total: Int)
+        case failed(String)
+    }
+
+    private(set) var priceState: PriceState = .unknown
+    private(set) var pricesCheckedAt: Date?
+
     private var artIndexTask: Task<ArtIndex?, Never>?
     private var locations: CatalogLocations?
     private var updater: CatalogUpdater?
@@ -99,6 +118,89 @@ final class CatalogController {
         exclusiveUsers = max(0, exclusiveUsers - 1)
         if exclusiveUsers == 0 {
             Task { await applyPendingIfPossible() }
+        }
+    }
+
+    // MARK: - Prices
+
+    /// Asks TCGCSV for its last update and compares it with the oldest price
+    /// on these products. Cheap: one small request and one query.
+    func checkPrices(for productIds: [Int]) async {
+        if case .refreshing = priceState { return }
+        guard let database else { return }
+        priceState = .checking
+        do {
+            let source = try await PriceRefresh.sourceDate()
+            let ids = productIds
+            let oldest = try await database.asyncRead { db in try PriceRefresh.oldestPriceDate(db, productIds: ids) }
+            pricesCheckedAt = Date()
+            if let oldest, source > oldest {
+                priceState = .available(source: source, oldest: oldest)
+            } else {
+                priceState = .current(source)
+            }
+        } catch {
+            priceState = .failed(error.localizedDescription)
+        }
+    }
+
+    /// New prices for every set these products are in. Runs only when the
+    /// last check found TCGCSV newer, because otherwise it returns the same
+    /// prices it replaces.
+    func refreshPrices(for productIds: [Int]) async {
+        guard case .available(let source, _) = priceState else { return }
+        guard exclusiveUsers == 0 else {
+            priceState = .failed("End the scan session, then refresh the prices.")
+            return
+        }
+        guard let database, let locations else { return }
+        do {
+            let ids = productIds
+            let groups = try await database.asyncRead { db in try PriceRefresh.groups(db, productIds: ids) }
+            priceState = .refreshing(done: 0, total: groups.count)
+            var rows: [PriceRefresh.PriceRow] = []
+            try await withThrowingTaskGroup(of: [PriceRefresh.PriceRow].self) { tasks in
+                var next = groups.makeIterator()
+                for _ in 0..<PriceRefresh.parallelDownloads {
+                    guard let group = next.next() else { break }
+                    tasks.addTask { try await PriceRefresh.prices(for: group) }
+                }
+                var done = 0
+                while let found = try await tasks.next() {
+                    rows += found
+                    done += 1
+                    priceState = .refreshing(done: done, total: groups.count)
+                    if let group = next.next() {
+                        tasks.addTask { try await PriceRefresh.prices(for: group) }
+                    }
+                }
+            }
+
+            // A scan may have started while the prices downloaded.
+            guard exclusiveUsers == 0 else {
+                priceState = .failed("End the scan session, then refresh the prices.")
+                return
+            }
+            let copy = locations.scratch.appendingPathComponent("catalog-prices.sqlite")
+            let fetched = rows
+            let copied = version
+            try await Task.detached(priority: .userInitiated) {
+                let fm = FileManager.default
+                try? fm.removeItem(at: copy)
+                try fm.copyItem(at: locations.live, to: copy)
+                try PriceRefresh.apply(fetched, groups: groups, asOf: source, to: copy)
+            }.value
+            // A download that swapped in during the copy would be undone by
+            // this swap. The copy is of the old file, so it must not go live.
+            guard version == copied, let manifest = installedManifest else {
+                priceState = .failed("The catalog changed during the refresh. Refresh again.")
+                return
+            }
+            try await swap(in: copy, manifest: manifest)
+            priceState = .current(source)
+            pricesCheckedAt = Date()
+        } catch {
+            priceState = .failed(error.localizedDescription)
         }
     }
 
@@ -193,5 +295,6 @@ final class CatalogController {
         }
         pendingManifest = nil
         try openInstalled()
+        version += 1
     }
 }
