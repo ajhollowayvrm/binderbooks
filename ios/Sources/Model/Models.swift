@@ -264,7 +264,7 @@ final class OwnedCard {
     var sourceRef: String = ""
 
     /// A card that is not in the catalog, which he entered by hand. TCGplayer
-    /// does not carry Chinese or Italian prints, so these cards have no
+    /// does not carry Italian or Korean prints, so these cards have no
     /// `productId`. These fields are the only card name the store holds. They
     /// stay empty on every catalog card. See docs/02-data-model.md.
     var manualName: String = ""

@@ -32,10 +32,6 @@ final class CatalogController {
     /// once per card. Dropped when the catalog file is replaced: the
     /// signatures in it belong to that file.
     private(set) var artIndex: ArtIndex?
-    /// The Simplified Chinese catalog he imported, if any. See `ChineseCatalog`.
-    private(set) var chinese: ChineseCatalog.Info?
-    /// True while an import or a removal rewrites the live catalog.
-    private(set) var isChangingChinese = false
 
     private var artIndexTask: Task<ArtIndex?, Never>?
     private var locations: CatalogLocations?
@@ -57,8 +53,6 @@ final class CatalogController {
             state = .failed(error.localizedDescription)
             return
         }
-        loadChineseInfo()
-        await mergeChineseIfMissing()
         await applyPendingIfPossible()
         await check()
     }
@@ -105,63 +99,6 @@ final class CatalogController {
         exclusiveUsers = max(0, exclusiveUsers - 1)
         if exclusiveUsers == 0 {
             Task { await applyPendingIfPossible() }
-        }
-    }
-
-    // MARK: - Simplified Chinese
-
-    /// Take a Chinese catalog from Files, keep a copy, and add its cards to the
-    /// live catalog. A file imported before is replaced.
-    func importChinese(from source: URL) async {
-        guard let locations else { return }
-        guard exclusiveUsers == 0 else {
-            lastError = "End the scan session, then import the Chinese catalog."
-            return
-        }
-        isChangingChinese = true
-        defer { isChangingChinese = false }
-        lastError = nil
-        let staged = locations.scratch.appendingPathComponent("chinese-import.sqlite")
-        do {
-            try await Task.detached(priority: .userInitiated) {
-                try Self.copyFromFiles(source, to: staged)
-                _ = try ChineseCatalog.inspect(staged)
-            }.value
-            let fm = FileManager.default
-            if fm.fileExists(atPath: locations.chinese.path) {
-                _ = try fm.replaceItemAt(locations.chinese, withItemAt: staged)
-            } else {
-                try fm.moveItem(at: staged, to: locations.chinese)
-            }
-            loadChineseInfo()
-            // The kept copy is the source of truth. If the rewrite fails, the
-            // next launch finds the live catalog without these cards and
-            // merges them then.
-            try await rewriteLive(with: locations.chinese)
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    /// Take the Chinese cards out of the live catalog and forget the file.
-    ///
-    /// Cards he already logged keep their product ids. They show as not
-    /// identified until a Chinese catalog is imported again.
-    func removeChinese() async {
-        guard let locations else { return }
-        guard exclusiveUsers == 0 else {
-            lastError = "End the scan session, then remove the Chinese cards."
-            return
-        }
-        isChangingChinese = true
-        defer { isChangingChinese = false }
-        lastError = nil
-        do {
-            try await rewriteLive(with: nil)
-            try? FileManager.default.removeItem(at: locations.chinese)
-            chinese = nil
-        } catch {
-            lastError = error.localizedDescription
         }
     }
 
@@ -239,24 +176,8 @@ final class CatalogController {
     /// Close the live handle, replace the file, reopen. Nothing reads the catalog
     /// between close and reopen. Callers on the main actor see `database == nil`
     /// for that moment only.
-    ///
-    /// A downloaded catalog holds no Chinese cards. `mergingChinese` adds the
-    /// ones he imported before the file goes live, so the catalog is never
-    /// without them.
-    private func swap(in verified: URL, manifest: CatalogManifest, mergingChinese: Bool = true) async throws {
+    private func swap(in verified: URL, manifest: CatalogManifest) async throws {
         guard let updater else { return }
-        if mergingChinese, let locations, FileManager.default.fileExists(atPath: locations.chinese.path) {
-            let chineseFile = locations.chinese
-            do {
-                try await Task.detached(priority: .userInitiated) {
-                    try ChineseCatalog.apply(chineseFile, to: verified)
-                }.value
-            } catch {
-                // The catalog installs without them, and the next launch
-                // merges them again.
-                lastError = "The Chinese cards did not merge: \(error.localizedDescription)"
-            }
-        }
         let old = database
         database = nil
         artIndex = nil
@@ -272,61 +193,5 @@ final class CatalogController {
         }
         pendingManifest = nil
         try openInstalled()
-    }
-
-    private func loadChineseInfo() {
-        guard let locations, FileManager.default.fileExists(atPath: locations.chinese.path) else {
-            chinese = nil
-            return
-        }
-        chinese = try? ChineseCatalog.inspect(locations.chinese)
-    }
-
-    /// A catalog installed before the import, or one whose merge failed, lacks
-    /// the cards in the kept Chinese file. Add them.
-    private func mergeChineseIfMissing() async {
-        guard let database, let chinese, let locations, exclusiveUsers == 0 else { return }
-        let merged = try? await database.asyncRead { db in try ChineseCatalog.mergedBuiltAt(db) }
-        guard merged != chinese.builtAt else { return }
-        do {
-            try await rewriteLive(with: locations.chinese)
-        } catch {
-            lastError = "The Chinese cards did not merge: \(error.localizedDescription)"
-        }
-    }
-
-    /// Copy the live catalog, replace its Chinese rows, and swap the copy in.
-    private func rewriteLive(with chineseFile: URL?) async throws {
-        guard let locations, let manifest = installedManifest,
-              FileManager.default.fileExists(atPath: locations.live.path)
-        else { throw ChineseCatalog.Failure.noCatalog }
-        let copy = locations.scratch.appendingPathComponent("catalog-rewrite.sqlite")
-        try await Task.detached(priority: .userInitiated) {
-            let fm = FileManager.default
-            try? fm.removeItem(at: copy)
-            try fm.copyItem(at: locations.live, to: copy)
-            try ChineseCatalog.apply(chineseFile, to: copy)
-        }.value
-        try await swap(in: copy, manifest: manifest, mergingChinese: false)
-    }
-
-    /// Files hands over a URL outside the sandbox, and Box may still have to
-    /// download the file. The coordinator waits for the bytes.
-    nonisolated private static func copyFromFiles(_ source: URL, to destination: URL) throws {
-        let scoped = source.startAccessingSecurityScopedResource()
-        defer { if scoped { source.stopAccessingSecurityScopedResource() } }
-        let fm = FileManager.default
-        try? fm.removeItem(at: destination)
-        var coordination: NSError?
-        var copying: Error?
-        NSFileCoordinator().coordinate(readingItemAt: source, options: .withoutChanges, error: &coordination) { url in
-            do {
-                try fm.copyItem(at: url, to: destination)
-            } catch {
-                copying = error
-            }
-        }
-        if let coordination { throw coordination }
-        if let copying { throw copying }
     }
 }

@@ -14,8 +14,6 @@ final class ScanSessionModel {
     /// Catalog rows for every product the session touches, by productId.
     private(set) var hits: [Int: SearchHit] = [:]
     private(set) var prices: [Int: [ProductPrice]] = [:]
-    /// Chinese cards with no eBay sales on PikaQian. They never get a price.
-    private(set) var noSales: Set<Int> = []
     private(set) var inFlight = 0
     private(set) var lastError: String?
     /// Copies already in inventory, by productId, then printing. Read once when
@@ -50,12 +48,6 @@ final class ScanSessionModel {
             return exact
         }
         return rows.compactMap(\.valueCents).min()
-    }
-
-    /// True when the card has no price because it has no eBay sales, not
-    /// because no one priced it yet.
-    func hasNoSales(_ card: OwnedCard) -> Bool {
-        marketCents(for: card) == nil && noSales.contains(card.productId)
     }
 
     // MARK: - Copies he already holds
@@ -175,10 +167,6 @@ final class ScanSessionModel {
         card.candidateProductIds = result.candidates.map(\.productId)
         card.scanSession = session
         context.insert(card)
-        // Only a Chinese session takes a photo, for the card's eBay listing.
-        if let photo = observation.photoJPEG {
-            try? CardPhotoStore.save(photo, for: card.id)
-        }
         if let hit = result.hit, result.confidence <= .likely {
             session.observe(groupId: hit.groupId)
         }
@@ -207,7 +195,6 @@ final class ScanSessionModel {
         copy.tags = last.tags
         copy.scanSession = session
         context.insert(copy)
-        CardPhotoStore.copy(from: last.id, to: copy.id)
         save()
     }
 
@@ -291,7 +278,6 @@ final class ScanSessionModel {
     }
 
     func delete(_ cards: [OwnedCard]) {
-        CardPhotoStore.remove(cards.map(\.id))
         for card in cards { context.delete(card) }
         save()
     }
@@ -372,8 +358,6 @@ final class ScanSessionModel {
     func discard() {
         // A rip that never committed leaves the packs sealed, as they were.
         if let target = session.ripTarget { RipPool.release(target, context: context) }
-        // The cascade deletes the cards. Their photos are files, so they go here.
-        CardPhotoStore.remove(session.cards.map(\.id))
         context.delete(session)
         save()
     }
@@ -395,9 +379,6 @@ final class ScanSessionModel {
         guard !missing.isEmpty, let db = catalog.database else { return }
         if let rows = try? await CatalogSearch(database: db).prices(for: missing) {
             for id in missing { prices[id] = rows[id] ?? [] }
-        }
-        if let none = try? await db.asyncRead({ try ChineseCatalog.cardsWithNoSales($0, among: missing) }) {
-            noSales.formUnion(none)
         }
     }
 

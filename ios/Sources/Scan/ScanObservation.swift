@@ -46,9 +46,6 @@ struct ScanObservation: Equatable, Sendable {
     /// and not others, and the sharpest is the one worth comparing. Blur is the
     /// only thing that measurably costs artwork accuracy.
     var artSharpness: Double = 0
-    /// A JPEG of the straightened card, from the frame that was signed. Only a
-    /// Chinese session takes one: see `CardPhotoStore`.
-    var photoJPEG: Data?
 
     /// Text is still what makes an observation worth logging. A frame that held
     /// a card but no readable text has nothing to look the card up by yet.
@@ -73,16 +70,13 @@ struct RecognizedText: Equatable, Sendable {
 /// tallest string near the top of the card. Everything else is noise.
 enum FrameInterpreter {
     private static let numberPatterns: [Regex<AnyRegexOutput>] = [
-        // A Chinese card prints its rarity letter against the total, and Vision
-        // reads "071/129C" as one word. The letter is not part of the number.
+        // A rarity letter printed against the total reads as one word with
+        // it: "071/129C". The letter is not part of the number.
         try! Regex(#"\b\d{1,3}\s*/\s*\d{1,3}(?=[A-Z]?\b)"#),
         try! Regex(#"\b\d{1,3}\s*/\s*[A-Z]{1,3}-?[A-Z]{0,3}\b"#),
         try! Regex(#"\b(?:SWSH|SVP|SM|XY|BW|DP|HGSS|MEP|ME)\s?\d{1,3}[a-z]?\b"#),
         try! Regex(#"\b(?:BT|EX|ST|LM|RB|P)-?\d{1,2}-\d{3}\b"#),
         try! Regex(#"\b[A-Z]{2,3}\d{2}[A-Z]{2}/[A-Z]{2,5}-\d{1,2}-(?:AP)?\d{2,3}\b"#),
-        // A Simplified Chinese Gem Pack card: slot 01, art 07 of 7 prints "0107/07".
-        // The symbol printed after the total can read as a digit: "1302/074".
-        try! Regex(#"\b\d{4}\s*/\s*\d{2}(?=\d?[A-Z]?\b)"#),
     ]
 
     /// Digits, optionally with a space around the slash. OCR reads "114/ 084".
@@ -200,11 +194,9 @@ enum FrameInterpreter {
     private static let trailingNumber = #/^(?<name>.+?)\s+\d{2,3}$/#
 
     static func isPlausibleName(_ text: String) -> Bool {
-        // A Chinese name is two characters as often as three: 耿鬼 is Gengar.
-        let shortest = isJapanese(text) ? 2 : 3
-        guard text.count >= shortest, text.count <= 32 else { return false }
+        guard text.count >= 3, text.count <= 32 else { return false }
         let letters = text.filter(\.isLetter).count
-        guard letters >= shortest, letters * 2 >= text.count else { return false }
+        guard letters >= 3, letters * 2 >= text.count else { return false }
         let upper = text.uppercased()
         if upper.hasPrefix("BASIC") || upper.hasPrefix("STAGE") || upper.hasPrefix("TRAINER") || upper.hasPrefix("ILLUS") { return false }
         if upper.contains("POKÉMON") || upper.contains("POKEMON") { return false }
@@ -244,27 +236,22 @@ enum FrameInterpreter {
 enum ScanLanguage: String, CaseIterable, Sendable {
     case english = "en"
     case japanese = "ja"
-    /// Simplified Chinese. These cards come from the Chinese catalog he
-    /// imports, not from TCGplayer: see `ChineseCatalog`.
-    case chineseSimplified = "zh-Hans"
 
     var title: String {
         switch self {
         case .english: return "English"
         case .japanese: return "Japanese"
-        case .chineseSimplified: return "Chinese"
         }
     }
 
     /// What Vision is allowed to recognise. Only the language he chose, because
     /// every language added is another alphabet for glare to be misread as.
-    /// A Japanese or a Chinese card keeps English too: it prints its collector
+    /// A Japanese card keeps English too: it prints its collector
     /// number in ASCII, and that number is the strongest key the matcher has.
     var recognitionLanguages: [String] {
         switch self {
         case .english: return ["en"]
         case .japanese: return ["ja", "en"]
-        case .chineseSimplified: return ["zh-Hans", "en"]
         }
     }
 
@@ -273,7 +260,6 @@ enum ScanLanguage: String, CaseIterable, Sendable {
         switch self {
         case .english: return TCGCategory.pokemon
         case .japanese: return TCGCategory.pokemonJapan
-        case .chineseSimplified: return TCGCategory.pokemonChinese
         }
     }
 }

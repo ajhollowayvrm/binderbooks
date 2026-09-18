@@ -43,7 +43,7 @@ enum OwnedCardMatcher {
         }
         // A hand-entered card has no hit. Its own name, set, number, and
         // language take the place of the catalog's. `NameCleaner` keeps Han
-        // characters, so a Chinese name matches the Chinese text he types.
+        // characters, so a name in Han characters matches the same text typed.
         if !card.manualName.isEmpty { parts.append(NameCleaner.clean(card.manualName)) }
         if !card.manualSetName.isEmpty { parts.append(NameCleaner.clean(card.manualSetName)) }
         if !card.manualNumber.isEmpty { parts.append(card.manualNumber.lowercased()) }

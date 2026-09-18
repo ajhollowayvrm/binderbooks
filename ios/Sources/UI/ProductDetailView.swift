@@ -124,12 +124,8 @@ struct ProductDetailView: View {
                 }
                 LabeledContent("Printings", value: "\(detail.hit.printingCount)")
                 LabeledContent("Product ID", value: "\(detail.hit.productId)")
-                // A Chinese card's id is PikaQian's, filed by the Mac build. It
-                // opens nothing on TCGplayer.
-                if detail.hit.categoryId != TCGCategory.pokemonChinese {
-                    Link(destination: detail.tcgplayerURL) {
-                        Label("Open on TCGplayer", systemImage: "arrow.up.right.square")
-                    }
+                Link(destination: detail.tcgplayerURL) {
+                    Label("Open on TCGplayer", systemImage: "arrow.up.right.square")
                 }
             }
         }

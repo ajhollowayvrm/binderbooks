@@ -46,38 +46,6 @@ enum Fixture {
         Product(id: 16, groupId: 108, categoryId: 3, name: "Tandemaus", number: "020/076", rarity: "Common", sealed: false, prices: [("Normal", 20)]),
     ]
 
-    // MARK: - Simplified Chinese
-
-    static let chineseGemPack = 1_000_000_900
-    static let chineseSetSix = 1_000_000_901
-    static let chinesePonyta = 1_000_000_101
-    static let chinesePonytaArtRare = 1_000_000_107
-    static let chineseSurskit = 1_000_000_201
-    static let chineseSurskitPokeBall = 1_000_000_202
-    static let chineseCharmander = 1_000_000_301
-    static let chineseStartDeck = 1_000_000_902
-    static let chineseMeowth = 1_000_000_401
-
-    /// Added by `make(chinese: true)`, the way `ChineseCatalog` merges them.
-    static let chineseProducts: [Product] = [
-        Product(id: chinesePonyta, groupId: chineseGemPack, categoryId: TCGCategory.pokemonChinese, name: "Ponyta", number: "0101/07", rarity: "Common", sealed: false, prices: [("Holofoil", 149)]),
-        Product(id: chinesePonytaArtRare, groupId: chineseGemPack, categoryId: TCGCategory.pokemonChinese, name: "Ponyta", number: "0107/07", rarity: "Triple Rare", sealed: false, prices: [("Holofoil", 16_434)]),
-        Product(id: chineseSurskit, groupId: chineseSetSix, categoryId: TCGCategory.pokemonChinese, name: "Surskit", number: "001/128", rarity: "Common", sealed: false, prices: [("Normal", 10)]),
-        Product(id: chineseSurskitPokeBall, groupId: chineseSetSix, categoryId: TCGCategory.pokemonChinese, name: "Surskit (Poke Ball Pattern)", number: "001/128", rarity: "Common", sealed: false, prices: [("Holofoil", 90)]),
-        // A Chinese card at an English card's number and name: Charmander,
-        // 026/197, the same as product 3.
-        Product(id: chineseCharmander, groupId: chineseSetSix, categoryId: TCGCategory.pokemonChinese, name: "Charmander", number: "026/197", rarity: "Common", sealed: false, prices: [("Normal", 25)]),
-        // A start deck card. It prints 330/414, and the build finds no total.
-        Product(id: chineseMeowth, groupId: chineseStartDeck, categoryId: TCGCategory.pokemonChinese, name: "Meowth", number: "330", rarity: nil, sealed: false, prices: [("Normal", 5)]),
-    ]
-
-    static let chineseNames: [Int: String] = [
-        chinesePonyta: "小火马", chinesePonytaArtRare: "小火马",
-        chineseSurskit: "溜溜糖球", chineseSurskitPokeBall: "溜溜糖球",
-        chineseCharmander: "小火龙",
-        chineseMeowth: "喵喵",
-    ]
-
     /// The catalog tables, as catalog/build_catalog.py writes them.
     static let ddl = """
     CREATE TABLE category (categoryId INTEGER PRIMARY KEY, name TEXT NOT NULL, displayName TEXT NOT NULL);
@@ -92,8 +60,7 @@ enum Fixture {
     """
 
     /// `path` writes the catalog to a file, for the tests that replace files.
-    /// `chinese` adds the Simplified Chinese cards.
-    static func make(path: String? = nil, chinese: Bool = false) throws -> DatabaseQueue {
+    static func make(path: String? = nil) throws -> DatabaseQueue {
         let queue: DatabaseQueue
         if let path {
             queue = try DatabaseQueue(path: path)
@@ -119,34 +86,15 @@ enum Fixture {
             100: "SV03: Obsidian Flames", 101: "Base Set", 102: "SWSH: Sword & Shield Promo Cards",
             103: "M6: Storm Emeralda", 104: "Timeless Bonds", 105: "SV04: Paradox Rift", 106: "SV08: Surging Sparks",
             107: "SV: Black Bolt", 108: "SV: Prismatic Evolutions",
-            chineseGemPack: "Gem Pack Vol 4", chineseSetSix: "Scarlet & Violet 6",
-            chineseStartDeck: "Start Deck 100",
         ]
-            if chinese {
-                try db.execute(sql: """
-                INSERT INTO category VALUES (\(TCGCategory.pokemonChinese), 'Pokemon Simplified Chinese', 'Pokemon Simplified Chinese');
-                INSERT INTO cardSet VALUES
-                    (\(chineseGemPack), \(TCGCategory.pokemonChinese), 'Gem Pack Vol 4', 'CBB4C', '2026-02-06'),
-                    (\(chineseSetSix), \(TCGCategory.pokemonChinese), 'Scarlet & Violet 6', 'CSV6C', '2025-05-30'),
-                    (\(chineseStartDeck), \(TCGCategory.pokemonChinese), 'Start Deck 100', 'CS4DAC', '2024-06-01');
-                CREATE TABLE productLocalName (productId INTEGER PRIMARY KEY, localName TEXT NOT NULL);
-                """)
-            }
-            for p in products + (chinese ? chineseProducts : []) {
+            for p in products {
                 let parsed = CollectorNumber.parse(p.number)
                 try db.execute(
                     sql: "INSERT INTO product VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?)",
                     arguments: [p.id, p.groupId, p.categoryId, p.name, NameCleaner.clean(p.name), p.number, parsed.numberNum, parsed.setTotal, parsed.setCode, p.rarity, p.sealed ? 1 : 0, max(1, p.prices.count)]
                 )
-                // A Chinese card's index text carries its Chinese name too, the
-                // way catalog/build_chinese.py writes it.
-                let local = chineseNames[p.id]
-                let searchName = local.map { "\(p.name) \($0)" } ?? p.name
-                if let local {
-                    try db.execute(sql: "INSERT INTO productLocalName VALUES (?, ?)", arguments: [p.id, local])
-                }
-                try db.execute(sql: "INSERT INTO product_fts(rowid, name, number, setName) VALUES (?, ?, ?, ?)", arguments: [p.id, searchName, p.number ?? "", setNames[p.groupId]!])
-                try db.execute(sql: "INSERT INTO product_trigram(rowid, name, number) VALUES (?, ?, ?)", arguments: [p.id, searchName, p.number ?? ""])
+                try db.execute(sql: "INSERT INTO product_fts(rowid, name, number, setName) VALUES (?, ?, ?, ?)", arguments: [p.id, p.name, p.number ?? "", setNames[p.groupId]!])
+                try db.execute(sql: "INSERT INTO product_trigram(rowid, name, number) VALUES (?, ?, ?)", arguments: [p.id, p.name, p.number ?? ""])
                 for (subType, cents) in p.prices {
                     try db.execute(sql: "INSERT INTO price VALUES (?, ?, ?, ?, ?, ?, NULL, '2026-09-10')", arguments: [p.id, subType, cents, cents, cents, cents])
                 }

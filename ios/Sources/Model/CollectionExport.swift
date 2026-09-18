@@ -372,10 +372,6 @@ enum CollectionExport {
         var report = Report()
 
         if mode == .replace {
-            // A card the file brings back keeps its photo. The rest are files
-            // the store no longer points at.
-            let kept = Set(file.cards.map(\.id))
-            let dropped = try context.fetch(FetchDescriptor<OwnedCard>()).map(\.id).filter { !kept.contains($0) }
             for expense in try context.fetch(FetchDescriptor<BusinessExpense>()) { context.delete(expense); report.deleted += 1 }
             for line in try context.fetch(FetchDescriptor<SaleLine>()) { context.delete(line); report.deleted += 1 }
             for sale in try context.fetch(FetchDescriptor<Sale>()) { context.delete(sale); report.deleted += 1 }
@@ -386,7 +382,6 @@ enum CollectionExport {
             for session in try context.fetch(FetchDescriptor<ScanSession>()) { context.delete(session); report.deleted += 1 }
             for purchase in try context.fetch(FetchDescriptor<Purchase>()) { context.delete(purchase); report.deleted += 1 }
             try context.save()
-            CardPhotoStore.remove(dropped)
         }
 
         var purchases = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<Purchase>()).map { ($0.id, $0) })

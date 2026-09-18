@@ -435,7 +435,7 @@ struct ScanSessionView: View {
                         Button {
                             correcting = card
                         } label: {
-                            ScannedSquare(card: card, hit: model.hit(for: card), marketCents: model.marketCents(for: card), heldCount: model.heldCount(for: card), noSales: model.hasNoSales(card))
+                            ScannedSquare(card: card, hit: model.hit(for: card), marketCents: model.marketCents(for: card), heldCount: model.heldCount(for: card))
                                 .frame(width: 88)
                         }
                         .buttonStyle(.plain)

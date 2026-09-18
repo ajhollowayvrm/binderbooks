@@ -41,10 +41,6 @@ BASE_URL = "https://tcgcsv.com/tcgplayer"
 # everything else by hand in the app.
 CATEGORY_NAMES = ["Pokemon", "Pokemon Japan"]
 
-# Words that mark a Chinese-language category. The job scans the full category
-# list for them and reports the result. It does not add them to the build.
-CHINESE_MARKERS = ("chinese", "china", "mandarin", "simplified", "traditional")
-
 # TCGCSV answers 401 to Python's default user agent. Send a descriptive one.
 USER_AGENT = "card-tracker-catalog-builder/1.0 (+https://github.com/ajhollowayvrm/binderbooks)"
 
@@ -314,10 +310,6 @@ def resolve_categories(all_categories: list[dict[str, Any]], names: Iterable[str
         available = ", ".join(sorted(c["name"] for c in all_categories))
         raise SystemExit(f"category names did not resolve: {missing}. Live names: {available}")
     return resolved
-
-
-def find_chinese_categories(all_categories: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [c for c in all_categories if any(m in c["name"].lower() for m in CHINESE_MARKERS)]
 
 
 def fetch_group(category_id: int, group: dict[str, Any]) -> GroupData:
@@ -616,12 +608,6 @@ def main(argv: list[str] | None = None) -> int:
     log(f"TCGCSV lists {len(all_categories)} categories")
     categories = resolve_categories(all_categories, CATEGORY_NAMES)
     log("resolved: " + ", ".join(f"{c['name']}={c['categoryId']}" for c in categories))
-
-    chinese = find_chinese_categories(all_categories)
-    if chinese:
-        log("Chinese-language categories found (not in the build): " + ", ".join(f"{c['name']}={c['categoryId']}" for c in chinese))
-    else:
-        log("No Chinese-language category exists on TCGCSV. TCGplayer does not carry Chinese cards.")
 
     data = fetch_everything(categories, log)
 

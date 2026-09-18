@@ -128,10 +128,6 @@ class CategoryTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             bc.resolve_categories(self.LIVE, ["Pokemon", "Digimon"])
 
-    def test_chinese_scan(self):
-        cats = self.LIVE + [{"categoryId": 99, "name": "Pokemon Chinese"}]
-        self.assertEqual([c["categoryId"] for c in bc.find_chinese_categories(cats)], [99])
-        self.assertEqual(bc.find_chinese_categories(self.LIVE), [])
 
 
 class SourceDateTests(unittest.TestCase):

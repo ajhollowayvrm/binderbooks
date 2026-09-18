@@ -146,7 +146,7 @@ struct ReviewView: View {
         } else {
             List(selection: $selection) {
                 ForEach(shown) { card in
-                    ReviewRow(card: card, hit: model.hit(for: card), marketCents: model.marketCents(for: card), heldCount: model.heldCount(for: card), noSales: model.hasNoSales(card))
+                    ReviewRow(card: card, hit: model.hit(for: card), marketCents: model.marketCents(for: card), heldCount: model.heldCount(for: card))
                         .contentShape(Rectangle())
                         .onTapGesture {
                             if !editMode.isEditing { correcting = card }
@@ -216,8 +216,6 @@ private struct ReviewRow: View {
     let hit: SearchHit?
     let marketCents: Int?
     let heldCount: Int
-    /// A Chinese card with no eBay sales, so it never gets a price.
-    var noSales: Bool = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -245,7 +243,7 @@ private struct ReviewRow: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
-                Text(marketCents?.asCurrency ?? (noSales ? "No sales" : "—"))
+                Text(marketCents?.asCurrency ?? "—")
                     .font(.body.monospacedDigit())
                 // The cost he set. Without it he cannot see which cards a
                 // total has already covered.

@@ -1,6 +1,5 @@
 import SwiftData
 import SwiftUI
-import UIKit
 
 /// One owned card: catalog data, the basis breakdown, the source purchase, and
 /// the edits that need no other model.
@@ -21,7 +20,6 @@ struct OwnedCardDetailView: View {
     var body: some View {
         if let card = cards.first {
             OwnedCardDetailBody(card: card, model: model, showDelete: $showDelete) {
-                CardPhotoStore.remove([card.id])
                 modelContext.delete(card)
                 try? modelContext.save()
                 dismiss()
@@ -54,7 +52,6 @@ private struct OwnedCardDetailBody: View {
     var body: some View {
         List {
             identity
-            photo
             sealed
             tags
             basis
@@ -111,22 +108,6 @@ private struct OwnedCardDetailBody: View {
             if ProcessInfo.processInfo.environment["CT_CHOOSE_PURCHASE"] == "1" { choosingPurchase = true }
         }
         #endif
-    }
-
-    /// The scan's photo of a Chinese card, for its eBay listing. Share offers
-    /// Save Image, which puts it in Photos for the eBay app.
-    @ViewBuilder private var photo: some View {
-        if let url = CardPhotoStore.existingURL(for: card.id), let image = UIImage(contentsOfFile: url.path) {
-            Section("Photo") {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: 360)
-                ShareLink(item: url) {
-                    Label("Share or save the photo", systemImage: "square.and.arrow.up")
-                }
-            }
-        }
     }
 
     private var identity: some View {

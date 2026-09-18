@@ -35,9 +35,6 @@ enum TCGplayerListingExport {
         case atGrader = "at a grader"
         case sold
         case notInCatalog = "not in the catalog"
-        /// A Simplified Chinese card. It is in the catalog, from PikaQian, but
-        /// TCGplayer has no SKU for it.
-        case notOnTCGplayer = "not sold on TCGplayer"
         case noPrinting = "no printing chosen"
         case unknownCondition = "condition TCGplayer does not use"
     }
@@ -47,7 +44,6 @@ enum TCGplayerListingExport {
     static func skipReason(for card: OwnedCard, hit: SearchHit?) -> SkipReason? {
         if CardTagIndex.isSold(card) { return .sold }
         guard card.isIdentified, let hit else { return .notInCatalog }
-        if hit.categoryId == TCGCategory.pokemonChinese { return .notOnTCGplayer }
         if card.isSlabbed { return .slab }
         if card.isSealedSelf || hit.isSealed { return .sealed }
         if card.isPersonalCollection { return .personal }

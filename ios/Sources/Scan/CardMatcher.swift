@@ -109,16 +109,12 @@ struct CardMatcher: Sendable {
         language: ScanLanguage? = nil
     ) throws -> MatchResult {
         let parsed = CollectorNumber.parse(observation.number)
-        // A Chinese session looks for the number among Chinese cards only. The
-        // query stops at 50 rows, and 001/128 is a card in English and Japanese
-        // sets too, which would otherwise fill it.
-        let chineseOnly = language == .chineseSimplified ? TCGCategory.pokemonChinese : nil
-        let numberHits = try numberCandidates(db, parsed: parsed, categoryId: chineseOnly)
+        let numberHits = try numberCandidates(db, parsed: parsed)
 
         // Which line on the card is its name? The frame cannot tell, so every
         // plausible line is tried and the catalog decides: an attack name is
         // not a card name, and the catalog holds every card name there is.
-        let (chosenName, nameHits) = try readName(db, observation: observation, numberHits: numberHits, language: language)
+        let (chosenName, nameHits) = try readName(db, observation: observation, numberHits: numberHits)
         let cleanedName = chosenName.map(NameCleaner.clean).flatMap { $0.isEmpty ? nil : $0 }
 
         let numberIds = Set(numberHits.map(\.productId))
@@ -137,7 +133,7 @@ struct CardMatcher: Sendable {
         // proposes too, against every signed card in the catalog, and a card
         // the words missed entirely can still reach the shortlist.
         let neighbours = observation.artDescriptor.flatMap { descriptor in
-            art.map { $0.nearest(to: descriptor, scope: artScope(for: language)) }
+            art.map { $0.nearest(to: descriptor) }
         } ?? []
         let artIds = Set(neighbours.map(\.productId))
         if !artIds.isEmpty {
@@ -168,28 +164,18 @@ struct CardMatcher: Sendable {
         // Japanese script proves a Japanese card, while no Japanese script
         // proves nothing, because glare hides every kana on a card often
         // enough and then the number is all that is left.
-        //
-        // Chinese is the strict one. A Chinese card shares its English
-        // counterpart's name, and often its number, so an English answer is
-        // nearly always on offer, and it always carries the wrong price. With
-        // no Chinese card to offer, nothing is assigned and the chip asks.
         switch language {
-        case .chineseSimplified:
-            merged = merged.filter { $0.categoryId == TCGCategory.pokemonChinese }
         case .japanese:
             let japanese = merged.filter { $0.categoryId == TCGCategory.pokemonJapan }
             if !japanese.isEmpty { merged = japanese }
         case .english:
-            let english = merged.filter { $0.categoryId != TCGCategory.pokemonJapan && $0.categoryId != TCGCategory.pokemonChinese }
+            let english = merged.filter { $0.categoryId != TCGCategory.pokemonJapan }
             if !english.isEmpty { merged = english }
         case nil:
             if observation.sawJapaneseText {
                 let japanese = merged.filter { $0.categoryId == TCGCategory.pokemonJapan }
                 if !japanese.isEmpty { merged = japanese }
             }
-            // A Chinese card is the answer only when he says he is scanning them.
-            let tcgplayer = merged.filter { $0.categoryId != TCGCategory.pokemonChinese }
-            if !tcgplayer.isEmpty { merged = tcgplayer }
         }
 
         guard !merged.isEmpty else {
@@ -632,17 +618,10 @@ struct CardMatcher: Sendable {
     /// "Scratch" finds a Scramble Switch and scores 0.53, so it loses to any
     /// line that names a real card. A line agreeing with the number wins
     /// outright, because that is two signals pointing the same way.
-    static func readName(_ db: Database, observation: ScanObservation, numberHits: [SearchHit], language: ScanLanguage? = nil) throws -> (String?, [SearchHit]) {
-        var read = observation.nameCandidates.isEmpty
+    static func readName(_ db: Database, observation: ScanObservation, numberHits: [SearchHit]) throws -> (String?, [SearchHit]) {
+        let read = observation.nameCandidates.isEmpty
             ? [observation.name].compactMap { $0 }
             : observation.nameCandidates
-        // A Chinese card's printed name is in the Chinese catalog's own table,
-        // so a Chinese line becomes the English name everything below reads.
-        // A line the table does not hold stays Chinese, and is dropped below.
-        let categoryId = language == .chineseSimplified ? TCGCategory.pokemonChinese : nil
-        if categoryId != nil {
-            read = try read.map { try englishName(db, printed: $0) ?? $0 }
-        }
         // A name printed in Japanese cannot match the catalog, which files the
         // card under its English name. Such a line is not a weak signal, it is
         // no signal, and scoring it dragged every Japanese card down to
@@ -661,7 +640,7 @@ struct CardMatcher: Sendable {
                 // The line names one of the number's cards. Two signals agree.
                 return (line, [])
             }
-            return (line, try nameCandidates(db, name: line, categoryId: categoryId))
+            return (line, try nameCandidates(db, name: line))
         }
 
         // Nothing he read is a card name. Fall back to the closest fuzzy match,
@@ -676,7 +655,7 @@ struct CardMatcher: Sendable {
                 return (line, [])
             }
 
-            let hits = try nameCandidates(db, name: line, categoryId: categoryId)
+            let hits = try nameCandidates(db, name: line)
             let score = hits.map { Similarity.dice(cleaned, $0.cleanName) }.max() ?? 0
             if best == nil || score > best!.score {
                 best = (line, hits, score)
@@ -711,27 +690,13 @@ struct CardMatcher: Sendable {
         try String.fetchAll(db, sql: "SELECT subTypeName FROM price WHERE productId = ? ORDER BY subTypeName", arguments: [productId])
     }
 
-    private static func numberCandidates(_ db: Database, parsed: CollectorNumber, categoryId: Int? = nil) throws -> [SearchHit] {
+    private static func numberCandidates(_ db: Database, parsed: CollectorNumber) throws -> [SearchHit] {
         guard let n = parsed.numberNum else { return [] }
-        var ids: [Int]
-        let category = categoryId.map { " AND categoryId = \($0)" } ?? ""
+        let ids: [Int]
         if let code = parsed.setCode {
-            ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setCode = ? AND numberNum = ? AND isSealed = 0\(category) LIMIT 50", arguments: [code, n])
+            ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setCode = ? AND numberNum = ? AND isSealed = 0 LIMIT 50", arguments: [code, n])
         } else if let total = parsed.setTotal {
-            ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setTotal = ? AND numberNum = ? AND isSealed = 0\(category) LIMIT 50", arguments: [total, n])
-            // A Chinese total comes from the Mac build, not from the card.
-            // Terastal Gathering prints 208 where the catalog held 207, and a
-            // start deck prints 330/414 where the catalog holds no total. With
-            // no exact hit, a Chinese card within one of the total, or with no
-            // total, is a candidate. The name and the picture decide.
-            if ids.isEmpty, categoryId == TCGCategory.pokemonChinese {
-                ids = try Int.fetchAll(db, sql: """
-                    SELECT productId FROM product
-                    WHERE numberNum = ? AND isSealed = 0 AND categoryId = ?
-                      AND (setTotal BETWEEN ? AND ? OR setTotal IS NULL)
-                    ORDER BY setTotal IS NULL, productId LIMIT 50
-                    """, arguments: [n, TCGCategory.pokemonChinese, total - 1, total + 1])
-            }
+            ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setTotal = ? AND numberNum = ? AND isSealed = 0 LIMIT 50", arguments: [total, n])
         } else {
             return []
         }
@@ -749,40 +714,9 @@ struct CardMatcher: Sendable {
         ) ?? false
     }
 
-    /// The English name of the card whose Chinese name is `printed`.
-    ///
-    /// Nil for a line with no Chinese in it, for a catalog with no Chinese
-    /// cards, and for a name no card carries. Vision misreads a character often
-    /// enough, and a near miss in Chinese is no near miss in English, so only
-    /// an exact name counts.
-    static func englishName(_ db: Database, printed: String) throws -> String? {
-        guard FrameInterpreter.isJapanese(printed), try db.tableExists("productLocalName") else { return nil }
-        let trimmed = printed.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Vision reads some characters in their Traditional form: 夢 for the
-        // 梦 in 梦歌仙人掌, Cacturne. The catalog holds only Simplified names.
-        let text = trimmed.applyingTransform(StringTransform("Hant-Hans"), reverse: false) ?? trimmed
-        // The plain card first: "Surskit", not "Surskit (Poke Ball Pattern)".
-        guard let name = try String.fetchOne(db, sql: """
-            SELECT p.name FROM productLocalName l JOIN product p ON p.productId = l.productId
-            WHERE l.localName = ? ORDER BY instr(p.name, '(') > 0, p.productId LIMIT 1
-            """, arguments: [text])
-        else { return nil }
-        let cut = [name.firstIndex(of: "("), name.firstIndex(of: "[")].compactMap { $0 }.min()
-        return cut.map { String(name[..<$0]).trimmingCharacters(in: .whitespaces) } ?? name
-    }
-
-    /// Where the artwork shortlist may look. See `ArtIndex.Scope`.
-    static func artScope(for language: ScanLanguage?) -> ArtIndex.Scope {
-        language == .chineseSimplified ? .only(TCGCategory.pokemonChinese) : .excluding(TCGCategory.pokemonChinese)
-    }
-
-    /// The English and the Japanese catalogs hold dozens of cards called
-    /// Ponyta, so the candidate cap would drop every Chinese one. A Chinese
-    /// session asks among Chinese cards only.
-    private static func nameCandidates(_ db: Database, name: String, categoryId: Int? = nil) throws -> [SearchHit] {
+    private static func nameCandidates(_ db: Database, name: String) throws -> [SearchHit] {
         var filter = SearchFilter()
         filter.kind = .singles
-        if let categoryId { filter.categoryIds = [categoryId] }
         // By relevance, not by value. The candidate cap must never drop the
         // closest name in favour of a dearer card that reads like it.
         let request = SearchRequest(text: name, context: .scanning, filter: filter, ranking: .byRelevance)

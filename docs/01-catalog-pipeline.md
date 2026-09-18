@@ -54,11 +54,11 @@ what you find in the job log. If one exists, add it. If not, note it — the ass
 is that TCGplayer doesn't carry Chinese, but that should be verified from the
 endpoint rather than believed.
 
-**Amended 2026-09-14:** AJ has about 500 Simplified Chinese cards to scan and price
-for eBay. He approved PikaQian as a second source, for those cards only. The Mac
-builds a separate `chinese-catalog.sqlite`, which never goes to the public release.
-The app imports it and merges it into the live catalog. See "The Simplified Chinese
-catalog" in `catalog/README.md`.
+**Amended 2026-09-17:** the Chinese category scan is removed. It ran on every build
+from 2026-09-10 and never found a Chinese category. From 2026-09-14 to 2026-09-17 a
+second source, PikaQian, supplied a separate Simplified Chinese catalog. AJ dropped
+it: Simplified Chinese cards rarely sell, so PikaQian had too few prices to decide
+which cards to list. See "Simplified Chinese removed" in `02`.
 
 ---
 

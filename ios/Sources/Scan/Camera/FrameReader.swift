@@ -119,13 +119,6 @@ struct FrameReader {
            let signature = CardArtDescriptor.make(fromRaw: raw) {
             reading.observation.artDescriptor = signature
             reading.observation.artSharpness = reading.sharpness
-            // A Chinese card goes to eBay, and its listing needs a photo. This is
-            // the sharpest frame so far, so the photo comes from it too, at the
-            // card's reading resolution and not the signature's 448 by 627.
-            if language == .chineseSimplified,
-               let photo = CardRectifier.flatten(frame, to: rectangle, size: CardRectifier.readingSize(for: rectangle, in: frame)) {
-                reading.observation.photoJPEG = CardPhotoStore.jpeg(photo)
-            }
         }
         return reading
     }

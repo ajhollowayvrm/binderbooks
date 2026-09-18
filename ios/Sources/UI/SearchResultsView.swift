@@ -118,8 +118,8 @@ struct SearchResultsView: View {
         }
     }
 
-    /// The road for a card the catalog does not carry, such as a Chinese or an
-    /// Italian print. The query fills the name, because he just typed it.
+    /// The road for a card the catalog does not carry, such as an Italian or a
+    /// Korean print. The query fills the name, because he just typed it.
     private var addByHandButton: some View {
         Button {
             addingByHand = true

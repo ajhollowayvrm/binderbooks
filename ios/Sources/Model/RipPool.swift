@@ -72,9 +72,7 @@ enum RipPool {
             card.acquiredAt = acquiredAt
         }
         for line in group {
-            let opened = line.cards.filter(\.isSealedSelf)
-            CardPhotoStore.remove(opened.map(\.id))
-            for card in opened {
+            for card in line.cards where card.isSealedSelf {
                 context.delete(card)
             }
             line.isRipped = true

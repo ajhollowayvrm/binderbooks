@@ -347,7 +347,6 @@ private struct InventorySelectionChrome: ViewModifier {
 
     /// The same as Delete card on one card's screen, for each one.
     private func delete(_ cards: [OwnedCard]) {
-        CardPhotoStore.remove(cards.map(\.id))
         for card in cards { modelContext.delete(card) }
         try? modelContext.save()
         model.invalidateHaystacks()

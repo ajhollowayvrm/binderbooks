@@ -759,11 +759,19 @@ marker reads it. The card detail screen edits these fields on any card with
 `productId` 0, which includes imported rows that never had a product. Export format
 version 8 carries the fields.
 
-**Amended 2026-09-14:** a Simplified Chinese card is now a catalog card when AJ
-imports the Chinese catalog. Its `productId` is from 1,000,000,000 to 1,999,999,999,
-and its category is `TCGCategory.pokemonChinese` (10,000). The TCGplayer listing
-export skips it as "not sold on TCGplayer", and the PPT comps fetch skips it. An
-Italian card, and a Chinese card entered before the import, still goes in by hand.
+### Simplified Chinese removed
+
+**Removed 2026-09-17.** From 2026-09-14 a Simplified Chinese card was a catalog card,
+from a second catalog that the Mac built from PikaQian. The app merged it into the
+live catalog, gave it a `productId` from 1,000,000,000 to 1,999,999,999, and kept a
+listing photo for each card. AJ dropped all of it: Simplified Chinese cards rarely
+sell, so PikaQian had too few prices to decide which cards to list on eBay.
+
+- `ChineseRemoval` deleted the 43 cards in that id range, once, at launch. Their
+  purchases keep their cost, as with any card delete.
+- A Chinese sale is a sale with no card: he records the order and types the price.
+  Its line has `basisIncomplete`, so the sale reports no gain.
+- The language list for a hand-entered card still offers `zh-Hans` and `zh-Hant`.
 
 ### Choosing a purchase
 

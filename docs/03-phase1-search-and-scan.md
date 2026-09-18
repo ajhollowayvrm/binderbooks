@@ -222,24 +222,14 @@ better.
 
 Recognition languages are still declared explicitly: **`en` and `ja`**.
 
-**Amended 2026-09-14:** a third session language, Chinese, reads **`zh-Hans` and
-`en`**. In a Chinese session the matcher looks for the number, the name, and the
-artwork among Chinese cards only, and never assigns an English card. A Chinese
-name becomes its English name through the `productLocalName` table. A Gem Pack
-number prints as `0101/07`, and `FrameInterpreter` reads it. An English or a
-Japanese session never offers a Chinese card.
+**Amended 2026-09-17:** the Chinese session language, added 2026-09-14, is removed
+with the rest of the Simplified Chinese support (see "Simplified Chinese removed" in
+`02`). It read `zh-Hans` and `en`, matched only Chinese cards, and read the Gem Pack
+number `0101/07`. The rule that drops a rarity letter printed against the total
+(`071/129C`) stays, because it does no harm to an English number.
 
-A Chinese card prints its rarity letter against the total, and Vision reads
-`071/129C`. `FrameInterpreter` drops the letter. The Mac build calculates each Chinese
-total, and a start deck or a promo set gets no total. In a Chinese session with no
-exact hit, the matcher accepts a total wrong by one, or no total. The name and the
-artwork then decide.
-
-**Amended 2026-09-15:** a Chinese session keeps a photo of each card for its eBay
-listing. The photo comes from the sharpest frame the scanner signed, straightened,
-at reading resolution (up to 1,400 pixels on the long side). `CardPhotoStore` keeps
-one JPEG per card in Application Support. The card detail screen shows it and shares
-it, and Share offers Save Image. English and Japanese sessions take no photo.
+**Removed 2026-09-17:** the listing photo of a Chinese card, added 2026-09-15, went
+with the Chinese session. No session takes a photo.
 
 Three things are read now, not two:
 

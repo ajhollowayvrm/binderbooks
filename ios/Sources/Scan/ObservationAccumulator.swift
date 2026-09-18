@@ -80,12 +80,6 @@ struct ObservationAccumulator {
             merged.artDescriptor = sharpest.observation.artDescriptor
             merged.artSharpness = sharpest.observation.artSharpness
         }
-        // The listing photo follows the same rule: the sharpest frame that took one.
-        if let photographed = live
-            .filter({ $0.observation.photoJPEG != nil })
-            .max(by: { $0.observation.artSharpness < $1.observation.artSharpness }) {
-            merged.photoJPEG = photographed.observation.photoJPEG
-        }
         return merged
     }
 

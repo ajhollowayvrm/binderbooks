@@ -8,8 +8,6 @@ struct ScannedSquare: View {
     let marketCents: Int?
     /// Copies of this product already in inventory.
     var heldCount: Int = 0
-    /// A Chinese card with no eBay sales, so it never gets a price.
-    var noSales: Bool = false
 
     var body: some View {
         VStack(spacing: 3) {
@@ -50,7 +48,7 @@ struct ScannedSquare: View {
             Text(hit?.name ?? card.ocrName ?? (card.certNumber != nil ? "Slab" : "Unknown"))
                 .font(.system(size: 10))
                 .lineLimit(1)
-            Text(marketCents?.asCurrency ?? (noSales ? "No sales" : " "))
+            Text(marketCents?.asCurrency ?? " ")
                 .font(.system(size: 10).monospacedDigit())
                 .foregroundStyle(.secondary)
         }

@@ -5,7 +5,7 @@ import SwiftUI
 /// what it cost. The short road for a card that was never scanned.
 ///
 /// With a catalog product, the sheet adds that product. Without one, he types
-/// the card himself. That is the road for a Chinese or an Italian print, which
+/// the card himself. That is the road for an Italian or a Korean print, which
 /// TCGplayer does not carry. The card keeps his name, set, number, language,
 /// and value, and has no `productId`.
 ///
@@ -165,7 +165,7 @@ struct AddToInventorySheet: View {
         } header: {
             Text("The card")
         } footer: {
-            Text("For a card the catalog does not carry, such as a Chinese or an Italian print. The value is your figure. The app uses it as the card's market value.")
+            Text("For a card the catalog does not carry, such as an Italian or a Korean print. The value is your figure. The app uses it as the card's market value.")
         }
     }
 

@@ -94,10 +94,6 @@ struct SearchHit: Identifiable, Hashable, Sendable {
 enum TCGCategory {
     static let pokemon = 3
     static let pokemonJapan = 85
-    /// Not a TCGplayer category. TCGplayer does not sell Simplified Chinese
-    /// cards, so they come from PikaQian through `ChineseCatalog`, and
-    /// catalog/build_chinese.py files them under this id.
-    static let pokemonChinese = 10_000
 }
 
 struct SetSummary: Identifiable, Hashable, Sendable {
@@ -124,7 +120,6 @@ struct CategorySummary: Identifiable, Hashable, Sendable {
         switch name {
         case "Pokemon": return "Pokémon"
         case "Pokemon Japan": return "Japan"
-        case "Pokemon Simplified Chinese": return "Chinese"
         case "Digimon Card Game": return "Digimon"
         case "Palworld OFFICIAL CARD GAME": return "Palworld"
         default: return displayName
@@ -138,8 +133,8 @@ struct ProductPrice: Identifiable, Hashable, Sendable {
     var subTypeName: String
     var marketCents: Int?
     var asOf: String
-    /// TCGplayer's lowest listing price, not counting shipping. Nil for a
-    /// Chinese card, whose price is an eBay average.
+    /// TCGplayer's lowest listing price, not counting shipping. Nil when
+    /// TCGplayer lists none.
     var lowCents: Int? = nil
 
     var id: String { subTypeName }
