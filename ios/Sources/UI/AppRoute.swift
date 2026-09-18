@@ -13,3 +13,12 @@ enum AppRoute: Hashable {
     case cardStack(UUID)
     case ledger
 }
+
+import SwiftUI
+
+extension EnvironmentValues {
+    /// Pushes a route onto the root stack. For a cell that a long press also
+    /// acts on: a `NavigationLink` there takes the lift that ends the long
+    /// press as a tap, and opens the card he meant to select.
+    @Entry var pushRoute: (AppRoute) -> Void = { _ in }
+}

@@ -156,6 +156,10 @@ final class PurchaseItem {
 
     var isRipped: Bool = false
 
+    /// Lines ripped together share one value. Their pulls share their combined
+    /// cost, even across purchases. Nil for a line ripped alone. See `RipPool`.
+    var ripGroupId: UUID?
+
     init(productId: Int, quantity: Int = 1, isSealed: Bool = false) {
         self.id = UUID()
         self.productId = productId

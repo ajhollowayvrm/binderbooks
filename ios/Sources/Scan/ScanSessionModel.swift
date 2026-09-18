@@ -175,6 +175,10 @@ final class ScanSessionModel {
         card.candidateProductIds = result.candidates.map(\.productId)
         card.scanSession = session
         context.insert(card)
+        // Only a Chinese session takes a photo, for the card's eBay listing.
+        if let photo = observation.photoJPEG {
+            try? CardPhotoStore.save(photo, for: card.id)
+        }
         if let hit = result.hit, result.confidence <= .likely {
             session.observe(groupId: hit.groupId)
         }
@@ -203,6 +207,7 @@ final class ScanSessionModel {
         copy.tags = last.tags
         copy.scanSession = session
         context.insert(copy)
+        CardPhotoStore.copy(from: last.id, to: copy.id)
         save()
     }
 
@@ -286,6 +291,7 @@ final class ScanSessionModel {
     }
 
     func delete(_ cards: [OwnedCard]) {
+        CardPhotoStore.remove(cards.map(\.id))
         for card in cards { context.delete(card) }
         save()
     }
@@ -342,19 +348,10 @@ final class ScanSessionModel {
     /// Those cards keep only the cost he set at review, if he set one.
     func commit(to purchase: Purchase?) {
         if let target = session.ripTarget {
+            // The packs leave inventory here, not when the rip started. Every
+            // line ripped with this one goes too. See `RipPool`.
             let owner = purchase ?? target.purchase
-            for card in cards where card.sourceItem == nil {
-                card.sourceItem = target
-                card.acquiredAt = owner?.date ?? Date()
-            }
-            if let selfCard = target.cards.first(where: \.isSealedSelf) {
-                context.delete(selfCard)
-                // Flushed now, or the split below still counts the card just
-                // deleted and gives away a share of the box's cost to nothing.
-                save()
-            }
-            target.isRipped = true
-            if let owner { Allocation.writeCardBases(owner) }
+            RipPool.finish(target, pulls: cards, acquiredAt: owner?.date ?? Date(), context: context)
             session.purchase = owner
         } else if let purchase {
             for card in cards where card.sourceItem == nil {
@@ -373,6 +370,10 @@ final class ScanSessionModel {
     }
 
     func discard() {
+        // A rip that never committed leaves the packs sealed, as they were.
+        if let target = session.ripTarget { RipPool.release(target, context: context) }
+        // The cascade deletes the cards. Their photos are files, so they go here.
+        CardPhotoStore.remove(session.cards.map(\.id))
         context.delete(session)
         save()
     }

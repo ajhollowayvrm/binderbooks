@@ -372,6 +372,32 @@ gain and the filler shows small losses, and that is an artifact of the method.
 The per-card figure still shows, because it is what he compares a sale against
 (see the amendment in `04`).
 
+### Rip groups
+
+**Added 2026-09-17.** He opens a whole order in one sitting and records what came
+out afterwards: *"I rip all the cards and then record what was ripped from that
+total order."* So several packs rip as one rip, from the purchase page or from a
+selection in inventory. The packs can come from different purchases.
+
+- `PurchaseItem.ripGroupId: UUID?`. Lines ripped together share one value. Nil for
+  a line ripped alone. It records no date and is not a `RipEvent`: it only says
+  which lines' cost the pulls share.
+- `RipPool.prepare` carves one line for each set of chosen packs on a line
+  (`Allocation.carve`). Each line keeps its own purchase and its share of that
+  purchase. **A pack's cost never moves to another purchase.**
+- The pulls hang on one line, the **home line**: the line with the most packs.
+  Each pull's basis is `(sum of the group's allocatedCostCents − pulls he priced) /
+  tracked pulls`. Bulk takes none.
+- The packs leave inventory when the scan commits (`RipPool.finish`). A discarded
+  scan leaves them sealed (`RipPool.release`).
+- A ripped line is always billable in `Allocation.allocate`. Its cost is what the
+  packs cost, and bulk pulls do not take it away.
+- A card already recorded as part of a buy can move into a rip
+  (`RipPool.addPulls`). Its own line goes, and the purchase splits again.
+
+Rip performance is read over the group:
+`sum(market value of the pulls) − sum(allocatedCostCents of the group's lines)`.
+
 ### Grading
 
 ```swift

@@ -41,15 +41,18 @@ enum Allocation {
     /// purchase total first, and what is left splits over the cards he did not
     /// price. Typing more than the total leaves the split at zero rather than
     /// rewriting anything he entered.
+    ///
+    /// A ripped line is always billable. Its cost is what the packs cost, and
+    /// the pulls do not change that: packs of bulk still cost money.
     static func allocate(_ purchase: Purchase) {
-        for item in purchase.items where item.isBulkOnly {
+        for item in purchase.items where item.isBulkOnly && !item.isRipped {
             item.allocatedCostCents = 0
         }
-        let manual = purchase.items.filter { !$0.isBulkOnly && $0.isManualOnly }
+        let manual = purchase.items.filter { !$0.isRipped && !$0.isBulkOnly && $0.isManualOnly }
         for item in manual {
             item.allocatedCostCents = item.cards.reduce(0) { $0 + $1.acquisitionBasisCents }
         }
-        let billable = purchase.items.filter { !$0.isBulkOnly && !$0.isManualOnly }
+        let billable = purchase.items.filter { $0.isRipped || (!$0.isBulkOnly && !$0.isManualOnly) }
         guard !billable.isEmpty else { return }
 
         let manualTotal = manual.reduce(0) { $0 + $1.allocatedCostCents }
@@ -89,26 +92,40 @@ enum Allocation {
 
     /// The one line to rip for this sealed self-card: itself, if it already
     /// covers a single unit, or a new line carved out of it otherwise.
-    ///
-    /// A box bought three at a time shares one `PurchaseItem` at `quantity: 3`.
-    /// Ripping one must not touch the cost of the other two, so it is split off
-    /// first: a new line at `quantity: 1` takes one equal share of the shared
-    /// line's `allocatedCostCents`, and the card being ripped moves onto it.
     /// Idempotent — a card already on its own line comes back unchanged.
     static func isolate(_ card: OwnedCard, context: ModelContext) -> PurchaseItem? {
         guard let item = card.sourceItem else { return nil }
         guard item.quantity > 1 else { return item }
+        return carve([card], from: item, context: context)
+    }
 
-        let shares = splitEqually(item.allocatedCostCents, into: item.quantity)
-        let unit = PurchaseItem(productId: item.productId, quantity: 1, isSealed: item.isSealed)
+    /// A line for exactly these sealed self-cards, carved out of `item`.
+    ///
+    /// A box bought three at a time shares one `PurchaseItem` at `quantity: 3`.
+    /// Ripping some of them must not touch the cost of the others, so they are
+    /// split off first: a new line at `quantity: k` takes k equal shares of the
+    /// shared line's `allocatedCostCents`, and the chosen cards move onto it.
+    /// When the cards are the whole line, the line itself comes back.
+    static func carve(_ cards: [OwnedCard], from item: PurchaseItem, context: ModelContext) -> PurchaseItem {
+        let chosen = Set(cards.map(\.id))
+        let others = item.cards.filter { !chosen.contains($0.id) }
+        let quantity = max(1, item.quantity)
+        let count = min(cards.count, quantity)
+        if others.isEmpty, count == quantity { return item }
+
+        let shares = splitEqually(item.allocatedCostCents, into: quantity)
+        let unit = PurchaseItem(productId: item.productId, quantity: count, isSealed: item.isSealed)
         unit.purchase = item.purchase
         unit.parentItem = item.parentItem
-        unit.allocatedCostCents = shares.last ?? 0
+        unit.allocatedCostCents = shares.suffix(count).reduce(0, +)
         context.insert(unit)
 
-        item.quantity -= 1
+        item.quantity = quantity - count
         item.allocatedCostCents -= unit.allocatedCostCents
-        card.sourceItem = unit
+        for card in cards { card.sourceItem = unit }
+        if item.quantity == 0, others.isEmpty {
+            context.delete(item)
+        }
         return unit
     }
 
@@ -125,8 +142,19 @@ enum Allocation {
 
     /// Writes each card's basis from its line. A line with several cards splits
     /// its share equally among them.
+    ///
+    /// A ripped line is different: its pulls share the cost of every line ripped
+    /// with it, which can sit on other purchases. See `RipPool.writeBases`.
     static func writeCardBases(_ purchase: Purchase) {
+        var ripped = Set<UUID>()
         for item in purchase.items {
+            if item.isRipped {
+                guard !ripped.contains(item.id) else { continue }
+                let group = RipPool.lines(of: item)
+                ripped.formUnion(group.map(\.id))
+                RipPool.writeBases(group)
+                continue
+            }
             let cards = item.cards.sorted { $0.scannedAt < $1.scannedAt }
             // Never overwrite a price he typed.
             let tracked = cards.filter { !$0.isBulk && !$0.basisIsManual }

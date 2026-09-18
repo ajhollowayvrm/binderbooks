@@ -39,6 +39,7 @@ struct AddToInventorySheet: View {
     @State private var choice: PurchaseChoice = .none
     @State private var vendor = ""
     @State private var date = Date()
+    @State private var choosingPurchase = false
 
     @State private var manualName: String
     @State private var manualSetName = ""
@@ -105,13 +106,24 @@ struct AddToInventorySheet: View {
                 }
 
                 Section {
-                    Picker("Purchase", selection: $choice) {
-                        Text("None").tag(PurchaseChoice.none)
-                        Text("New purchase").tag(PurchaseChoice.new)
-                        ForEach(purchases.prefix(20)) { purchase in
-                            Text(purchaseTitle(purchase)).tag(PurchaseChoice.existing(purchase.id))
+                    // A pushed list with search, not a menu: he has more
+                    // purchases than a menu can show.
+                    Button {
+                        choosingPurchase = true
+                    } label: {
+                        HStack {
+                            Text("Purchase").foregroundStyle(.primary)
+                            Spacer()
+                            Text(choiceTitle)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
                         }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                     if case .new = choice {
                         TextField("Vendor, e.g. Walmart — optional", text: $vendor)
                             .textInputAutocapitalization(.words)
@@ -120,6 +132,9 @@ struct AddToInventorySheet: View {
                 } footer: {
                     Text(purchaseDescription)
                 }
+            }
+            .navigationDestination(isPresented: $choosingPurchase) {
+                purchasePicker
             }
             .navigationTitle(detail?.hit.name ?? "Add by hand")
             .navigationBarTitleDisplayMode(.inline)
@@ -169,6 +184,50 @@ struct AddToInventorySheet: View {
             ? "The cards take a share of that purchase's total."
             : "The cost typed above is theirs; the purchase total covers the rest."
         }
+    }
+
+    private var choiceTitle: String {
+        switch choice {
+        case .none: return "None"
+        case .new: return "New purchase"
+        case .existing(let id):
+            return purchases.first { $0.id == id }.map(purchaseTitle) ?? "None"
+        }
+    }
+
+    private var purchasePicker: some View {
+        PurchasePickerList(
+            around: Date(),
+            footer: purchaseDescription,
+            isCurrent: { choice == .existing($0.id) },
+            leading: {
+                choiceRow("None", selected: choice == .none) { choice = .none }
+                choiceRow("New purchase", selected: choice == .new) { choice = .new }
+            },
+            onPick: { pick(.existing($0.id)) }
+        )
+        .navigationTitle("Purchase")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func choiceRow(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            choosingPurchase = false
+        } label: {
+            HStack {
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                if selected { Image(systemName: "checkmark").foregroundStyle(.tint) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func pick(_ picked: PurchaseChoice) {
+        choice = picked
+        choosingPurchase = false
     }
 
     private func purchaseTitle(_ purchase: Purchase) -> String {

@@ -55,6 +55,17 @@ struct LedgerView: View {
         .navigationTitle("Ledger")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // Every entry, in and out, whatever the filter shows. The file is
+            // for a spreadsheet, which does its own filtering.
+            ToolbarItem(placement: .topBarTrailing) {
+                let name = LedgerExport.suggestedFileName()
+                ShareLink(
+                    item: CSVFile(text: LedgerExport.csv(LedgerEntry.entries(purchases: purchases, grading: grading, sales: sales, expenses: expenses)), name: name),
+                    preview: SharePreview(name, image: Image(systemName: "tablecells"))
+                ) {
+                    Label("Export ledger", systemImage: "square.and.arrow.up")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { adding = true } label: { Label("Add transaction", systemImage: "plus") }
             }

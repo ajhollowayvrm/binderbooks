@@ -12,22 +12,12 @@ struct InventoryView: View {
     @Environment(InventoryModel.self) private var model
     @Environment(RecentlyViewed.self) private var recents
     @Environment(\.modelContext) private var modelContext
+    @Environment(InventorySelection.self) private var selection
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var cards: [OwnedCard]
     @State private var allSets: [SetSummary] = []
     @State private var showSetPicker = false
     @State private var showTagFilter = false
     @State private var showMetrics = false
-    @State private var tagTarget: TagSheetTarget?
-    @State private var gradeTarget: TagSheetTarget?
-    @State private var markGradedTarget: TagSheetTarget?
-    @State private var sellTarget: TagSheetTarget?
-    @State private var compsTarget: TagSheetTarget?
-    @State private var listTarget: TagSheetTarget?
-    @State private var purchaseTarget: TagSheetTarget?
-    @State private var fetcher = CompsFetcher()
-    @State private var compsMessage: String?
-    @State private var isSelecting = false
-    @State private var selection: Set<UUID> = []
     @State private var recentHits: [SearchHit] = []
     @AppStorage(cardLayoutKey) private var layout: CardLayout = .grid
     @AppStorage(InventorySort.defaultsKey) private var defaultSort: InventorySort = .newest
@@ -35,12 +25,6 @@ struct InventoryView: View {
     private var rows: [InventoryRow] { model.rows(from: cards, query: query) }
     private var tagUses: [TagUse] { model.tagUses(in: cards) }
     private var committed: [OwnedCard] { cards.filter(\.isCommitted) }
-
-    /// Filters through the live rows, so an id left stale by a delete or a
-    /// filter change resolves to nothing instead of crashing.
-    private func selectedCards(_ rows: [InventoryRow]) -> [OwnedCard] {
-        rows.map(\.card).filter { selection.contains($0.id) }
-    }
 
     var body: some View {
         let rows = rows
@@ -66,97 +50,7 @@ struct InventoryView: View {
             model.sort = sort
         }
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Metrics") { showMetrics = true }
-                    .disabled(rows.isEmpty)
-            }
-            // Only while selecting. A long press on a card is how selection
-            // starts, so a permanent Select button is a second door to the
-            // same room.
-            if isSelecting {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { endSelection() }
-                        .transition(.opacity.combined(with: .scale(scale: 0.7)))
-                }
-            }
-            ToolbarItemGroup(placement: .bottomBar) {
-                if isSelecting {
-                    // A menu, not a sheet, because the long press that starts
-                    // selection replaced the row's tag menu. The labels he uses
-                    // most stay one tap away, for one card or for thirty.
-                    Menu("Tag") {
-                        ForEach(tagUses.prefix(5)) { use in
-                            Button {
-                                CardTagEditor(context: modelContext).toggle(use.label, on: selectedCards(rows))
-                                model.invalidateHaystacks()
-                            } label: {
-                                Label(use.label, systemImage: mark(for: use, in: rows))
-                            }
-                        }
-                        if !tagUses.isEmpty { Divider() }
-                        Button {
-                            tagTarget = TagSheetTarget(cards: selectedCards(rows))
-                        } label: {
-                            Label("Tag…", systemImage: "tag")
-                        }
-                    }
-                    .disabled(selection.isEmpty)
-                    // Two different events: money going out to a grader, and
-                    // cards coming back at a grade. The imported charges name
-                    // no cards, so the second is the only way those 40 cards
-                    // ever get their grade.
-                    Menu("Grade") {
-                        Button {
-                            gradeTarget = TagSheetTarget(cards: selectedCards(rows))
-                        } label: {
-                            Label("Send to grader…", systemImage: "shippingbox")
-                        }
-                        .disabled(selectedCards(rows).contains { $0.isSlabbed })
-                        Button {
-                            markGradedTarget = TagSheetTarget(cards: selectedCards(rows))
-                        } label: {
-                            Label("Mark as graded…", systemImage: "seal")
-                        }
-                    }
-                    .disabled(selection.isEmpty)
-                    Button("Sell") { sellTarget = TagSheetTarget(cards: selectedCards(rows)) }
-                        .disabled(selection.isEmpty || selectedCards(rows).contains { CardTagIndex.has(ReservedTag.sold, on: $0) })
-                    Menu {
-                        Button {
-                            compsTarget = TagSheetTarget(cards: selectedCards(rows))
-                        } label: {
-                            Label("Fetch comps from PPT", systemImage: "arrow.down.circle")
-                        }
-                        .disabled(!PPTKey.isSet)
-                        Button {
-                            listTarget = TagSheetTarget(cards: selectedCards(rows))
-                        } label: {
-                            Label("List on TCGplayer…", systemImage: "tablecells")
-                        }
-                        Button {
-                            purchaseTarget = TagSheetTarget(cards: selectedCards(rows))
-                        } label: {
-                            Label("Choose a purchase…", systemImage: "cart")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                    .disabled(selection.isEmpty || fetcher.isRunning)
-                    Spacer()
-                    Text(fetcher.isRunning ? "comps \(fetcher.done)/\(fetcher.total)" : "\(selection.count) selected")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        // The bottom bar squeezes the middle item first, and
-                        // "3 se…" is not a count.
-                        .fixedSize()
-                    Spacer()
-                    Button("Select all") { selection = Set(rows.map(\.card.id)) }
-                        .disabled(selection.count == rows.count)
-                }
-            }
-        }
-        .sensoryFeedback(.selection, trigger: isSelecting)
+        .inventorySelectionChrome(rows: rows)
         .sheet(isPresented: $showSetPicker) {
             SetPickerSheet(sets: model.sets(in: cards, from: allSets), selected: model.filter.groupId) { groupId in
                 model.filter.groupId = groupId
@@ -167,56 +61,6 @@ struct InventoryView: View {
         }
         .sheet(isPresented: $showMetrics) {
             InventoryMetricsSheet(summary: summary, lineCount: stacks.count)
-        }
-        .sheet(item: $tagTarget) { target in
-            TagSheet(target: target, uses: tagUses, allCards: committed) {
-                model.invalidateHaystacks()
-            }
-        }
-        .sheet(item: $gradeTarget) { target in
-            SendToGraderSheet(cards: target.cards) {
-                model.invalidateHaystacks()
-                endSelection()
-            }
-        }
-        .sheet(item: $markGradedTarget) { target in
-            MarkGradedSheet(cards: target.cards, name: { $0.displayName(model.hits[$0.productId]) ?? "Card" }) {
-                model.invalidateHaystacks()
-                endSelection()
-            }
-        }
-        .sheet(item: $sellTarget) { target in
-            SellSheet(cards: target.cards, name: { $0.displayName(model.hits[$0.productId]) ?? "" }) {
-                model.invalidateHaystacks()
-                endSelection()
-            }
-        }
-        .sheet(item: $listTarget) { target in
-            TCGplayerExportSheet(preselected: Set(target.cards.map(\.id))) {
-                model.invalidateHaystacks()
-            }
-        }
-        .sheet(item: $purchaseTarget) { target in
-            ChoosePurchaseSheet(cards: target.cards) {
-                model.invalidateHaystacks()
-                endSelection()
-            }
-        }
-        // The count and the cost show before anything is spent. A run over
-        // three hundred cards is most of a day's credits.
-        .confirmationDialog(
-            compsTarget.map { "Fetch comps for \($0.cards.count) cards? About \(CompsFetcher.creditEstimate(for: $0.cards)) PPT credits." } ?? "",
-            isPresented: Binding(get: { compsTarget != nil }, set: { if !$0 { compsTarget = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("Fetch") {
-                if let target = compsTarget { Task { await fetchComps(target.cards) } }
-            }
-        }
-        .alert("Comps", isPresented: Binding(get: { compsMessage != nil }, set: { if !$0 { compsMessage = nil } })) {
-            Button("OK") {}
-        } message: {
-            Text(compsMessage ?? "")
         }
         // `ShellContentView` owns the hit and price caches, because a query
         // needs them even when this page never appeared.
@@ -251,11 +95,7 @@ struct InventoryView: View {
             // `CT_PROJECT_NEWEST="psa|12000,4000,2500"` sends the newest card
             // to that grader on paper and fills its top three comps, so a
             // screenshot shows the projected range.
-            // `CT_MARK_GRADED=1` opens the sheet on the newest card, because
-            // simctl cannot reach a button inside a pushed screen.
-            if env["CT_MARK_GRADED"] == "1", let newest = committed.first {
-                markGradedTarget = TagSheetTarget(cards: [newest])
-            }
+            // `CT_MARK_GRADED=1` lives in `InventorySelectionChrome`.
             if let spec = env["CT_PROJECT_NEWEST"], let newest = committed.first {
                 let parts = spec.split(separator: "|")
                 let grader = String(parts.first ?? "psa")
@@ -271,10 +111,7 @@ struct InventoryView: View {
                 // the same transition a long press produces.
                 Task {
                     try? await Task.sleep(for: .seconds(2))
-                    withAnimation(.snappy(duration: 0.28)) {
-                        isSelecting = true
-                        selection = Set(rows.map(\.card.id))
-                    }
+                    selection.begin(rows.map(\.card.id))
                 }
             }
             #endif
@@ -293,7 +130,7 @@ struct InventoryView: View {
                         .listRowSeparator(.hidden)
                 } else {
                     ForEach(stacks) { stack in
-                        cardRow(stack)
+                        SelectableStackRow(stack: stack)
                     }
                 }
                 recentlyViewedRows
@@ -310,13 +147,7 @@ struct InventoryView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.top, 40)
                     } else {
-                        OwnedCardGrid(
-                            stacks: stacks,
-                            isSelecting: isSelecting,
-                            selection: selection,
-                            onToggle: toggleSelection,
-                            onLongPress: beginSelection
-                        )
+                        SelectableCardGrid(stacks: stacks)
                             .padding(.horizontal, 12)
                             .padding(.top, 12)
                     }
@@ -336,53 +167,9 @@ struct InventoryView: View {
         }
     }
 
-    @ViewBuilder
-    private func cardRow(_ stack: InventoryStack) -> some View {
-        // A stacked line is ticked when every copy is, and ticking it takes
-        // all of them: the line is the nine packs, not one of them.
-        let ticked = stack.cardIds.allSatisfy(selection.contains)
-        if isSelecting {
-            Button {
-                toggleSelection(stack.cardIds)
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: ticked ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(ticked ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
-                        .contentTransition(.symbolEffect(.replace))
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                    OwnedCardRow(row: stack.lead, stack: stack)
-                }
-            }
-            .buttonStyle(.plain)
-        } else {
-            NavigationLink(value: stack.route) {
-                OwnedCardRow(row: stack.lead, stack: stack)
-            }
-            // A simultaneous gesture, so the long press cannot swallow the tap
-            // that pushes the card.
-            .simultaneousGesture(longPress(stack.cardIds))
-        }
-    }
-
-    /// Selection starts on a long press, with that line's cards already ticked.
-    private func longPress(_ ids: [UUID]) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.4).onEnded { _ in
-            beginSelection(ids)
-        }
-    }
-
-    /// All, some, or none of the selected cards carry the label.
-    private func mark(for use: TagUse, in rows: [InventoryRow]) -> String {
-        let cards = selectedCards(rows)
-        let held = cards.filter { CardTagIndex.has(use.label, on: $0) }.count
-        if held == 0 { return "tag" }
-        if held == cards.count { return "checkmark" }
-        return "minus"
-    }
-
     /// Catalog products he opened, newest first. Hidden while a chip or the
     /// search field narrows the page, because it is not part of that answer.
-    private var showRecents: Bool { !recentHits.isEmpty && !isFiltered && !isSelecting }
+    private var showRecents: Bool { !recentHits.isEmpty && !isFiltered && !selection.isSelecting }
 
     @ViewBuilder
     private var recentlyViewedRows: some View {
@@ -421,42 +208,6 @@ struct InventoryView: View {
     }
 
     private var isFiltered: Bool { model.filter.isActive || !query.isEmpty }
-
-    /// One line, every copy on it. A partly ticked line completes instead of
-    /// clearing, because a half-selected stack is not a state he asked for.
-    private func toggleSelection(_ ids: [UUID]) {
-        withAnimation(.snappy(duration: 0.15)) {
-            if ids.allSatisfy(selection.contains) {
-                selection.subtract(ids)
-            } else {
-                selection.formUnion(ids)
-            }
-        }
-    }
-
-    /// The long press lands here. One animation covers the Done button, the
-    /// bottom bar, and every mark on the cards, so selection mode arrives as
-    /// one movement instead of three pops.
-    private func beginSelection(_ ids: [UUID]) {
-        guard !isSelecting else { return }
-        withAnimation(.snappy(duration: 0.28)) {
-            isSelecting = true
-            selection = Set(ids)
-        }
-    }
-
-    private func endSelection() {
-        withAnimation(.snappy(duration: 0.28)) {
-            isSelecting = false
-            selection = []
-        }
-    }
-
-    private func fetchComps(_ cards: [OwnedCard]) async {
-        let report = await fetcher.fetch(cards, context: modelContext, client: PPTClient(key: PPTKey.value)) { model.hits[$0.productId]?.categoryId }
-        compsMessage = report.summary
-        endSelection()
-    }
 
     private func loadRecents() async {
         guard let db = catalog.database else {
@@ -526,6 +277,15 @@ struct InventoryView: View {
                 ForEach(InventorySort.allCases) { sort in
                     Text(sort.title).tag(sort)
                 }
+            }
+            // Here, not in the top bar. The plus took that place.
+            Section {
+                Button {
+                    showMetrics = true
+                } label: {
+                    Label("Metrics", systemImage: "chart.bar")
+                }
+                .disabled(rows.isEmpty)
             }
             if isTemporary {
                 Section {

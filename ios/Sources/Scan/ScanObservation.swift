@@ -46,6 +46,9 @@ struct ScanObservation: Equatable, Sendable {
     /// and not others, and the sharpest is the one worth comparing. Blur is the
     /// only thing that measurably costs artwork accuracy.
     var artSharpness: Double = 0
+    /// A JPEG of the straightened card, from the frame that was signed. Only a
+    /// Chinese session takes one: see `CardPhotoStore`.
+    var photoJPEG: Data?
 
     /// Text is still what makes an observation worth logging. A frame that held
     /// a card but no readable text has nothing to look the card up by yet.

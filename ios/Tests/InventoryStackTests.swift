@@ -5,7 +5,7 @@ import Testing
 
 /// Copies of one thing are one line on the page. Nine packs off one purchase
 /// are nine cards in the store and one cell with "×9" on it.
-@Suite struct InventoryStackTests {
+@Suite @MainActor struct InventoryStackTests {
     let container: ModelContainer
 
     init() throws {

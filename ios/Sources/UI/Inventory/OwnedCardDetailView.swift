@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import UIKit
 
 /// One owned card: catalog data, the basis breakdown, the source purchase, and
 /// the edits that need no other model.
@@ -20,6 +21,7 @@ struct OwnedCardDetailView: View {
     var body: some View {
         if let card = cards.first {
             OwnedCardDetailBody(card: card, model: model, showDelete: $showDelete) {
+                CardPhotoStore.remove([card.id])
                 modelContext.delete(card)
                 try? modelContext.save()
                 dismiss()
@@ -37,7 +39,6 @@ private struct OwnedCardDetailBody: View {
     var onDelete: () -> Void
 
     @Environment(\.modelContext) private var modelContext
-    @Environment(ScannerLauncher.self) private var launcher
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var allCards: [OwnedCard]
     @State private var tagTarget: TagSheetTarget?
     @State private var markingGraded = false
@@ -45,6 +46,7 @@ private struct OwnedCardDetailBody: View {
     @State private var editingCost = false
     @State private var pickingProduct = false
     @State private var choosingPurchase = false
+    @State private var ripTarget: TagSheetTarget?
 
     private var hit: SearchHit? { model.hits[card.productId] }
     private var printings: [String] { model.prices[card.productId]?.map(\.subTypeName) ?? [] }
@@ -52,6 +54,7 @@ private struct OwnedCardDetailBody: View {
     var body: some View {
         List {
             identity
+            photo
             sealed
             tags
             basis
@@ -69,6 +72,7 @@ private struct OwnedCardDetailBody: View {
         }
         .navigationTitle(card.displayName(hit) ?? "Card")
         .navigationBarTitleDisplayMode(.inline)
+        .ripSheet($ripTarget) { model.invalidateHaystacks() }
         .confirmationDialog("No hits from this box?", isPresented: $confirmNoHits, titleVisibility: .visible) {
             Button("No hits", role: .destructive) { markNoHits() }
         } message: {
@@ -107,6 +111,22 @@ private struct OwnedCardDetailBody: View {
             if ProcessInfo.processInfo.environment["CT_CHOOSE_PURCHASE"] == "1" { choosingPurchase = true }
         }
         #endif
+    }
+
+    /// The scan's photo of a Chinese card, for its eBay listing. Share offers
+    /// Save Image, which puts it in Photos for the eBay app.
+    @ViewBuilder private var photo: some View {
+        if let url = CardPhotoStore.existingURL(for: card.id), let image = UIImage(contentsOfFile: url.path) {
+            Section("Photo") {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: 360)
+                ShareLink(item: url) {
+                    Label("Share or save the photo", systemImage: "square.and.arrow.up")
+                }
+            }
+        }
     }
 
     private var identity: some View {
@@ -158,7 +178,7 @@ private struct OwnedCardDetailBody: View {
         if card.isSealedSelf {
             Section {
                 Button {
-                    rip()
+                    ripTarget = TagSheetTarget(cards: [card])
                 } label: {
                     Label("Rip it", systemImage: "camera")
                 }
@@ -356,18 +376,6 @@ private struct OwnedCardDetailBody: View {
                 save()
             }
         }
-    }
-
-    /// Starts a session scoped to this box alone, so its cost splits only over
-    /// what comes out of it, never the rest of a shared line or the purchase.
-    private func rip() {
-        let item = Allocation.ripTarget(for: card, context: modelContext)
-        let session = ScanSession()
-        session.purchase = item.purchase
-        session.ripTarget = item
-        modelContext.insert(session)
-        try? modelContext.save()
-        launcher.session = session
     }
 
     /// A box that produced nothing. Its line stays, ripped, at cost — the

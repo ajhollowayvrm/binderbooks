@@ -812,4 +812,32 @@ import Testing
         #expect(nine.pricedCount == 23)
         #expect(nine.grossCents == 172_351)
     }
+
+    @Test @MainActor func theExportHasInAndOutColumns() throws {
+        let container = try store()
+        let context = container.mainContext
+        let purchase = Purchase(date: day("2026-08-17"), vendor: "Game Grid, Inc", itemCostCents: 19_339)
+        context.insert(purchase)
+        let sale = Sale(soldAt: day("2026-08-20"), channelRaw: "tcgplayer", grossCents: 1_505)
+        context.insert(sale)
+        let charge = GradingSubmission(graderRaw: "psa", gradingFeesCents: 2_000)
+        context.insert(charge)
+        try context.save()
+
+        let entries = LedgerEntry.entries(purchases: [purchase], grading: [charge], sales: [sale])
+        let lines = LedgerExport.csv(entries).split(separator: "\n").map(String.init)
+
+        #expect(lines == [
+            "Date,Type,Name,Detail,In,Out",
+            "2026-08-20,Sale,TCGplayer,no cards recorded,15.05,",
+            "2026-08-17,Purchase,\"Game Grid, Inc\",no cards yet,,193.39",
+            ",Grading,PSA grading,no cards attached,,20.00",
+        ])
+    }
+
+    @Test func dollarsKeepEveryCent() {
+        #expect(LedgerExport.dollars(0) == "0.00")
+        #expect(LedgerExport.dollars(5) == "0.05")
+        #expect(LedgerExport.dollars(19_339) == "193.39")
+    }
 }

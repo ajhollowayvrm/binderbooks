@@ -18,6 +18,9 @@ struct RootView: View {
     @State private var recents = RecentlyViewed()
     @State private var inventory = InventoryModel(sort: .storedDefault)
     @State private var launcher = ScannerLauncher()
+    /// Here, not on the inventory page, so the selection lives through a
+    /// keystroke that swaps the page for the search results.
+    @State private var selection = InventorySelection()
     @State private var path = NavigationPath()
     @State private var addingCard = false
     @State private var scanAfterAdd = false
@@ -37,42 +40,44 @@ struct RootView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // The inventory owns the leading slot with Metrics, so the
-                // ledger sits beside Settings.
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink(value: AppRoute.ledger) {
-                        Label("Ledger", systemImage: "list.bullet.rectangle")
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink(value: AppRoute.settings) {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-                }
-                // Its own capsule, because it adds and the other two navigate.
-                ToolbarSpacer(.fixed, placement: .topBarTrailing)
-                ToolbarItem(placement: .topBarTrailing) {
-                    // The same four things the ledger's plus records, plus the
-                    // card. One plus on the landing screen adds anything, so
-                    // recording a purchase no longer means going to the ledger
-                    // first.
-                    Menu {
-                        Button {
-                            addingCard = true
-                        } label: {
-                            Label("Card or sealed product", systemImage: "rectangle.on.rectangle.angled")
+                // While he selects, the bar holds Select all, the count, and
+                // Done, and these step aside.
+                if !selection.isSelecting {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        NavigationLink(value: AppRoute.ledger) {
+                            Label("Ledger", systemImage: "list.bullet.rectangle")
                         }
-                        Section {
-                            ForEach(AddTransactionSheet.Kind.allCases) { kind in
-                                Button {
-                                    addingTransaction = kind
-                                } label: {
-                                    Label(kind.rawValue, systemImage: kind.symbol)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        NavigationLink(value: AppRoute.settings) {
+                            Label("Settings", systemImage: "gearshape")
+                        }
+                    }
+                    // On the left, alone, because it adds and the other two
+                    // navigate.
+                    ToolbarItem(placement: .topBarLeading) {
+                        // The same four things the ledger's plus records, plus the
+                        // card. One plus on the landing screen adds anything, so
+                        // recording a purchase no longer means going to the ledger
+                        // first.
+                        Menu {
+                            Button {
+                                addingCard = true
+                            } label: {
+                                Label("Card or sealed product", systemImage: "rectangle.on.rectangle.angled")
+                            }
+                            Section {
+                                ForEach(AddTransactionSheet.Kind.allCases) { kind in
+                                    Button {
+                                        addingTransaction = kind
+                                    } label: {
+                                        Label(kind.rawValue, systemImage: kind.symbol)
+                                    }
                                 }
                             }
+                        } label: {
+                            Label("Add", systemImage: "plus")
                         }
-                    } label: {
-                        Label("Add", systemImage: "plus")
                     }
                 }
             }
@@ -121,6 +126,8 @@ struct RootView: View {
         .environment(recents)
         .environment(inventory)
         .environment(launcher)
+        .environment(selection)
+        .environment(\.pushRoute) { path.append($0) }
         .fullScreenCover(item: $launcher.session) { session in
             ScanSessionView(session: session) {
                 launcher.session = nil

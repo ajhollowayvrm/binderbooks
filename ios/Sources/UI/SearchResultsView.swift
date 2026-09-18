@@ -13,6 +13,7 @@ struct SearchResultsView: View {
 
     @Environment(CatalogController.self) private var catalog
     @Environment(InventoryModel.self) private var inventory
+    @Environment(InventorySelection.self) private var selection
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var cards: [OwnedCard]
     @State private var showSetPicker = false
     @State private var addingByHand = false
@@ -33,6 +34,9 @@ struct SearchResultsView: View {
             Divider()
             results
         }
+        // The owned cards select the same way as on the inventory page, and
+        // the selection lives through the keystroke that brought him here.
+        .inventorySelectionChrome(rows: ownedRows)
         .sheet(isPresented: $showSetPicker) {
             SetPickerSheet(sets: model.sets, selected: model.filter.groupId) { groupId in
                 model.filter.groupId = groupId
@@ -59,9 +63,7 @@ struct SearchResultsView: View {
                 if !owned.isEmpty {
                     Section {
                         ForEach(owned) { stack in
-                            NavigationLink(value: stack.route) {
-                                OwnedCardRow(row: stack.lead, stack: stack)
-                            }
+                            SelectableStackRow(stack: stack)
                         }
                     } header: {
                         // Lines, not the sum of quantity. A line shows its own
@@ -69,15 +71,19 @@ struct SearchResultsView: View {
                         Text("In your collection (\(owned.count))").textCase(nil)
                     }
                 }
-                Section {
-                    catalogRows
-                    if !model.isSearching {
-                        addByHandButton
+                // Catalog products are not his, so they cannot be selected.
+                // They step aside while he selects.
+                if !selection.isSelecting {
+                    Section {
+                        catalogRows
+                        if !model.isSearching {
+                            addByHandButton
+                        }
+                    } header: {
+                        Text("Catalog (\(catalogCount))").textCase(nil)
+                    } footer: {
+                        catalogFooter
                     }
-                } header: {
-                    Text("Catalog (\(catalogCount))").textCase(nil)
-                } footer: {
-                    catalogFooter
                 }
             }
             .listStyle(.plain)
@@ -87,22 +93,24 @@ struct SearchResultsView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     if !owned.isEmpty {
                         CardSectionHeader(title: "In your collection (\(owned.count))")
-                        OwnedCardGrid(stacks: owned)
+                        SelectableCardGrid(stacks: owned)
                             .padding(.horizontal, 12)
                     }
-                    CardSectionHeader(title: "Catalog (\(catalogCount))")
-                    catalogGrid
-                        .padding(.horizontal, 12)
-                    if !model.isSearching {
-                        addByHandButton
+                    if !selection.isSelecting {
+                        CardSectionHeader(title: "Catalog (\(catalogCount))")
+                        catalogGrid
                             .padding(.horizontal, 12)
-                            .padding(.top, 12)
+                        if !model.isSearching {
+                            addByHandButton
+                                .padding(.horizontal, 12)
+                                .padding(.top, 12)
+                        }
+                        catalogFooter
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
                     }
-                    catalogFooter
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }

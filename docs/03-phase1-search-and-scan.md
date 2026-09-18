@@ -235,6 +235,12 @@ total, and a start deck or a promo set gets no total. In a Chinese session with 
 exact hit, the matcher accepts a total wrong by one, or no total. The name and the
 artwork then decide.
 
+**Amended 2026-09-15:** a Chinese session keeps a photo of each card for its eBay
+listing. The photo comes from the sharpest frame the scanner signed, straightened,
+at reading resolution (up to 1,400 pixels on the long side). `CardPhotoStore` keeps
+one JPEG per card in Application Support. The card detail screen shows it and shares
+it, and Share offers Save Image. English and Japanese sessions take no photo.
+
 Three things are read now, not two:
 
 - **Card name**

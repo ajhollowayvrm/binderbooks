@@ -33,15 +33,8 @@ struct OwnedCardGrid: View {
                     }
                     .buttonStyle(.plain)
                 } else {
-                    NavigationLink(value: stack.route) {
-                        OwnedCardCard(stack: stack)
-                    }
-                    .buttonStyle(.plain)
-                    // A simultaneous gesture, so the long press cannot swallow
-                    // the tap that pushes the card.
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.4).onEnded { _ in onLongPress(stack.cardIds) }
-                    )
+                    OwnedCardCard(stack: stack)
+                        .pushOrSelect(stack) { onLongPress(stack.cardIds) }
                 }
             }
         }
@@ -201,5 +194,34 @@ struct OwnedCardCard: View {
                     }
             }
         }
+    }
+}
+
+extension View {
+    /// A tap pushes the stack's card. A long press selects it, and only
+    /// selects it.
+    ///
+    /// Not a `NavigationLink` with a simultaneous long press: the link took the
+    /// lift that ends the long press as a tap, so it opened the card, and he
+    /// had to come back to use the selection. Here the tap and the long press
+    /// exclude each other.
+    func pushOrSelect(_ stack: InventoryStack, onLongPress: @escaping () -> Void) -> some View {
+        modifier(PushOrSelect(route: stack.route, onLongPress: onLongPress))
+    }
+}
+
+private struct PushOrSelect: ViewModifier {
+    var route: AppRoute
+    var onLongPress: () -> Void
+
+    @Environment(\.pushRoute) private var push
+
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .onTapGesture { push(route) }
+            .onLongPressGesture(minimumDuration: 0.4) { onLongPress() }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(named: "Select") { onLongPress() }
     }
 }

@@ -296,7 +296,7 @@ private func seed(_ context: ModelContext) throws {
 
         let data = try CollectionExport.exportData(source.mainContext)
         let file = try CollectionExport.decode(data)
-        #expect(file.version == 8)
+        #expect(file.version == CollectionExport.version)
         // A catalog card writes none of the new keys.
         #expect(file.cards.first { $0.productId == 9 }?.manualName == nil)
 
