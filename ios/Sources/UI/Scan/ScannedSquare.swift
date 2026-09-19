@@ -12,7 +12,7 @@ struct ScannedSquare: View {
     var body: some View {
         VStack(spacing: 3) {
             ZStack(alignment: .topTrailing) {
-                ProductThumbnail(urlString: hit?.imageUrl, isSealed: false)
+                ProductThumbnail(urlString: card.photoURLString ?? hit?.imageUrl, isSealed: false)
                     .aspectRatio(0.72, contentMode: .fit)
                     .overlay(alignment: .bottom) {
                         if let cert = card.certNumber {

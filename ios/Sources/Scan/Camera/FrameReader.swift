@@ -119,6 +119,11 @@ struct FrameReader {
            let signature = CardArtDescriptor.make(fromRaw: raw) {
             reading.observation.artDescriptor = signature
             reading.observation.artSharpness = reading.sharpness
+            // The sharpest frame so far is also worth keeping as a photo, in
+            // case he marks the card S-Chinese and it becomes the card's art.
+            if let photo = CardRectifier.flatten(frame, to: rectangle, size: CardRectifier.readingSize(for: rectangle, in: frame)) {
+                reading.observation.photoJPEG = CardPhotoStore.jpeg(photo)
+            }
         }
         return reading
     }

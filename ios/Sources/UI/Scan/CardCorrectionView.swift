@@ -10,6 +10,9 @@ struct CardCorrectionView: View {
     @Environment(CatalogController.self) private var catalog
     @State private var search = SearchModel(context: .scanning)
     @State private var showDelete = false
+    /// Bumped after a photo is saved or removed, so the thumbnail — which
+    /// reads a file at a URL that does not itself change — redraws.
+    @State private var photoRefresh = UUID()
 
     var body: some View {
         @Bindable var search = search
@@ -17,8 +20,9 @@ struct CardCorrectionView: View {
             List {
                 Section {
                     HStack(alignment: .top, spacing: 12) {
-                        ProductThumbnail(urlString: model.hit(for: card)?.imageUrl, isSealed: false)
+                        ProductThumbnail(urlString: card.photoURLString ?? model.hit(for: card)?.imageUrl, isSealed: false)
                             .frame(width: 56, height: 78)
+                            .id(photoRefresh)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(model.hit(for: card)?.name ?? "Not identified")
                                 .font(.headline)
@@ -47,6 +51,15 @@ struct CardCorrectionView: View {
                             dismiss()
                         }
                     }
+                    if !card.isSChinese {
+                        Button("Mark as S-Chinese…") {
+                            model.markAsSChinese(card)
+                        }
+                    }
+                }
+
+                if card.isSChinese {
+                    ManualIdentitySection(card: card, onChange: {}, onPhotoChanged: { photoRefresh = UUID() })
                 }
 
                 // The pattern printings. These share a name and a number and
@@ -55,44 +68,46 @@ struct CardCorrectionView: View {
                 // the pattern on. This is the one choice the scanner cannot make
                 // for him when the catalog has no reference image for a
                 // printing, which for most of them it does not.
-                if patternFamily.count > 1 {
-                    Section {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(alignment: .top, spacing: 12) {
-                                ForEach(patternFamily) { hit in
-                                    patternTile(hit)
+                if !card.isSChinese {
+                    if patternFamily.count > 1 {
+                        Section {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(alignment: .top, spacing: 12) {
+                                    ForEach(patternFamily) { hit in
+                                        patternTile(hit)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        } header: {
+                            Text("Which printing")
+                        } footer: {
+                            Text("Same card, same number. Only the foil differs.")
+                        }
+                    }
+
+                    let others = card.candidateProductIds.filter { id in
+                        !patternFamily.contains { $0.productId == id }
+                    }
+                    if others.count > 1 || (others.count == 1 && patternFamily.isEmpty) {
+                        Section("Candidates") {
+                            ForEach(others, id: \.self) { id in
+                                if let hit = model.hits[id] {
+                                    candidateRow(hit)
                                 }
                             }
-                            .padding(.vertical, 4)
-                        }
-                    } header: {
-                        Text("Which printing")
-                    } footer: {
-                        Text("Same card, same number. Only the foil differs.")
-                    }
-                }
-
-                let others = card.candidateProductIds.filter { id in
-                    !patternFamily.contains { $0.productId == id }
-                }
-                if others.count > 1 || (others.count == 1 && patternFamily.isEmpty) {
-                    Section("Candidates") {
-                        ForEach(others, id: \.self) { id in
-                            if let hit = model.hits[id] {
-                                candidateRow(hit)
-                            }
                         }
                     }
-                }
 
-                let printings = model.availablePrintings(for: card)
-                if printings.count > 1 {
-                    Section("Printing") {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack {
-                                ForEach(printings, id: \.self) { printing in
-                                    Chip(title: printing, isSelected: card.printing == printing) {
-                                        model.setPrinting(printing, for: [card])
+                    let printings = model.availablePrintings(for: card)
+                    if printings.count > 1 {
+                        Section("Printing") {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack {
+                                    ForEach(printings, id: \.self) { printing in
+                                        Chip(title: printing, isSelected: card.printing == printing) {
+                                            model.setPrinting(printing, for: [card])
+                                        }
                                     }
                                 }
                             }
@@ -116,15 +131,17 @@ struct CardCorrectionView: View {
                     ))
                 }
 
-                Section("Search") {
-                    HStack {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("Name or number", text: $search.text)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                    }
-                    ForEach(search.hits.prefix(25)) { hit in
-                        candidateRow(hit)
+                if !card.isSChinese {
+                    Section("Search") {
+                        HStack {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            TextField("Name or number", text: $search.text)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        }
+                        ForEach(search.hits.prefix(25)) { hit in
+                            candidateRow(hit)
+                        }
                     }
                 }
 

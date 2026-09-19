@@ -18,7 +18,7 @@ struct OwnedCardRow: View {
                 SlabBadge(imageUrl: row.hit?.imageUrl, grader: row.card.graderRaw, grade: row.card.gradeLabel, cert: row.card.certNumber)
                     .frame(width: 48, height: 74)
             } else {
-                ProductThumbnail(urlString: row.hit?.imageUrl, isSealed: row.card.isSealedSelf)
+                ProductThumbnail(urlString: row.card.photoURLString ?? row.hit?.imageUrl, isSealed: row.card.isSealedSelf)
                     .frame(width: 44, height: 62)
             }
 

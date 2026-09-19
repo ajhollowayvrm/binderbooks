@@ -278,6 +278,14 @@ final class OwnedCard {
     /// True for a card he entered by hand: a name and no catalog product.
     var isHandEntered: Bool { productId == 0 && !manualName.isEmpty }
 
+    /// A card marked untracked: no catalog product, no TCGCSV price, and no
+    /// grading. His own price and, maybe, his own photo instead.
+    var isSChinese: Bool { language == "zh-Hans" }
+
+    /// The saved photo, if one exists. Precedence lives in the callers that
+    /// build a `ProductThumbnail`, not here.
+    var photoURLString: String? { CardPhotoStore.existingURL(for: id)?.absoluteString }
+
     /// True when the app knows the card, from the catalog or from his entry.
     /// `isIdentified` stays catalog-only, because the scan review, the comps
     /// fetch, the listing export, and the order import all need a `productId`.

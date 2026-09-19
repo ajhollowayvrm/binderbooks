@@ -137,6 +137,7 @@ enum CardEditor {
         card.manualNumber = ""
         card.manualMarketCents = nil
         card.language = "en"
+        CardPhotoStore.remove([card.id])
         try context.save()
     }
 }

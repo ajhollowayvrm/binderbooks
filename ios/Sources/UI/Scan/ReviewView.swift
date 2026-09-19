@@ -49,7 +49,7 @@ struct ReviewView: View {
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Commit") { showCommit = true }
-                    .disabled(model.cards.isEmpty || model.cards.contains { !$0.isIdentified })
+                    .disabled(model.cards.isEmpty || model.cards.contains { !$0.isIdentified && !$0.isHandEntered })
             }
             ToolbarItemGroup(placement: .bottomBar) {
                 if editMode.isEditing {
@@ -220,7 +220,7 @@ private struct ReviewRow: View {
     var body: some View {
         HStack(spacing: 12) {
             ZStack(alignment: .topTrailing) {
-                ProductThumbnail(urlString: hit?.imageUrl, isSealed: false)
+                ProductThumbnail(urlString: card.photoURLString ?? hit?.imageUrl, isSealed: false)
                     .frame(width: 40, height: 56)
                 ConfidenceMarker(confidence: card.matchConfidence, identified: card.isIdentified, isBulk: card.isBulk)
                     .offset(x: 4, y: -4)

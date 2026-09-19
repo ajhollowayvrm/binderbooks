@@ -19,6 +19,11 @@ final class ScanSessionModel {
     /// Copies already in inventory, by productId, then printing. Read once when
     /// the session opens: nothing commits or sells while he scans.
     private(set) var held: [Int: [String: Int]] = [:]
+    /// A card's scanned photo, held only until it either gets marked
+    /// S-Chinese and saved to `CardPhotoStore`, or is never needed and drops
+    /// out of memory with the session. Most scanned cards are ordinary
+    /// catalog matches, so nothing is written to disk unless a card asks.
+    private var pendingPhotos: [UUID: Data] = [:]
 
     init(session: ScanSession, context: ModelContext, catalog: CatalogController) {
         self.session = session
@@ -167,6 +172,7 @@ final class ScanSessionModel {
         card.candidateProductIds = result.candidates.map(\.productId)
         card.scanSession = session
         context.insert(card)
+        pendingPhotos[card.id] = observation.photoJPEG
         if let hit = result.hit, result.confidence <= .likely {
             session.observe(groupId: hit.groupId)
         }
@@ -215,6 +221,7 @@ final class ScanSessionModel {
         copy.tags = last.tags
         copy.scanSession = session
         context.insert(copy)
+        CardPhotoStore.copy(from: last.id, to: copy.id)
         save()
     }
 
@@ -226,6 +233,16 @@ final class ScanSessionModel {
         card.matchConfidence = .manual
         if !card.candidateProductIds.contains(hit.productId) {
             card.candidateProductIds.insert(hit.productId, at: 0)
+        }
+        // A catalog card keeps none of a dropped S-Chinese identity: its art
+        // comes from the catalog, not from `CardPhotoStore`.
+        if card.language != "en" {
+            card.manualName = ""
+            card.manualSetName = ""
+            card.manualNumber = ""
+            card.manualMarketCents = nil
+            card.language = "en"
+            CardPhotoStore.remove([card.id])
         }
         session.observe(groupId: hit.groupId)
         save()
@@ -297,8 +314,28 @@ final class ScanSessionModel {
         save()
     }
 
+    /// Drops the catalog match and marks the card untracked: his own name,
+    /// number, and price, with no TCGCSV price and no grading. The name and
+    /// number start from what OCR read, so he is only filling gaps.
+    func markAsSChinese(_ card: OwnedCard) {
+        card.productId = 0
+        card.matchConfidence = .manual
+        card.candidateProductIds = []
+        card.language = "zh-Hans"
+        card.manualName = card.ocrName ?? ""
+        card.manualNumber = card.ocrNumber ?? ""
+        if let jpeg = pendingPhotos.removeValue(forKey: card.id) {
+            try? CardPhotoStore.save(jpeg, for: card.id)
+        }
+        save()
+    }
+
     func delete(_ cards: [OwnedCard]) {
-        for card in cards { context.delete(card) }
+        CardPhotoStore.remove(cards.map(\.id))
+        for card in cards {
+            pendingPhotos.removeValue(forKey: card.id)
+            context.delete(card)
+        }
         save()
     }
 
@@ -378,6 +415,7 @@ final class ScanSessionModel {
     func discard() {
         // A rip that never committed leaves the packs sealed, as they were.
         if let target = session.ripTarget { RipPool.release(target, context: context) }
+        CardPhotoStore.remove(cards.map(\.id))
         context.delete(session)
         save()
     }

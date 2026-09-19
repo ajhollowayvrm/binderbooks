@@ -1,5 +1,7 @@
+import PhotosUI
 import SwiftData
 import SwiftUI
+import UIKit
 
 /// One owned card: catalog data, the basis breakdown, the source purchase, and
 /// the edits that need no other model.
@@ -20,6 +22,7 @@ struct OwnedCardDetailView: View {
     var body: some View {
         if let card = cards.first {
             OwnedCardDetailBody(card: card, model: model, showDelete: $showDelete) {
+                CardPhotoStore.remove([card.id])
                 modelContext.delete(card)
                 try? modelContext.save()
                 dismiss()
@@ -45,6 +48,10 @@ private struct OwnedCardDetailBody: View {
     @State private var pickingProduct = false
     @State private var choosingPurchase = false
     @State private var ripTarget: TagSheetTarget?
+    @State private var confirmMarkSChinese = false
+    /// Bumped after a photo is saved or removed, so the thumbnail — which
+    /// reads a file at a URL that does not itself change — redraws.
+    @State private var photoRefresh = UUID()
 
     private var hit: SearchHit? { model.hits[card.productId] }
     private var printings: [String] { model.prices[card.productId]?.map(\.subTypeName) ?? [] }
@@ -60,7 +67,7 @@ private struct OwnedCardDetailBody: View {
             // A card with no catalog product: one he entered by hand, or an
             // imported row that never had one. He can name it here.
             if card.productId == 0, !card.isSealedSelf {
-                ManualIdentitySection(card: card) { model.invalidateHaystacks() }
+                ManualIdentitySection(card: card, onChange: { model.invalidateHaystacks() }, onPhotoChanged: { photoRefresh = UUID() })
             }
             edits
             Section {
@@ -77,6 +84,11 @@ private struct OwnedCardDetailBody: View {
         }
         .confirmationDialog("Delete this card from inventory?", isPresented: $showDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive, action: onDelete)
+        }
+        .confirmationDialog("Mark this card S-Chinese?", isPresented: $confirmMarkSChinese, titleVisibility: .visible) {
+            Button("Mark as S-Chinese", role: .destructive) { markSChinese() }
+        } message: {
+            Text("This drops the catalog match. The card becomes untracked: your own name, price, and, if you add one, your own photo. No grading is tracked for it.")
         }
         .sheet(item: $tagTarget) { target in
             TagSheet(target: target, uses: model.tagUses(in: allCards), allCards: allCards.filter(\.isCommitted)) {
@@ -117,8 +129,9 @@ private struct OwnedCardDetailBody: View {
                     SlabBadge(imageUrl: hit?.imageUrl, grader: card.graderRaw, grade: card.gradeLabel, cert: card.certNumber)
                         .frame(width: 110, height: 168)
                 } else {
-                    ProductThumbnail(urlString: hit?.imageUrl?.replacingOccurrences(of: "_200w", with: "_400w"), isSealed: card.isSealedSelf)
+                    ProductThumbnail(urlString: card.photoURLString ?? hit?.imageUrl?.replacingOccurrences(of: "_200w", with: "_400w"), isSealed: card.isSealedSelf)
                         .frame(width: 110, height: 154)
+                        .id(photoRefresh)
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text(card.displayName(hit) ?? "Unknown").font(.title3.weight(.semibold))
@@ -305,6 +318,13 @@ private struct OwnedCardDetailBody: View {
                 } label: {
                     Label(card.isIdentified ? "Change card…" : "Find in catalog…", systemImage: "arrow.triangle.2.circlepath")
                 }
+                if !card.isSChinese {
+                    Button {
+                        confirmMarkSChinese = true
+                    } label: {
+                        Label("Mark as S-Chinese…", systemImage: "character.book.closed")
+                    }
+                }
             }
             if printings.count > 1 {
                 chipRow("Printing", printings, selected: card.printing) { card.printing = $0; save() }
@@ -314,6 +334,12 @@ private struct OwnedCardDetailBody: View {
                 markingGraded = true
             } label: {
                 Label(card.gradeLabel == nil ? "Mark as graded…" : "Edit the grade…", systemImage: "seal")
+            }
+            .disabled(card.isSChinese)
+            if card.isSChinese {
+                Text("Grading is not tracked for S-Chinese cards.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Toggle("Personal collection (not inventory)", isOn: Binding(get: { card.isPersonalCollection }, set: { card.isPersonalCollection = $0; save() }))
             Toggle("Bulk (identity only, no basis)", isOn: Binding(get: { card.isBulk }, set: { card.isBulk = $0; save() }))
@@ -359,6 +385,21 @@ private struct OwnedCardDetailBody: View {
         }
     }
 
+    /// Drops the catalog match and marks the card untracked. There is no
+    /// scanned photo to carry over here — this card was already in
+    /// inventory — so the photo, if he wants one, comes from `ManualIdentitySection`'s
+    /// picker below.
+    private func markSChinese() {
+        let previousName = card.displayName(hit)
+        card.productId = 0
+        card.matchConfidence = .manual
+        card.candidateProductIds = []
+        card.language = "zh-Hans"
+        if card.manualName.isEmpty { card.manualName = previousName ?? "" }
+        save()
+        model.invalidateHaystacks()
+    }
+
     /// A box that produced nothing. Its line stays, ripped, at cost — the
     /// dud's loss the purchase-level rip performance already expects — and
     /// only the self-card that stood for it leaves.
@@ -371,12 +412,14 @@ private struct OwnedCardDetailBody: View {
 
 /// The name, set, number, language, and value of a card with no catalog
 /// product. He typed them, so he can correct them here.
-private struct ManualIdentitySection: View {
+struct ManualIdentitySection: View {
     let card: OwnedCard
     var onChange: () -> Void
+    var onPhotoChanged: () -> Void = {}
 
     @Environment(\.modelContext) private var modelContext
     @State private var valueText = ""
+    @State private var pickedPhoto: PhotosPickerItem?
 
     /// A stored code that is not in the list still shows, so the picker never
     /// has a selection without a row.
@@ -415,6 +458,31 @@ private struct ManualIdentitySection: View {
                 card.manualMarketCents = cents
             }
             save()
+        }
+        if card.isSChinese {
+            Section {
+                PhotosPicker(card.photoURLString == nil ? "Choose a photo…" : "Change photo…", selection: $pickedPhoto, matching: .images)
+                if card.photoURLString != nil {
+                    Button("Remove photo", role: .destructive) {
+                        CardPhotoStore.remove([card.id])
+                        onPhotoChanged()
+                    }
+                }
+            } footer: {
+                Text("The catalog carries no art for this card. Its photo is yours: the one from the scan, or one you pick.")
+            }
+            .onChange(of: pickedPhoto) { _, item in
+                guard let item else { return }
+                Task {
+                    if let data = try? await item.loadTransferable(type: Data.self),
+                       let image = UIImage(data: data)?.cgImage,
+                       let jpeg = CardPhotoStore.jpeg(image) {
+                        try? CardPhotoStore.save(jpeg, for: card.id)
+                        onPhotoChanged()
+                    }
+                    pickedPhoto = nil
+                }
+            }
         }
     }
 
