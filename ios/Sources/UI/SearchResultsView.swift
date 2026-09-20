@@ -17,22 +17,38 @@ struct SearchResultsView: View {
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var cards: [OwnedCard]
     @State private var showSetPicker = false
     @State private var addingByHand = false
+    @State private var showMasterSet = false
     @AppStorage(cardLayoutKey) private var layout: CardLayout = .grid
 
     /// The inventory chips do not apply here. This section answers the query,
-    /// not the state of another page.
+    /// not the state of another page. The chips on **this** page do apply: with
+    /// Sealed chosen, a hundred singles under "In your collection" was the
+    /// wrong answer.
     private var ownedRows: [InventoryRow] {
-        inventory.rows(from: cards, query: model.text, applyFilter: false)
+        inventory.rows(from: cards, query: model.text, applyFilter: false).filter(matchesChips)
+    }
+
+    private func matchesChips(_ row: InventoryRow) -> Bool {
+        let filter = model.filter
+        if filter.kind != .all, (filter.kind == .sealed) != InventoryModel.isSealed(row.card, hit: row.hit) { return false }
+        if let groupId = filter.groupId, row.hit?.groupId != groupId { return false }
+        if !filter.categoryIds.isEmpty, !(row.hit.map { filter.categoryIds.contains($0.categoryId) } ?? false) { return false }
+        return true
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                FilterChipRow(model: model, showSetPicker: $showSetPicker)
+                FilterChipRow(model: model, showSetPicker: $showSetPicker, showMasterSet: $showMasterSet)
                 CardLayoutButton(layout: $layout)
             }
             Divider()
-            results
+            // The query narrows the checklist, the same as it narrows results.
+            if showMasterSet, let groupId = model.filter.groupId {
+                MasterSetView(groupId: groupId, query: model.text)
+            } else {
+                results
+            }
         }
         // The owned cards select the same way as on the inventory page, and
         // the selection lives through the keystroke that brought him here.

@@ -24,6 +24,10 @@ struct CameraScannerView: UIViewControllerRepresentable {
     /// card. He is almost always too close: a card whose edges leave the frame
     /// has no quadrilateral, and nothing is read from a frame with no card.
     var onCardNotFramed: () -> Void = {}
+    /// The camera cannot run, or can again. Nil clears the fault.
+    var onFault: (ScannerFault?) -> Void = { _ in }
+    /// What the loop is doing, reported every frame.
+    var onState: (ScanState) -> Void = { _ in }
     /// The torch, on or off. A card slinger is a closed chute, and the light in
     /// it is whatever leaks past the phone.
     var torchOn: Bool = false
@@ -47,6 +51,8 @@ struct CameraScannerView: UIViewControllerRepresentable {
         let controller = CameraScannerController()
         controller.onObservation = onObservation
         controller.onCardNotFramed = onCardNotFramed
+        controller.onFault = onFault
+        controller.onState = onState
         controller.mode = mode
         controller.torchOn = torchOn
         controller.zoom = zoom
@@ -57,6 +63,8 @@ struct CameraScannerView: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: CameraScannerController, context: Context) {
         controller.onObservation = onObservation
         controller.onCardNotFramed = onCardNotFramed
+        controller.onFault = onFault
+        controller.onState = onState
         controller.mode = mode
         controller.torchOn = torchOn
         controller.zoom = zoom
@@ -65,12 +73,16 @@ struct CameraScannerView: UIViewControllerRepresentable {
         if captureCount != controller.handledCaptureCount {
             controller.handledCaptureCount = captureCount
             onCaptureBegan()
-            let outcome = controller.captureNow()
-            onCaptureEnded(false)
-            switch outcome {
-            case .nothing: onNothingToCapture()
-            case .withoutNumber: onCapturedWithoutNumber()
-            case .complete: break
+            let ended = onCaptureEnded
+            let nothing = onNothingToCapture
+            let withoutNumber = onCapturedWithoutNumber
+            controller.captureNow { outcome in
+                ended(false)
+                switch outcome {
+                case .nothing: nothing()
+                case .withoutNumber: withoutNumber()
+                case .complete: break
+                }
             }
         }
 
@@ -87,6 +99,11 @@ struct CameraScannerView: UIViewControllerRepresentable {
 final class CameraScannerController: UIViewController {
     var onObservation: ((ScanObservation) -> Void)?
     var onCardNotFramed: (() -> Void)?
+    /// Raised when the camera cannot run, and cleared with nil once it does.
+    var onFault: ((ScannerFault?) -> Void)?
+    /// What the loop is doing, every frame. The status bar shows it, so a
+    /// scanner that is refusing cards no longer looks like an empty chute.
+    var onState: ((ScanState) -> Void)?
     var mode: ScanMode = .automatic
     var handledCaptureCount = 0
 
@@ -135,7 +152,11 @@ final class CameraScannerController: UIViewController {
         }
     }
 
-    private var gate = DuplicateGate()
+    private var pipeline = ScanPipeline()
+    /// The last state published, so an unchanged one is not published again.
+    private var lastState: ScanState?
+    /// When a frame last arrived. Nil until the session delivers its first.
+    private var lastFrameAt: Date?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -155,12 +176,22 @@ final class CameraScannerController: UIViewController {
     }
 
     private func start() async {
-        guard await CameraSession.authorize() else { return }
-        do {
-            try camera.configure()
-        } catch {
+        // Both of these used to be a bare `return`. A denied permission and a
+        // session that would not configure each left a black rectangle and no
+        // word about why, which is indistinguishable from a scanner that is
+        // working and sees nothing.
+        guard await CameraSession.authorize() else {
+            onFault?(.permissionDenied)
             return
         }
+        do {
+            try camera.configure()
+            camera.capExposure()
+        } catch {
+            onFault?(.configurationFailed(error.localizedDescription))
+            return
+        }
+        onFault?(nil)
 
         let layer = AVCaptureVideoPreviewLayer(session: camera.session)
         layer.videoGravity = .resizeAspectFill
@@ -181,6 +212,15 @@ final class CameraScannerController: UIViewController {
         let state = self.state
         camera.setFrameHandler { [weak self] pixels, _ in
             guard let self else { return }
+            // The shutter takes the next frame whole, before the live loop
+            // sees it.
+            if state.takeCaptureRequest() {
+                let forced = state.readForced(pixels)
+                Task { @MainActor in
+                    self.finishCapture(forced)
+                }
+                return
+            }
             let focusing = state.isFocusing
             let reading = state.read(pixels, isFocusing: focusing)
             Task { @MainActor in
@@ -205,8 +245,27 @@ final class CameraScannerController: UIViewController {
             Task { @MainActor in
                 guard let self else { return }
                 self.state.isFocusing = self.camera.isFocusing
+                self.checkFrames()
             }
         }
+    }
+
+    /// How long the session may deliver no frames at all before saying so.
+    ///
+    /// Thirty a second is the normal rate, so three seconds of silence is not a
+    /// slow moment, it is a stopped session. Long enough that a hitch while the
+    /// app returns to the foreground does not raise it.
+    private static let frameSilence: TimeInterval = 3
+
+    /// Everything else in this controller reports what the frames *said*. This
+    /// reports that no frame said anything, which is the one failure the rest
+    /// of the loop cannot see: an `AVCaptureSession` that starts and then stops
+    /// delivering looks exactly like a lens pointed at an empty chute, because
+    /// in both cases the last thing anyone heard was "nothing there".
+    private func checkFrames() {
+        guard isRunning, let last = lastFrameAt else { return }
+        guard Date().timeIntervalSince(last) >= Self.frameSilence else { return }
+        report(.stalled)
     }
 
     override func viewDidLayoutSubviews() {
@@ -263,37 +322,47 @@ final class CameraScannerController: UIViewController {
         draw(reading.cardCorners, frameSize: reading.frameSize)
         noteFraming(reading)
 
+        let now = Date()
+        lastFrameAt = now
+
         // A slab is its own thing: read once per visit, by barcode.
         if let cert = reading.observation.certNumber {
-            if gate.shouldAccept(cert: cert, at: Date()) {
+            if pipeline.gate.shouldAccept(cert: cert, at: now) {
                 onObservation?(reading.observation)
             }
             return
         }
 
         state.accumulate(reading.observation)
-        let merged = state.merged()
+        var merged = state.merged()
+        // One frame that found a card is enough to say a card is there. The
+        // merged window can lag a frame behind on this.
+        merged.sawCard = merged.sawCard || reading.observation.sawCard
 
-        // Every frame reaches the gate, including the frames that read no word
-        // off the card, and including the frames that arrive in manual mode.
-        // That is how it knows the card is still there: a number is unreadable
-        // far more often than a card is absent, and a gate that counted an
-        // unreadable number as "the card left" logged the card twice.
-        let seen = DuplicateGate.Reading(
-            number: merged.number,
-            art: merged.artDescriptor,
-            sawCard: merged.sawCard || reading.observation.sawCard
-        )
-        let accepted = gate.shouldAccept(seen, at: Date())
+        // Every frame reaches the pipeline, including the frames that read no
+        // word off the card and the frames that arrive in manual mode. That is
+        // how it knows the card is still there: a number is unreadable far more
+        // often than a card is absent, and treating an unreadable number as
+        // "the card left" logged the card twice.
+        switch pipeline.consider(merged, mode: mode, at: now) {
+        case .queue(let observation):
+            onObservation?(observation)
+            state.resetAccumulator(afterLogging: observation)
+            report(.idle)
+        case .waiting(let waiting):
+            report(waiting)
+        }
+    }
 
-        // Automatic mode logs as soon as a card reads clearly, the way it
-        // always has. Manual mode waits for the shutter.
-        guard mode == .automatic else { return }
-        // A card with no readable number is not worth logging yet, but the gate
-        // has still been told what the lens can see.
-        guard accepted, merged.number != nil, !merged.isEmpty else { return }
-        onObservation?(merged)
-        state.resetAccumulator()
+    /// Publish the loop's state, and only when it changes.
+    ///
+    /// Frames arrive thirty times a second. Assigning SwiftUI state on each of
+    /// them re-evaluates the scan screen thirty times a second — including the
+    /// strip of squares — to say the same thing it said last frame.
+    private func report(_ next: ScanState) {
+        guard next != lastState else { return }
+        lastState = next
+        onState?(next)
     }
 
     /// A frame full of detail with no card in it. Nothing is read from such a
@@ -342,22 +411,61 @@ final class CameraScannerController: UIViewController {
         case nothing, withoutNumber, complete
     }
 
-    func captureNow() -> CaptureOutcome {
-        let merged = state.merged()
-        // A slab is read off its label and has no card quadrilateral to find.
-        guard merged.certNumber != nil || merged.sawCard else { return .nothing }
-        guard merged.number != nil || merged.name != nil || merged.certNumber != nil else {
-            return .nothing
+    private var captureCompletion: ((CaptureOutcome) -> Void)?
+
+    /// The shutter. It always tries.
+    ///
+    /// It used to send whatever the live window held, and send nothing unless
+    /// that window had found a card outline and read a word. A card held in a
+    /// sleeve, or held still for less than a second, gave a window with an
+    /// attack name in it and no number, and "Shield Press" was logged for a
+    /// Zamazenta whose number was sharp on screen. Now the next frame is read
+    /// with every gate off (`FrameReader.readForced`), and the window fills in
+    /// only what that frame could not read.
+    func captureNow(completion: @escaping (CaptureOutcome) -> Void) {
+        // A second press while the first is reading waits for the first.
+        guard captureCompletion == nil else { return }
+        captureCompletion = completion
+        state.requestCapture()
+        // A session that stopped delivering frames never answers. Give up
+        // rather than leave the shutter spinning.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, self.captureCompletion != nil else { return }
+            self.state.cancelCaptureRequest()
+            self.finishCapture(ScanObservation())
         }
-        onObservation?(merged)
-        // The gate has to know, or switching back to automatic with the same
-        // card still in the chute logs it a second time.
-        gate.note(
-            DuplicateGate.Reading(number: merged.number, art: merged.artDescriptor, sawCard: merged.sawCard),
-            at: Date()
-        )
-        state.resetAccumulator()
-        return merged.number == nil && merged.certNumber == nil ? .withoutNumber : .complete
+    }
+
+    private func finishCapture(_ forced: ScanObservation) {
+        guard let completion = captureCompletion else { return }
+        captureCompletion = nil
+
+        var observation = forced
+        let window = state.merged()
+        if observation.number == nil, observation.certNumber == nil, let number = window.number {
+            observation.number = number
+        }
+        if observation.nameCandidates.isEmpty {
+            observation.nameCandidates = window.nameCandidates
+            observation.name = window.name
+        }
+        if observation.artDescriptor == nil, let art = window.artDescriptor {
+            observation.artDescriptor = art
+            observation.artSharpness = window.artSharpness
+            observation.artIsBestEffort = window.artIsBestEffort
+        }
+
+        guard !observation.isEmpty || observation.artDescriptor != nil else {
+            completion(.nothing)
+            return
+        }
+        onObservation?(observation)
+        // The pipeline has to know, or switching back to automatic with the
+        // same card still in the chute logs it a second time.
+        pipeline.noteCaptured(observation)
+        state.resetAccumulator(afterLogging: observation)
+        completion(observation.number == nil && observation.certNumber == nil ? .withoutNumber : .complete)
     }
 }
 
@@ -372,6 +480,29 @@ final class ReadingState: @unchecked Sendable {
     private var accumulator = ObservationAccumulator()
     private var bestSharpness: Double = 0
     private var _isFocusing = false
+    private var captureRequested = false
+
+    /// The shutter asks for the next frame.
+    func requestCapture() {
+        lock.lock(); captureRequested = true; lock.unlock()
+    }
+
+    func cancelCaptureRequest() {
+        lock.lock(); captureRequested = false; lock.unlock()
+    }
+
+    /// True once per request, on the frame that answers it.
+    func takeCaptureRequest() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let requested = captureRequested
+        captureRequested = false
+        return requested
+    }
+
+    func readForced(_ pixels: CVPixelBuffer) -> ScanObservation {
+        lock.lock(); defer { lock.unlock() }
+        return reader.readForced(pixels)
+    }
 
     var isFocusing: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _isFocusing }
@@ -423,6 +554,14 @@ final class ReadingState: @unchecked Sendable {
     func resetAccumulator() {
         lock.lock()
         accumulator.reset()
+        bestSharpness = 0
+        lock.unlock()
+    }
+
+    /// The same, and the card just logged stays out of the next window.
+    func resetAccumulator(afterLogging card: ScanObservation) {
+        lock.lock()
+        accumulator.reset(afterLogging: card)
         bestSharpness = 0
         lock.unlock()
     }

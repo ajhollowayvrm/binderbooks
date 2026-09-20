@@ -368,6 +368,19 @@ final class ScanSession {
     /// Drives the learned session bias. Not user-configured.
     var observedGroupIds: [Int] = []
 
+    /// The sets this run is expected to be in.
+    ///
+    /// **Soft.** It adds a bonus to a candidate's score and never removes a
+    /// candidate, so a card filed somewhere else — a Stellar Crown stamped
+    /// print, a promo — still wins on the strength of its own number and name.
+    ///
+    /// Derived from the sealed products he is ripping, not asked for: the brief
+    /// forbids a "choose your sets" step and is right to, because it would be a
+    /// setup screen in front of the one action he does three hundred times a
+    /// night. The chip in the scan screen lets him set or clear it when he
+    /// knows better, and it is never required.
+    var preferredGroupIds: [Int] = []
+
     init(defaultCondition: String = CardCondition.nearMint.rawValue, defaultPrinting: String? = nil) {
         self.id = UUID()
         self.startedAt = Date()

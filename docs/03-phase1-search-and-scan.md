@@ -170,6 +170,49 @@ to need a spinner, something is wrong — investigate rather than adding the spi
 
 ## Scanning
 
+### The 2026-09-18 rebuild — why automatic scanning logged nothing
+
+His report was that auto scanning was "just totally not working" and would not add a
+card to the collection. Six faults, each one silent, and no single one of them was the
+whole story:
+
+1. **The duplicate gate could die mid-rip and never recover.** `DuplicateGate`
+   declared any reading carrying no artwork signature to be the same card as a
+   remembered visit that had one, and only cleared its memory after the frame held no
+   card at all for 1.5 seconds. In a continuous chute that never happens. Once
+   signatures stopped arriving, every later card was refused for the rest of the run.
+   Replaced by `CardIdentityGate`, which bounds that rule in time (`ghostWindow`),
+   applies it only where the asymmetry is real, and expires visits (`visitLifetime`)
+   whatever else happens — so the gate cannot enter a state it never leaves.
+2. **Signatures stopped arriving in ordinary light.** `minimumSharpness` at 25 is the
+   right bar when a sharp frame is coming; in a dim chute none is, and artwork
+   silently stopped being a signal exactly when the words were struggling too. Now,
+   after `signingPatience`, the sharpest frame is signed anyway and marked
+   `artIsBestEffort`.
+3. **Automatic mode refused to log a card with no collector number.** The picture is
+   worth 95% at rank one on its own and the name is worth a great deal; both were
+   taken, compared against nothing, and thrown away. `ScanPipeline` now logs on any of
+   the three keys, after `patience`, measured against **one identity holding still**
+   rather than against a card merely being present — that distinction is what keeps
+   the Dedenne's flickering attack lines from aging into a row.
+4. **No quadrilateral meant no reading at all.** A sleeved card, a glare, or a card
+   held too close read nothing for as long as the condition lasted. `CardRectifier`
+   now has a loose tier and a `guideCrop` fallback. The 2026-09-14 rule still stands:
+   text is never read from the whole frame, and the crop is a bounded region where the
+   viewfinder tells him to put the card.
+5. **One unidentified card blocked the entire commit.** The Commit button was disabled
+   while any card was unidentified, so a whole rip stayed out of the collection until
+   every row was fixed, and nothing said which row or why. It now commits with a
+   confirmation naming the count.
+6. **Everything failed silently.** `ScanSessionModel.lastError` was written by three
+   paths and read by no view. A denied camera permission and a session that would not
+   configure were both bare `return` statements behind a black rectangle. Now
+   `ScannerFault` and `ScanState` feed a `ScanStatusBar` that is never empty.
+
+The through-line: every one of these was a scanner that had stopped, looking exactly
+like a scanner pointed at an empty chute. The structural fix is not any single
+threshold — it is that a refusal now has a reason, and the reason is on screen.
+
 ### Recognition
 
 **Manual mode logs what the last second of frames agreed on.** Added
@@ -434,6 +477,32 @@ sets have resolved. Once several cards land in one set, boost that set for later
 ambiguous matches. It self-corrects when he moves to the next pack, because new cards
 pull the bias with them. He should never see a "choose your sets" step.
 
+**Amended 2026-09-18: the rip carries a set scope, and he is still never asked.**
+`ScanSession.preferredGroupIds` holds the sets the run is expected to produce. It is
+**derived**, by `RipSetHint`, from the sealed products he is opening: `RipSheet`
+already knows exactly which booster box is being cut open, and a booster box has a
+set. The rule above stands — there is no setup step and no picker in the way of the
+scanner. A chip in the defaults row lets him correct or clear it, and it is never
+required. A session that is not a rip has no scope and behaves as before.
+
+The scope does two things, and neither of them narrows:
+
+1. **Finds.** `CardMatcher` also looks the collector number up inside those sets. The
+   ordinary lookup keys on the printed set total, so a misread denominator leaves the
+   right card out of the candidates entirely, and no amount of ranking rescues a card
+   that was never a candidate. Merged with the ordinary hits, never substituted.
+2. **Ranks.** `preferredSetBias` is one scored term beside the learned bias. Nothing
+   is ever removed from the candidates, so a card filed in another set — a Stellar
+   Crown stamped print, a promo — still wins on the strength of its own number and
+   name.
+
+The two set biases are capped **together** at `setBiasCap`. At 0.3 each they would sum
+to 0.6 and clear `nameAgreement` at 0.5, which would let a card win for being in the
+expected box over a card whose name the catalog actually confirms. The set is a
+tie-break and must stay one. The artwork shortlist is deliberately left unfiltered: it
+is the signal that survives bad text, and filtering it would hide the very card the
+scope is most likely to be wrong about.
+
 Vintage and Japanese are the weak spots — older sets reuse totals, and Japanese
 numbering can collide with English. Those land in `.uncertain` and get the
 disambiguation chip, which is the right outcome since they're the cards most worth
@@ -628,7 +697,10 @@ of the rest exists.
 - Do not add AWS or any server. A script on AJ's Mac and a public release asset cover it.
 - Do not bundle a catalog in the binary.
 - Do not use `Double` for money, anywhere, at any point.
-- Do not make him choose a set before scanning.
+- Do not make him choose a set before scanning. **Amended 2026-09-18:** a rip now
+  carries a set scope, and the rule still holds — the scope is derived from the packs
+  he opened, never asked for, and it biases rather than filters. See "Session bias"
+  above. Do not turn it into a picker he has to answer.
 - Do not build a separate sealed picker.
 - Ask before adding a dependency. The whole design is deliberately dependency-light —
   GRDB is the only one currently justified.

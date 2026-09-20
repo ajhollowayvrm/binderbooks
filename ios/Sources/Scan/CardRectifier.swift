@@ -65,26 +65,131 @@ enum CardRectifier {
         )
     }
 
+    /// How sure the detector is that it found a card.
+    ///
+    /// One bar was too blunt. The strict thresholds below are right for
+    /// deciding what to *sign*: a signature compared against a flat scanned
+    /// reference has to come off something actually card-shaped. But the same
+    /// bar also gated whether any word was read at all, so a sleeved card, a
+    /// card under glare, or a card held at the edge of the frame read nothing —
+    /// not a wrong answer, no answer, for as long as the condition lasted.
+    ///
+    /// Reading is the cheaper question and deserves the looser bar.
+    enum Located {
+        /// Card-shaped beyond argument. Signed and read.
+        case card(VNRectangleObservation)
+        /// Something card-like. Read, and signed only as a best effort.
+        case loose(VNRectangleObservation)
+        /// Nothing rectangular at all.
+        case none
+
+        var rectangle: VNRectangleObservation? {
+            switch self {
+            case .card(let rectangle), .loose(let rectangle): return rectangle
+            case .none: return nil
+            }
+        }
+
+        /// Whether the outline drawn from this is the confident one.
+        var isConfident: Bool {
+            if case .card = self { return true }
+            return false
+        }
+    }
+
+    /// The most card-like rectangle in the frame, at the strictest tier that
+    /// finds one.
+    static func locate(_ image: CGImage) throws -> Located {
+        if let strict = try detect(image) { return .card(strict) }
+        if let loose = try detectLoosely(image) { return .loose(loose) }
+        return .none
+    }
+
     /// The most card-like rectangle in the frame, largest first.
     ///
     /// Largest, not most confident: he holds the card he is logging closest to
     /// the lens, and the crisp rectangle in the background is the binder page.
     static func detect(_ image: CGImage) throws -> VNRectangleObservation? {
+        try detect(
+            image,
+            tolerance: aspectTolerance,
+            minimumSize: 0.25,
+            minimumConfidence: 0.6,
+            quadratureTolerance: 25
+        )
+    }
+
+    /// The same search, widened.
+    ///
+    /// Every threshold here is loosened by about the amount a real complaint
+    /// needed: a card held further back than the strict `minimumSize` allows, a
+    /// sleeve rounding the corners past the quadrature tolerance, and glare
+    /// taking the confidence down. It is still a rectangle of roughly card
+    /// proportions — the desk and the binder page do not pass this either.
+    static func detectLoosely(_ image: CGImage) throws -> VNRectangleObservation? {
+        try detect(
+            image,
+            tolerance: 0.20,
+            minimumSize: 0.12,
+            minimumConfidence: 0.4,
+            quadratureTolerance: 35
+        )
+    }
+
+    private static func detect(
+        _ image: CGImage,
+        tolerance: Float,
+        minimumSize: Float,
+        minimumConfidence: VNConfidence,
+        quadratureTolerance: Float
+    ) throws -> VNRectangleObservation? {
         let request = VNDetectRectanglesRequest()
-        request.minimumAspectRatio = VNAspectRatio(cardAspect - aspectTolerance)
-        request.maximumAspectRatio = VNAspectRatio(cardAspect + aspectTolerance)
-        // A card fills a good part of the viewfinder when he is scanning one.
-        // Below this the detection is something else in the room.
-        request.minimumSize = 0.25
-        request.minimumConfidence = 0.6
-        // A card has square corners. The default tolerance admits trapezoids
-        // that no card held by a human ever makes.
-        request.quadratureTolerance = 25
+        request.minimumAspectRatio = VNAspectRatio(cardAspect - tolerance)
+        request.maximumAspectRatio = VNAspectRatio(cardAspect + tolerance)
+        request.minimumSize = minimumSize
+        request.minimumConfidence = minimumConfidence
+        request.quadratureTolerance = quadratureTolerance
         request.maximumObservations = 8
 
         try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
         let found = request.results ?? []
         return found.max { area(of: $0) < area(of: $1) }
+    }
+
+    /// The part of the frame the dashed guide box covers, at card proportions.
+    ///
+    /// The last resort, for the one framing fault that reads nothing: a card
+    /// held so close that its edges leave the frame has no quadrilateral at
+    /// any tier, so there is no card to read from and the scanner goes quiet.
+    ///
+    /// This does **not** reopen reading the whole frame. That rule was written
+    /// on 2026-09-14 after a Dedenne logged seven cards — "Resistance Gym" off
+    /// the next card in the chute, "Tail Smack" off its own attack line —
+    /// because Vision reads every word in a frame with no idea which surface
+    /// each came from. The crop is a stated, bounded region in the middle of
+    /// the frame, matching where the viewfinder tells him to put the card. The
+    /// desk, the binder page and the next card are outside it.
+    static func guideCrop(_ image: CGImage) -> CGImage? {
+        let width = CGFloat(image.width)
+        let height = CGFloat(image.height)
+        guard width > 0, height > 0 else { return nil }
+
+        // The same proportions `layoutGuide` draws: most of the height, capped
+        // so it never runs wider than the frame.
+        var cropHeight = height * 0.78
+        var cropWidth = cropHeight * CGFloat(cardAspect)
+        let widest = width * 0.86
+        if cropWidth > widest {
+            cropWidth = widest
+            cropHeight = cropWidth / CGFloat(cardAspect)
+        }
+        let box = CGRect(
+            x: ((width - cropWidth) / 2).rounded(),
+            y: ((height - cropHeight) / 2).rounded(),
+            width: cropWidth.rounded(),
+            height: cropHeight.rounded()
+        )
+        return image.cropping(to: box)
     }
 
     private static func area(of rectangle: VNRectangleObservation) -> CGFloat {

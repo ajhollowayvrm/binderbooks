@@ -57,6 +57,21 @@ struct CardMatcher: Sendable {
     /// Added when the number and the name pick the same card.
     static let agreementBonus = 0.2
     static let olderBias = 0.15
+    /// What the rip's declared set is worth.
+    ///
+    /// A preference, never a filter: nothing is removed from the candidates,
+    /// so a card filed in another set — a Stellar Crown stamped print, a promo
+    /// — still wins on the strength of its own number and name.
+    static let preferredSetBias = 0.3
+    /// The ceiling on the two set biases **together**.
+    ///
+    /// The learned bias and the declared scope both say "this set", and they
+    /// agree most of the time, so they stack. At 0.3 each that is 0.6, which
+    /// clears `nameAgreement` at 0.5 — a card in the expected set would beat a
+    /// card whose name the catalog actually confirms, purely for being in the
+    /// right box. Capping the pair at what one of them is worth keeps the set
+    /// a tie-break, which is all it should ever be.
+    static let setBiasCap = 0.3
     static let candidateCap = 12
     /// What artwork agreement is worth against a name. Roughly the same, by
     /// design: neither signal is allowed to overrule the other on its own.
@@ -91,10 +106,14 @@ struct CardMatcher: Sendable {
         _ observation: ScanObservation,
         session bias: [Int],
         defaultPrinting: String?,
-        language: ScanLanguage? = nil
+        language: ScanLanguage? = nil,
+        preferred: [Int] = []
     ) async throws -> MatchResult {
         try await database.asyncRead { db in
-            try Self.match(db, observation: observation, bias: bias, defaultPrinting: defaultPrinting, art: art, language: language)
+            try Self.match(
+                db, observation: observation, bias: bias, defaultPrinting: defaultPrinting,
+                art: art, language: language, preferred: preferred
+            )
         }
     }
 
@@ -106,10 +125,27 @@ struct CardMatcher: Sendable {
         art: ArtIndex? = nil,
         /// What he set on the session. Nil where no one has said, and then the
         /// script on the card is the only evidence there is.
-        language: ScanLanguage? = nil
+        language: ScanLanguage? = nil,
+        /// The sets this rip is expected to be in. Widens the search and
+        /// breaks ties. Never narrows it — see `preferredSetBias`.
+        preferred: [Int] = []
     ) throws -> MatchResult {
         let parsed = CollectorNumber.parse(observation.number)
-        let numberHits = try numberCandidates(db, parsed: parsed)
+        var numberHits = try numberCandidates(db, parsed: parsed)
+
+        // The same number, looked for inside the sets he is ripping.
+        //
+        // This is the half of the scope that finds cards rather than ranking
+        // them. The ordinary lookup keys on the printed set total, so a card
+        // whose denominator misread — or which has none, like a promo — is not
+        // in the candidate list at all, and no amount of ranking can rescue a
+        // card that was never a candidate. Merged, never substituted: the
+        // ordinary hits keep their place.
+        if !preferred.isEmpty, let numberNum = parsed.numberNum {
+            let known = Set(numberHits.map(\.productId))
+            let inSet = try product(db, inGroups: preferred, numberNum: numberNum)
+            numberHits.append(contentsOf: inSet.filter { !known.contains($0.productId) })
+        }
 
         // Which line on the card is its name? The frame cannot tell, so every
         // plausible line is tried and the catalog decides: an attack name is
@@ -206,9 +242,16 @@ struct CardMatcher: Sendable {
                 max(Similarity.dice(name, hit.cleanName), Similarity.dice(name, printedName(of: hit)))
             } ?? 0
             var score = similarity
+            // The two set signals are capped together, not added freely: see
+            // `setBiasCap`.
+            var setBias = 0.0
             if let index = bias.firstIndex(of: hit.groupId) {
-                score += index < 3 ? recentBias : olderBias
+                setBias += index < 3 ? recentBias : olderBias
             }
+            if preferred.contains(hit.groupId) {
+                setBias += preferredSetBias
+            }
+            score += min(setBias, setBiasCap)
             // An exact number string beats a loose numeric match.
             if let number = observation.number, let hitNumber = hit.number,
                number.caseInsensitiveCompare(hitNumber) == .orderedSame {
@@ -573,11 +616,23 @@ struct CardMatcher: Sendable {
     /// 0.75 against the catalog's name — under the bar a name must clear when
     /// it is the only signal, which is why the card came back as nothing
     /// whenever his hand covered the number.
+    ///
+    /// A promo or an Energy also carries its number in the name: "Pikachu ex -
+    /// 109 (30th Celebration)". The card prints "Pikachu ex", so the number
+    /// goes too. With it, a Jumbo "Pikachu EX" outscored the real card on the
+    /// name while the number pointed at the real one.
     static func printedName(of hit: SearchHit) -> String {
-        let cut = [hit.name.firstIndex(of: "("), hit.name.firstIndex(of: "[")].compactMap { $0 }.min()
+        let cut = [
+            hit.name.firstIndex(of: "("),
+            hit.name.firstIndex(of: "["),
+            hit.name.firstMatch(of: numberSuffix)?.range.lowerBound,
+        ].compactMap { $0 }.min()
         guard let cut else { return hit.cleanName }
         return NameCleaner.clean(String(hit.name[hit.name.startIndex..<cut]))
     }
+
+    /// " - 109", " - SVP193", " - 001": TCGplayer's number inside a name.
+    private static let numberSuffix = #/\s-\s[A-Z]{0,4}\d{1,3}[a-z]?(?=\s|$)/#
 
     /// The parenthetical part of a product's name, which is what distinguishes
     /// one printing of a card from another: "Poke Ball Pattern". Nil for the
@@ -686,6 +741,23 @@ struct CardMatcher: Sendable {
         return try CatalogSearch.fetchHits(db, ids: [first], filter: SearchFilter()).first
     }
 
+    /// Every card carrying this number in any of these sets.
+    ///
+    /// The scope's widening pass. Unlike `product(_:inGroup:numberNum:)` above
+    /// it returns them all, because the point is to add candidates and let the
+    /// scoring choose, not to assert an answer.
+    static func product(_ db: Database, inGroups groupIds: [Int], numberNum: Int) throws -> [SearchHit] {
+        guard !groupIds.isEmpty else { return [] }
+        let list = Set(groupIds).sorted().map(String.init).joined(separator: ",")
+        let ids = try Int.fetchAll(
+            db,
+            sql: "SELECT productId FROM product WHERE groupId IN (\(list)) AND numberNum = ? AND isSealed = 0 LIMIT 50",
+            arguments: [numberNum]
+        )
+        guard !ids.isEmpty else { return [] }
+        return try CatalogSearch.fetchHits(db, ids: ids, filter: SearchFilter())
+    }
+
     static func availablePrintings(_ db: Database, productId: Int) throws -> [String] {
         try String.fetchAll(db, sql: "SELECT subTypeName FROM price WHERE productId = ? ORDER BY subTypeName", arguments: [productId])
     }
@@ -694,7 +766,15 @@ struct CardMatcher: Sendable {
         guard let n = parsed.numberNum else { return [] }
         let ids: [Int]
         if let code = parsed.setCode {
-            ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setCode = ? AND numberNum = ? AND isSealed = 0 LIMIT 50", arguments: [code, n])
+            // The promo and Energy sets store a bare "109" and no set code on
+            // the product, so the code is found on the set instead: MEP is the
+            // abbreviation of ME: Mega Evolution Promo.
+            ids = try Int.fetchAll(db, sql: """
+                SELECT productId FROM product
+                WHERE numberNum = ? AND isSealed = 0
+                  AND (setCode = ? OR groupId IN (SELECT groupId FROM cardSet WHERE abbreviation = ?))
+                LIMIT 50
+                """, arguments: [n, code, code])
         } else if let total = parsed.setTotal {
             ids = try Int.fetchAll(db, sql: "SELECT productId FROM product WHERE setTotal = ? AND numberNum = ? AND isSealed = 0 LIMIT 50", arguments: [total, n])
         } else {

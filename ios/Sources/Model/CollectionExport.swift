@@ -200,6 +200,10 @@ enum CollectionExport {
         var observedGroupIds: [Int]
         /// Optional, like `OwnedCardDTO.isSealedSelf`: added in version 6.
         var ripTargetId: UUID?
+        /// Optional: added 2026-09-18 with the soft set scope. A file written
+        /// before it decodes to nil and the session reads as unscoped, which
+        /// is what it was.
+        var preferredGroupIds: [Int]?
     }
 
     enum ImportError: LocalizedError {
@@ -297,7 +301,7 @@ enum CollectionExport {
                 ScanSessionDTO(
                     id: $0.id, startedAt: $0.startedAt, committedAt: $0.committedAt, defaultCondition: $0.defaultCondition,
                     defaultPrinting: $0.defaultPrinting, purchaseId: $0.purchase?.id, observedGroupIds: $0.observedGroupIds,
-                    ripTargetId: $0.ripTarget?.id
+                    ripTargetId: $0.ripTarget?.id, preferredGroupIds: $0.preferredGroupIds
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString },
             grading: grading.map {
@@ -429,6 +433,7 @@ enum CollectionExport {
             session.defaultPrinting = dto.defaultPrinting
             session.purchase = dto.purchaseId.flatMap { purchases[$0] }
             session.observedGroupIds = dto.observedGroupIds
+            session.preferredGroupIds = dto.preferredGroupIds ?? []
             report.sessions += 1
         }
 

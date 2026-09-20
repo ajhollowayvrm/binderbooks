@@ -46,6 +46,17 @@ struct ScanObservation: Equatable, Sendable {
     /// and not others, and the sharpest is the one worth comparing. Blur is the
     /// only thing that measurably costs artwork accuracy.
     var artSharpness: Double = 0
+    /// The signature was taken from a frame below the sharpness bar, because
+    /// the card had sat in view and no frame ever cleared it. Worse evidence
+    /// than an ordinary signature and much better than none, so the matcher
+    /// weighs it lower rather than refusing it.
+    var artIsBestEffort = false
+    /// The words came from the guide-box crop rather than from a card the
+    /// detector found. Read when he is holding the card too close for its edges
+    /// to fit, which otherwise reads nothing at all. Less certain about which
+    /// surface the words came off, so the loop asks for two agreeing frames
+    /// before it logs one of these.
+    var readFromGuideCrop = false
     /// A JPEG of the straightened card, from the frame that was signed. Held
     /// in memory only, in case the card is marked S-Chinese and needs its own
     /// art: see `CardPhotoStore`.
@@ -79,6 +90,9 @@ enum FrameInterpreter {
         try! Regex(#"\b\d{1,3}\s*/\s*\d{1,3}(?=[A-Z]?\b)"#),
         try! Regex(#"\b\d{1,3}\s*/\s*[A-Z]{1,3}-?[A-Z]{0,3}\b"#),
         try! Regex(#"\b(?:SWSH|SVP|SM|XY|BW|DP|HGSS|MEP|ME)\s?\d{1,3}[a-z]?\b"#),
+        // A promo or an Energy on one line: "MEP EN 109". The language code
+        // goes, and `promoLine` below handles the same print split over two.
+        try! Regex(#"\b(?:SVP|SVE|MEP|MEE)\s?(?:E[NX])?#?\s?\d{3}\b"#),
         try! Regex(#"\b(?:BT|EX|ST|LM|RB|P)-?\d{1,2}-\d{3}\b"#),
         try! Regex(#"\b[A-Z]{2,3}\d{2}[A-Z]{2}/[A-Z]{2,5}-\d{1,2}-(?:AP)?\d{2,3}\b"#),
     ]
@@ -90,8 +104,49 @@ enum FrameInterpreter {
             for pattern in numberPatterns {
                 if let match = text.firstMatch(of: pattern) {
                     let value = String(text[match.range]).replacingOccurrences(of: " ", with: "")
-                    return (index, value)
+                    return (index, withoutLanguageCode(value))
                 }
+            }
+        }
+        return nil
+    }
+
+    /// "MEPEN109" to "MEP109". The language code is not part of the number,
+    /// and the parser would read "MEPEN" as the set code.
+    private static func withoutLanguageCode(_ value: String) -> String {
+        value.replacing(#/^(SVP|SVE|MEP|MEE)E[NX]#?(?=\d)/#) { String($0.1) }
+            .replacing(#/^(SVP|SVE|MEP|MEE)#(?=\d)/#) { String($0.1) }
+    }
+
+    /// The set code of a promo or an Energy on a line of its own. The card
+    /// prints "MEP EN 109", and Vision reads that as two lines, "J MEP EN" and
+    /// "109", often with a misread code: "MEP#", "MEE EX". The J is the
+    /// regulation mark.
+    private static let promoLine = #/(?:^|\s)(SVP|SVE|MEP|MEE)(?:\s?E[NX])?#?\s*$/#
+
+    /// A line that is only the three digits.
+    private static let bareDigits = #/^(\d{3})\b/#
+
+    /// How far apart, as a fraction of the image height, the code and the
+    /// digits may sit. They share one baseline, and the lines above and below
+    /// them are further away than this.
+    static let promoLineTolerance: CGFloat = 0.03
+
+    /// The code line and the nearest line of bare digits beside it. Measured
+    /// on TCGplayer's own images: every MEE and MEP card read this way.
+    static func splitPromoNumber(_ items: [RecognizedText]) -> (value: String, ids: [UUID])? {
+        for code in items {
+            let text = code.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let match = text.firstMatch(of: promoLine) else { continue }
+            let digits = items
+                .filter { $0.id != code.id && abs($0.top - code.top) <= promoLineTolerance }
+                .compactMap { item -> (RecognizedText, String)? in
+                    let line = item.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return line.firstMatch(of: bareDigits).map { (item, String($0.1)) }
+                }
+                .min { abs($0.0.top - code.top) < abs($1.0.top - code.top) }
+            if let (item, number) = digits {
+                return (String(match.1) + number, [code.id, item.id])
             }
         }
         return nil
@@ -107,12 +162,18 @@ enum FrameInterpreter {
         var numberID: UUID?
 
         let transcripts = items.map(\.transcript)
+        var excluded: Set<UUID> = []
         if let found = number(in: transcripts) {
             observation.number = found.value
             numberID = items[found.index].id
+            excluded.insert(items[found.index].id)
+        } else if let split = splitPromoNumber(items) {
+            observation.number = split.value
+            numberID = split.ids.first
+            excluded.formUnion(split.ids)
         }
 
-        observation.nameCandidates = nameCandidates(items, excluding: numberID)
+        observation.nameCandidates = nameCandidates(items, excludingAll: excluded)
         observation.name = observation.nameCandidates.first
         observation.sawJapaneseText = transcripts.contains(where: isJapanese)
         return (observation, numberID)
@@ -159,9 +220,13 @@ enum FrameInterpreter {
     /// leads, then the tallest, then the highest. The matcher checks them
     /// against the catalog and takes the one that is a real card.
     static func nameCandidates(_ items: [RecognizedText], excluding numberID: UUID?) -> [String] {
+        nameCandidates(items, excludingAll: numberID.map { [$0] } ?? [])
+    }
+
+    static func nameCandidates(_ items: [RecognizedText], excludingAll excluded: Set<UUID>) -> [String] {
         var withHP: [(String, CGFloat)] = []
         var plain: [RecognizedText] = []
-        for item in items where item.id != numberID {
+        for item in items where !excluded.contains(item.id) {
             let text = item.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             if let m = text.wholeMatch(of: hpLine) {
                 let name = String(m.name).trimmingCharacters(in: .whitespaces)

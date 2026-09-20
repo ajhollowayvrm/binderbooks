@@ -4,13 +4,24 @@ import SwiftUI
 /// The chip row opens it. Choosing a set with an empty query browses the set.
 struct SetPickerSheet: View {
     var sets: [SetSummary]
+    /// Sets that come after `sets`, and only for a typed name. The inventory
+    /// page lists the sets he holds cards from, and a master set can start
+    /// from a set he holds nothing from.
+    var more: [SetSummary] = []
+    var moreTitle = "No cards yet"
     var selected: Int?
     var onPick: (Int?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
 
-    private var filtered: [SetSummary] {
+    private var filtered: [SetSummary] { matching(sets) }
+
+    private var filteredMore: [SetSummary] {
+        query.trimmingCharacters(in: .whitespaces).isEmpty ? [] : matching(more)
+    }
+
+    private func matching(_ sets: [SetSummary]) -> [SetSummary] {
         let needle = query.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else { return sets }
         let clean = NameCleaner.clean(needle)
@@ -42,33 +53,14 @@ struct SetPickerSheet: View {
                 ForEach(grouped, id: \.category) { group in
                     Section(group.category) {
                         ForEach(group.sets) { set in
-                            Button {
-                                onPick(set.groupId)
-                                dismiss()
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(set.name)
-                                            .foregroundStyle(.primary)
-                                        HStack(spacing: 6) {
-                                            if let abbreviation = set.abbreviation, !abbreviation.isEmpty {
-                                                Text(abbreviation)
-                                            }
-                                            if let date = set.publishedOn?.prefix(10) {
-                                                Text(date)
-                                            }
-                                            Text("\(set.productCount) products")
-                                        }
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    if set.groupId == selected {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(.tint)
-                                    }
-                                }
-                            }
+                            row(set)
+                        }
+                    }
+                }
+                if !filteredMore.isEmpty {
+                    Section(moreTitle) {
+                        ForEach(filteredMore) { set in
+                            row(set)
                         }
                     }
                 }
@@ -82,6 +74,36 @@ struct SetPickerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func row(_ set: SetSummary) -> some View {
+        Button {
+            onPick(set.groupId)
+            dismiss()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(set.name)
+                        .foregroundStyle(.primary)
+                    HStack(spacing: 6) {
+                        if let abbreviation = set.abbreviation, !abbreviation.isEmpty {
+                            Text(abbreviation)
+                        }
+                        if let date = set.publishedOn?.prefix(10) {
+                            Text(date)
+                        }
+                        Text("\(set.productCount) products")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if set.groupId == selected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.tint)
                 }
             }
         }

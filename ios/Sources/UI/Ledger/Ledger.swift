@@ -94,13 +94,39 @@ struct LedgerEntry: Identifiable, Hashable {
 
     /// How many cards came out of a purchase. "no cards yet" is the gap he
     /// looks for: money on the books with nothing in inventory to show for it.
+    ///
+    /// A rip of packs from several purchases hangs every pull on one of them.
+    /// That purchase says its cards came from a shared rip, and the others say
+    /// which purchase holds their pulls, not "no cards yet": the gap that
+    /// phrase points at is not there. The amount on the row stays what he paid.
     static func cardCount(_ purchase: Purchase) -> String {
         let count = purchase.items.reduce(0) { $0 + $1.cards.count }
+        let shared = sharedRipHomes(of: purchase)
         switch count {
-        case 0: return "no cards yet"
-        case 1: return "1 card"
-        default: return "\(count) cards"
+        case 0:
+            if let home = shared.first(where: { $0.id != purchase.id }) {
+                return "ripped with \(home.vendor.isEmpty ? "another purchase" : home.vendor)"
+            }
+            return "no cards yet"
+        case 1: return shared.isEmpty ? "1 card" : "1 card · shared rip"
+        default: return shared.isEmpty ? "\(count) cards" : "\(count) cards · shared rip"
         }
+    }
+
+    /// The purchases that hold the pulls of each rip this purchase shares with
+    /// another purchase. Empty when every rip on it was its own.
+    static func sharedRipHomes(of purchase: Purchase) -> [Purchase] {
+        var homes: [Purchase] = []
+        var seen = Set<UUID>()
+        for item in purchase.items where item.isRipped && item.ripGroupId != nil {
+            let group = RipPool.lines(of: item)
+            guard Set(group.compactMap { $0.purchase?.id }).count > 1,
+                  let home = RipPool.home(of: group)?.purchase,
+                  seen.insert(home.id).inserted
+            else { continue }
+            homes.append(home)
+        }
+        return homes
     }
 
     static func channelName(_ raw: String) -> String {
@@ -160,5 +186,56 @@ enum LedgerFilter: String, CaseIterable, Identifiable {
         case .moneyIn: return entry.isMoneyIn
         case .moneyOut: return !entry.isMoneyIn
         }
+    }
+}
+
+/// What he typed in the search bar, and what it keeps.
+///
+/// He remembers a row two ways: who it was with, and what it cost. "novatcg"
+/// finds the order; "324" finds it when the vendor name has gone but the
+/// amount has not. So one bar takes both, and a row survives if either half
+/// matches. Two bars, or a scope picker, would make him say which kind of
+/// remembering he is doing before he is allowed to search.
+struct LedgerSearch {
+    private let text: String
+    /// The typed amount as plain digits, e.g. "324.5". Nil when what he typed
+    /// is not a number, which is most of the time.
+    private let amount: String?
+
+    var isEmpty: Bool { text.isEmpty }
+
+    init(_ raw: String) {
+        text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "$1,250" and "1250" are the same search. Nothing else is stripped:
+        // a stray letter means he is typing a name, not an amount.
+        let bare = text.replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+        let digits = bare.filter(\.isNumber)
+        let dots = bare.filter { $0 == "." }
+        amount = !digits.isEmpty && dots.count <= 1 && digits.count + dots.count == bare.count
+            ? bare
+            : nil
+    }
+
+    func keeps(_ entry: LedgerEntry) -> Bool {
+        if isEmpty { return true }
+        if matchesText(entry) { return true }
+        return matchesAmount(entry)
+    }
+
+    private func matchesText(_ entry: LedgerEntry) -> Bool {
+        let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        return entry.title.range(of: text, options: options) != nil
+            || entry.detail.range(of: text, options: options) != nil
+    }
+
+    /// A typed amount matches from the front, never from the middle. "324"
+    /// finds $324.50 and $3,240.00; it does not drag in the $17.32 and the
+    /// $4.32 that a substring match would, and those are the rows that make a
+    /// search useless on 300 entries.
+    private func matchesAmount(_ entry: LedgerEntry) -> Bool {
+        guard let amount else { return false }
+        return LedgerExport.dollars(abs(entry.amountCents)).hasPrefix(amount)
     }
 }

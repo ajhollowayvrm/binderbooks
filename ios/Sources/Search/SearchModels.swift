@@ -30,8 +30,13 @@ struct SearchFilter: Equatable, Sendable {
     var kind: Kind = .all
     var categoryIds: Set<Int> = []
     var groupId: Int?
+    /// Several sets at once, for the scanner's soft set scope. A sibling of
+    /// `groupId` rather than a widening of it, because every chip in the UI
+    /// picks exactly one set and none of them should have to change. The two
+    /// compose: both narrow, neither replaces the other.
+    var groupIds: Set<Int> = []
 
-    var isActive: Bool { kind != .all || !categoryIds.isEmpty || groupId != nil }
+    var isActive: Bool { kind != .all || !categoryIds.isEmpty || groupId != nil || !groupIds.isEmpty }
 }
 
 /// What the result order optimises for.

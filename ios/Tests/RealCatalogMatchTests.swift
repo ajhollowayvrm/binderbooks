@@ -331,5 +331,14 @@ import Testing
             #expect(CardMatcher.printedName(of: hit) == "professor s research", "got \(CardMatcher.printedName(of: hit))")
         }
     }
-}
 
+    /// The promo and Energy sets store no set code on the product, so the
+    /// code on the card is found through the set's abbreviation.
+    @Test func aPromoAndAnEnergyAreFoundByTheirSetCode() throws {
+        let pikachu = try match(name: "Pikachu ex", number: "MEP109")
+        #expect(pikachu.candidates.first?.productId == 713256, "top was \(pikachu.candidates.first?.name ?? "nothing")")
+
+        let grass = try match(name: "Basic Energy", number: "MEE001")
+        #expect(grass.candidates.first?.productId == 656263, "top was \(grass.candidates.first?.name ?? "nothing")")
+    }
+}

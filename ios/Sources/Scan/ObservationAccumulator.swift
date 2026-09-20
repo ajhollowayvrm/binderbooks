@@ -18,17 +18,81 @@ struct ObservationAccumulator {
 
     private var readings: [(observation: ScanObservation, at: Date)] = []
 
+    /// The card just logged, and when a frame last showed it.
+    ///
+    /// The card he just logged stays in front of the lens while he swaps it
+    /// for the next one, and every frame of it went into the window. The next
+    /// card's number then logged a row, but the old card's frames still
+    /// outvoted the new one on the name. That is how a Toxel was logged with
+    /// Vulpix's name, and why its candidates held six Vulpix and one Toxel.
+    /// So a frame of the card just logged no longer enters the window.
+    private var logged: ScanObservation?
+    private var loggedLastSeen: Date?
+    private var loggedAt: Date?
+
+    /// How long with no frame of the logged card before it is forgotten. A
+    /// swap takes less than this, and a second copy of the same card can log
+    /// once the first has been gone this long.
+    var loggedAbsence: TimeInterval = 1.0
+    /// The longest the logged card is remembered at all, the same bound the
+    /// identity gate puts on a visit. Nothing may block a card for good.
+    var loggedLifetime: TimeInterval = CardIdentityGate.Defaults.visitLifetime
+
     mutating func add(_ observation: ScanObservation, now: Date = Date()) {
         // A frame that only signed the artwork still counts. Text runs on its
         // own slower cadence, so most frames carry a signature and no words,
         // and dropping them would throw away every sharp look at the card.
         guard !observation.isEmpty || observation.artDescriptor != nil else { return }
+        forgetLoggedIfGone(now: now)
+        if isLoggedCard(observation) {
+            loggedLastSeen = now
+            return
+        }
         readings.append((observation, now))
         prune(now: now)
     }
 
     mutating func reset() {
         readings.removeAll()
+        logged = nil
+        loggedLastSeen = nil
+        loggedAt = nil
+    }
+
+    /// Empty the window after a card is logged, and keep that card out of it.
+    mutating func reset(afterLogging card: ScanObservation, now: Date = Date()) {
+        readings.removeAll()
+        logged = card
+        loggedLastSeen = now
+        loggedAt = now
+    }
+
+    /// Whether this frame shows the card just logged. The number decides when
+    /// the frame read one: a different number is a different card. Otherwise
+    /// the artwork decides, and the name only when there is nothing else.
+    func isLoggedCard(_ observation: ScanObservation) -> Bool {
+        guard let logged else { return false }
+        if let number = observation.number {
+            return number == logged.number
+        }
+        if let art = observation.artDescriptor, let loggedArt = logged.artDescriptor {
+            return CardArtDescriptor.distance(art, loggedArt) <= CardIdentityGate.Defaults.sameLook
+        }
+        if let name = observation.name {
+            return name == logged.name || logged.nameCandidates.contains(name)
+        }
+        return false
+    }
+
+    private mutating func forgetLoggedIfGone(now: Date) {
+        guard logged != nil else { return }
+        let gone = loggedLastSeen.map { now.timeIntervalSince($0) > loggedAbsence } ?? true
+        let expired = loggedAt.map { now.timeIntervalSince($0) > loggedLifetime } ?? true
+        if gone || expired {
+            logged = nil
+            loggedLastSeen = nil
+            loggedAt = nil
+        }
     }
 
     /// What the window agrees on. Empty when nothing has been read.
@@ -79,7 +143,14 @@ struct ObservationAccumulator {
             .max(by: { $0.observation.artSharpness < $1.observation.artSharpness }) {
             merged.artDescriptor = sharpest.observation.artDescriptor
             merged.artSharpness = sharpest.observation.artSharpness
+            merged.artIsBestEffort = sharpest.observation.artIsBestEffort
         }
+
+        // Only when every frame that read words read them from the crop. One
+        // frame that found a real card is enough to say the words came off a
+        // card, and the crop is the weaker claim.
+        let read = live.filter { !$0.observation.isEmpty }
+        merged.readFromGuideCrop = !read.isEmpty && read.allSatisfy { $0.observation.readFromGuideCrop }
         return merged
     }
 

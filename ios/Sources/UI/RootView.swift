@@ -215,6 +215,12 @@ struct RootView: View {
         if let query = env["CT_SEARCH_QUERY"], search.text.isEmpty {
             search.text = query
         }
+        // `CT_SEARCH_KIND=sealed` presses the Sealed chip, or Singles.
+        switch env["CT_SEARCH_KIND"] {
+        case "sealed": search.filter.kind = .sealed
+        case "singles": search.filter.kind = .singles
+        default: break
+        }
         // Grid is the default now, so this mostly forces `list`. simctl cannot
         // tap the toggle.
         if let layout = env["CT_SEARCH_LAYOUT"], CardLayout(rawValue: layout) != nil {

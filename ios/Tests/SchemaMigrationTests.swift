@@ -53,4 +53,36 @@ import Testing
         #expect(purchases.first?.vendor == "Game Grid")
         #expect(purchases.first?.itemCostCents == 19_339)
     }
+
+    /// `ScanSession.preferredGroupIds` was added on 2026-09-18. A store written
+    /// before it must open and read the field as empty, which is what those
+    /// sessions were: unscoped. The app calls `fatalError` when the container
+    /// fails to open, so an unproven migration is a crash on launch with his
+    /// only copy of the data inside.
+    @Test @MainActor func aStoreWrittenBeforeTheSetScopeStillOpens() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("scope-\(UUID().uuidString).store")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let schema = Schema(CollectionStore.models)
+        let first = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, url: url)]
+        )
+        let session = ScanSession()
+        session.observedGroupIds = [100, 101]
+        first.mainContext.insert(session)
+        try first.mainContext.save()
+        let id = session.id
+
+        let second = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, url: url)]
+        )
+        let sessions = try second.mainContext.fetch(FetchDescriptor<ScanSession>())
+        let reopened = sessions.first { $0.id == id }
+        #expect(reopened != nil)
+        #expect(reopened?.observedGroupIds == [100, 101])
+        #expect(reopened?.preferredGroupIds == [])
+    }
 }

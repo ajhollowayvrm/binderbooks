@@ -275,4 +275,35 @@ import Testing
         let items = try target.mainContext.fetch(FetchDescriptor<PurchaseItem>())
         #expect(items.filter { $0.ripGroupId == group }.count == 2)
     }
+
+    /// The ledger used to say "no cards yet" for a purchase whose packs were
+    /// ripped with another purchase's, and to put every pull on the other one
+    /// with no sign the cost was shared.
+    @Test @MainActor func theLedgerNamesASharedRipOnBothPurchases() throws {
+        let container = try store()
+        let context = container.mainContext
+        let (gamecraft, sevenPacks) = try packs(context, count: 6, cents: 16_658)
+        let (walmart, onePack) = try packs(context, count: 1, cents: 2_845, productId: otherPack)
+
+        let home = try #require(RipPool.prepare(sevenPacks + onePack, context: context))
+        RipPool.finish(home, pulls: [pull(context), pull(context)], acquiredAt: bought, context: context)
+
+        #expect(LedgerEntry.cardCount(gamecraft) == "2 cards · shared rip")
+        #expect(LedgerEntry.cardCount(walmart) == "ripped with Target")
+
+        // The amount on each row is still what he paid that vendor.
+        let entries = LedgerEntry.entries(purchases: [gamecraft, walmart], grading: [], sales: [])
+        #expect(entries.map(\.amountCents).sorted() == [-16_658, -2_845].sorted())
+
+        // The rip's cost is the two purchases together, and the breakdown says
+        // which part came from where.
+        let group = RipPool.lines(of: home)
+        let result = RipPool.result(of: group, market: { _ in nil })
+        #expect(result.costCents == 19_503)
+        let shares = PurchaseDetailView.costShares(of: group, on: gamecraft)
+        #expect(shares.count == 2)
+        #expect(shares.first?.name == "This purchase")
+        #expect(shares.first?.cents == 16_658)
+        #expect(shares.last?.cents == 2_845)
+    }
 }

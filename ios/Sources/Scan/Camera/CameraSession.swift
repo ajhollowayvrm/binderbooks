@@ -156,6 +156,32 @@ final class CameraSession: NSObject {
         }
     }
 
+    /// The longest the shutter may stay open for one frame.
+    ///
+    /// Continuous auto exposure in a room chooses about 1/30 s, and a card held
+    /// in a hand moves during that time: every frame smears, the number reads
+    /// wrong or not at all, and no frame is sharp enough to sign. At 1/100 s
+    /// the lens raises the ISO instead. Grain costs Vision far less than blur.
+    static let longestExposure = CMTime(value: 1, timescale: 100)
+
+    /// Cap the exposure time. Called after the session commits its
+    /// configuration, because committing a preset resets the cap to the
+    /// format's default.
+    func capExposure() {
+        guard let device, device.isExposureModeSupported(.continuousAutoExposure) else { return }
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            let format = device.activeFormat
+            var cap = Self.longestExposure
+            if CMTimeCompare(cap, format.minExposureDuration) < 0 { cap = format.minExposureDuration }
+            if CMTimeCompare(cap, format.maxExposureDuration) > 0 { cap = format.maxExposureDuration }
+            device.activeMaxExposureDuration = cap
+        } catch {
+            // The lens keeps its own exposure. Carry on.
+        }
+    }
+
     /// Crop the ultra wide back to the wide camera's field of view.
     ///
     /// The ultra wide sees about twice as much of the room, so a card held at

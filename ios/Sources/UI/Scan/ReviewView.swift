@@ -13,6 +13,7 @@ struct ReviewView: View {
     @State private var correcting: OwnedCard?
     @State private var action: BulkAction?
     @State private var showCommit = false
+    @State private var showUnidentifiedWarning = false
     @State private var showDiscard = false
     @State private var reassignMissed = 0
     @State private var setChoices: [SetSummary] = []
@@ -29,6 +30,19 @@ struct ReviewView: View {
 
     private var shown: [OwnedCard] {
         showAll ? model.cards : model.cardsNeedingReview
+    }
+
+    /// Cards that would reach the collection with no product behind them.
+    private var unidentified: [OwnedCard] {
+        model.cards.filter { !$0.isIdentified && !$0.isHandEntered }
+    }
+
+    private func confirmCommit() {
+        if unidentified.isEmpty {
+            showCommit = true
+        } else {
+            showUnidentifiedWarning = true
+        }
     }
 
     private var selectedCards: [OwnedCard] {
@@ -48,8 +62,15 @@ struct ReviewView: View {
                 EditButton()
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Commit") { showCommit = true }
-                    .disabled(model.cards.isEmpty || model.cards.contains { !$0.isIdentified && !$0.isHandEntered })
+                // Only an empty session blocks the commit now. One card the
+                // matcher could not place used to disable this button, so a
+                // whole rip stayed out of the collection until every last row
+                // was fixed — and nothing on the button said which row, or
+                // why. An unidentified card commits as unidentified, which the
+                // store already models and the inventory already shows, and
+                // the confirmation below says how many there are.
+                Button("Commit") { confirmCommit() }
+                    .disabled(model.cards.isEmpty)
             }
             ToolbarItemGroup(placement: .bottomBar) {
                 if editMode.isEditing {
@@ -111,6 +132,18 @@ struct ReviewView: View {
             Button("OK") {}
         } message: {
             Text("\(reassignMissed) cards have no matching number in that set.")
+        }
+        .confirmationDialog(
+            unidentified.count == 1
+                ? "1 card is not identified."
+                : "\(unidentified.count) cards are not identified.",
+            isPresented: $showUnidentifiedWarning,
+            titleVisibility: .visible
+        ) {
+            Button("Commit anyway") { showCommit = true }
+            Button("Fix them first", role: .cancel) { showAll = false }
+        } message: {
+            Text("They join the collection with no card behind them. You can identify them later from the inventory.")
         }
     }
 

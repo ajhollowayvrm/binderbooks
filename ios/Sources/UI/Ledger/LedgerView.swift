@@ -20,6 +20,7 @@ struct LedgerView: View {
     @State private var tab: LedgerTab
     @State private var filter: LedgerFilter
     @State private var adding: Bool
+    @State private var search: String = ""
 
     /// The defaults are the only thing the app uses. The arguments exist so a
     /// screenshot run can reach a state that simctl cannot tap its way to.
@@ -31,7 +32,8 @@ struct LedgerView: View {
 
     private var months: [LedgerMonth] {
         let all = LedgerEntry.entries(purchases: purchases, grading: grading, sales: sales, expenses: expenses)
-        return LedgerMonth.group(all.filter(filter.keeps))
+        let query = LedgerSearch(search)
+        return LedgerMonth.group(all.filter { filter.keeps($0) && query.keeps($0) })
     }
 
     /// One side of the books shows one number. A "$0.00 out" on the In filter
@@ -122,16 +124,29 @@ struct LedgerView: View {
             }
 
             if months.isEmpty {
-                ContentUnavailableView(
-                    "Nothing here yet",
-                    systemImage: "list.bullet.rectangle",
-                    description: Text("Tap the plus to record a purchase, an order, a grading charge, or an expense.")
-                )
+                // An empty search and an empty ledger are different problems.
+                // "Tap the plus" is wrong advice for a vendor he spelled wrong.
+                if search.isEmpty {
+                    ContentUnavailableView(
+                        "Nothing here yet",
+                        systemImage: "list.bullet.rectangle",
+                        description: Text("Tap the plus to record a purchase, an order, a grading charge, or an expense.")
+                    )
+                } else {
+                    ContentUnavailableView.search(text: search)
+                }
             }
         }
         // The list sits directly under the filter. Its own top inset would put
         // the control adrift in a band of empty space.
         .contentMargins(.top, 0, for: .scrollContent)
+        // Activity only. Summary has nothing to search, and a bar over it would
+        // say it does.
+        .searchable(
+            text: $search,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: "Vendor, note, or amount"
+        )
     }
 }
 

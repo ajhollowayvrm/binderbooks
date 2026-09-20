@@ -26,9 +26,17 @@ struct FrameReader {
         /// fill a differently shaped view.
         var frameSize: CGSize = .zero
         var sharpness: Double = 0
+        /// How sure the detector was. The viewfinder draws a confident outline
+        /// solid and a loose one dashed, so he can see which he is getting.
+        var located: CardRectifier.Located = .none
     }
 
     var policy: FramePolicy
+
+    /// When the current card first appeared with nothing signed for it. Drives
+    /// `FramePolicy.shouldSignBestEffort`, and is cleared the moment anything
+    /// is signed or the card leaves.
+    private var unsignedSince: Date?
 
     /// The catalogue he said he is scanning. Vision is given that language and
     /// no other: every extra alphabet is another thing for glare and foil to be
@@ -78,7 +86,9 @@ struct FrameReader {
         // surface each one came from — which is how "Resistance Gym" off a
         // neighbouring card was logged twice while he was holding a Dedenne.
         // Nothing outside the card's own quadrilateral is read now.
-        let rectangle = try? CardRectifier.detect(frame)
+        let located = (try? CardRectifier.locate(frame)) ?? CardRectifier.Located.none
+        reading.located = located
+        let rectangle = located.rectangle
         if let rectangle {
             reading.observation.sawCard = true
             reading.cardCorners = [
@@ -99,26 +109,61 @@ struct FrameReader {
             }
         }
 
-        guard decision.findCard else { return reading }
-
-        // Scored whether or not a card was found, because the frames with no
-        // card in them are the ones worth telling apart: an empty chute scores
-        // nothing, and a card held so close that its edges leave the frame
-        // scores like any other card. The second is a card he is trying to
-        // scan, and it reads nothing until he moves back.
         reading.sharpness = FrameSharpness.score(of: frame)
+
+        // No card at any tier, and the frame is full of detail. He is holding
+        // it too close for its edges to fit, and every path above has just
+        // read nothing. Read the guide box instead of going silent.
+        if decision.readText, rectangle == nil,
+           policy.looksFilledButUnread(sawCard: false, sharpness: reading.sharpness),
+           let crop = CardRectifier.guideCrop(frame) {
+            var words = readText(crop)
+            if !words.isEmpty {
+                words.readFromGuideCrop = true
+                // Deliberately not `sawCard`: nothing found a card. The words
+                // came from where a card is supposed to be, which is weaker,
+                // and the loop treats them as weaker.
+                reading.observation = words
+            }
+        }
+
+        guard decision.findCard else { return reading }
 
         // The lens is moving, so whatever this frame shows is in transit. The
         // outline is drawn from it, but it is not signed.
-        guard let rectangle else { return reading }
-        guard !isFocusing, policy.shouldSign(sharpness: reading.sharpness, bestSoFar: bestSharpness) else {
+        guard let rectangle else {
+            unsignedSince = nil
             return reading
         }
+
+        // How long this card has been in view with nothing signed for it.
+        if bestSharpness > 0 {
+            unsignedSince = nil
+        } else if unsignedSince == nil {
+            unsignedSince = now
+        }
+        let unsignedFor = unsignedSince.map { now.timeIntervalSince($0) } ?? 0
+
+        guard !isFocusing else { return reading }
+        let ordinary = policy.shouldSign(sharpness: reading.sharpness, bestSoFar: bestSharpness)
+        // A dim chute never clears the ordinary bar, and a card with no
+        // signature at all loses the one signal that survives bad words.
+        let bestEffort = !ordinary && policy.shouldSignBestEffort(
+            sharpness: reading.sharpness,
+            bestSoFar: bestSharpness,
+            unsignedFor: unsignedFor
+        )
+        guard ordinary || bestEffort else { return reading }
+
         guard let card = CardRectifier.flatten(frame, to: rectangle) else { return reading }
         if let raw = try? CardArtDescriptor.featurePrint(of: card),
            let signature = CardArtDescriptor.make(fromRaw: raw) {
             reading.observation.artDescriptor = signature
             reading.observation.artSharpness = reading.sharpness
+            // A signature off a loose detection is no better founded than one
+            // off a soft frame: both are "this is probably the card".
+            reading.observation.artIsBestEffort = bestEffort || !located.isConfident
+            unsignedSince = nil
             // The sharpest frame so far is also worth keeping as a photo, in
             // case he marks the card S-Chinese and it becomes the card's art.
             if let photo = CardRectifier.flatten(frame, to: rectangle, size: CardRectifier.readingSize(for: rectangle, in: frame)) {
@@ -126,6 +171,65 @@ struct FrameReader {
             }
         }
         return reading
+    }
+
+    /// The manual shutter. Reads this one frame with every gate off.
+    ///
+    /// The live loop is careful on purpose: it reads text four times a second,
+    /// only inside a card it is sure of, and signs only sharp frames. When he
+    /// presses the shutter he has already decided the card is there, so none
+    /// of that applies. The card is read inside its outline when one is found,
+    /// then from the guide box, then from the whole frame, until a number
+    /// comes back. The artwork is signed from the best of those, however soft.
+    func readForced(_ pixels: CVPixelBuffer) -> ScanObservation {
+        let image = CIImage(cvPixelBuffer: pixels)
+        guard let frame = context.createCGImage(image, from: image.extent) else { return ScanObservation() }
+
+        if let slab = readSlab(frame) {
+            var slabReading = ScanObservation()
+            slabReading.certNumber = slab.cert
+            slabReading.grader = slab.grader
+            return slabReading
+        }
+
+        let located = (try? CardRectifier.locate(frame)) ?? CardRectifier.Located.none
+        var views: [CGImage] = []
+        var art: CGImage?
+        if let rectangle = located.rectangle {
+            if let card = CardRectifier.flatten(frame, to: rectangle, size: CardRectifier.readingSize(for: rectangle, in: frame)) {
+                views.append(card)
+            }
+            art = CardRectifier.flatten(frame, to: rectangle)
+        }
+        if let crop = CardRectifier.guideCrop(frame) {
+            views.append(crop)
+            art = art ?? crop
+        }
+        views.append(frame)
+
+        // The first view to read a number wins. Failing that, the first to
+        // read anything at all.
+        var observation = ScanObservation()
+        for view in views {
+            let words = readText(view)
+            if words.number != nil {
+                observation = words
+                break
+            }
+            if observation.isEmpty { observation = words }
+        }
+        observation.sawCard = true
+        observation.readFromGuideCrop = false
+
+        if let art,
+           let raw = try? CardArtDescriptor.featurePrint(of: art),
+           let signature = CardArtDescriptor.make(fromRaw: raw) {
+            observation.artDescriptor = signature
+            observation.artSharpness = FrameSharpness.score(of: frame)
+            observation.artIsBestEffort = !located.isConfident
+            observation.photoJPEG = CardPhotoStore.jpeg(art)
+        }
+        return observation
     }
 
     // MARK: - The requests

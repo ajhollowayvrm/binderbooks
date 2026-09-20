@@ -27,7 +27,14 @@ struct ScanSessionView: View {
     @State private var framingHint = false
     @State private var framingHintTask: Task<Void, Never>?
     @State private var nothingToCapture = false
-    @AppStorage("scanMode") private var scanModeRaw = ScanMode.automatic.rawValue
+    /// What the scan loop last reported. Drives the status bar.
+    @State private var scanState: ScanState = .idle
+    /// Not kept between sessions, unlike the zoom below. Zoom is a property of
+    /// his chute and does not change; the mode is a property of the moment. A
+    /// manual mode chosen once for a binder page used to survive every restart
+    /// after it, and a manual scanner waiting for a shutter tap is
+    /// indistinguishable from an automatic one that has died.
+    @State private var scanModeRaw = ScanMode.automatic.rawValue
     /// Kept between sessions. A slinger holds the card at one fixed distance,
     /// so the framing that reads it today is the framing that reads it
     /// tomorrow, and dialling it in again every time is work for nothing.
@@ -123,10 +130,50 @@ struct ScanSessionView: View {
                 Divider()
                 viewfinder(model)
                     .frame(height: geometry.size.height * 0.75)
+                ScanStatusBar(
+                    fault: model.fault,
+                    activity: activityLine,
+                    inFlight: model.inFlight,
+                    onRepair: { repair(model, $0) },
+                    onDismiss: { model.clearFault() }
+                )
                 Divider()
                 squares(model)
             }
         }
+    }
+
+    /// What the loop is doing when nothing is wrong. The bar is never empty, so
+    /// there is always a line to show here.
+    private var activityLine: String {
+        if scanMode == .manual { return ScanState.manual.message }
+        return scanState.message
+    }
+
+    private func repair(_ model: ScanSessionModel, _ repair: ScannerFault.Repair) {
+        switch repair {
+        case .openSettings:
+            #if os(iOS)
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+            #endif
+        case .retryCamera:
+            model.clearFault()
+            // Changing the id rebuilds the scanner, which runs `start()` again.
+            scannerGeneration += 1
+        case .fixCatalog:
+            model.clearFault()
+            onClose()
+        }
+    }
+
+    /// A phone with no lens the scanner can use. Never the simulator, where the
+    /// absence of a camera is expected and the typed field stands in for it.
+    private func reportMissingCameraOnDevice(_ model: ScanSessionModel) {
+        #if !targetEnvironment(simulator)
+        model.report(.noCamera)
+        #endif
     }
 
     @ViewBuilder
@@ -149,6 +196,8 @@ struct ScanSessionView: View {
                     },
                     onCapturedWithoutNumber: { showNumberHint() },
                     onCardNotFramed: { showFramingHint() },
+                    onFault: { model.report($0) },
+                    onState: { scanState = $0 },
                     torchOn: torchOn,
                     zoom: zoom,
                     language: model.session.scanLanguage
@@ -161,7 +210,12 @@ struct ScanSessionView: View {
                 numberHintBanner
                 framingHintBanner
             } else {
+                // On the simulator there is no camera and the typed field is
+                // the point. On a phone, no usable lens is a fault, and it used
+                // to render this same placeholder — which reads as a scanner
+                // that has quietly died.
                 simulatorViewfinder(model)
+                    .task { reportMissingCameraOnDevice(model) }
             }
             #else
             simulatorViewfinder(model)
@@ -471,7 +525,21 @@ struct SessionDefaultsRow: View {
     let model: ScanSessionModel
     @Binding var scanModeRaw: String
 
+    @Environment(CatalogController.self) private var catalog
+    @State private var pickingSet = false
+    @State private var setChoices: [SetSummary] = []
+
     private let printingDefaults = ["Normal", "Reverse Holofoil", "Holofoil"]
+
+    /// Names the set when the scope is one set, counts them when it is more.
+    /// "Any" when there is none, which is the ordinary case outside a rip.
+    private var scopeTitle: String {
+        let ids = model.session.preferredGroupIds
+        guard !ids.isEmpty else { return "Set: Any" }
+        if ids.count > 1 { return "Sets: \(ids.count)" }
+        guard let name = setChoices.first(where: { $0.groupId == ids[0] })?.name else { return "Set: 1" }
+        return "Set: \(name)"
+    }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -488,6 +556,13 @@ struct SessionDefaultsRow: View {
                     Chip(title: language.title, isSelected: model.session.scanLanguage == language) {
                         model.setLanguage(language)
                     }
+                }
+                Divider().frame(height: 20)
+                // The set the rip is expected to be in, derived from the packs
+                // he opened. Offered so he can correct or clear it, never asked
+                // for: see `RipSetHint`.
+                Chip(title: scopeTitle, systemImage: "rectangle.stack", isSelected: !model.session.preferredGroupIds.isEmpty) {
+                    model.session.preferredGroupIds.isEmpty ? (pickingSet = true) : model.clearPreferredSets()
                 }
                 Divider().frame(height: 20)
                 ForEach(CardCondition.allCases, id: \.self) { condition in
@@ -508,6 +583,18 @@ struct SessionDefaultsRow: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 6)
+        }
+        .task {
+            // Needed to name the derived scope in the chip, as well as to
+            // offer the picker.
+            if setChoices.isEmpty, let database = catalog.database {
+                setChoices = (try? await CatalogSearch(database: database).sets()) ?? []
+            }
+        }
+        .sheet(isPresented: $pickingSet) {
+            SetPickerSheet(sets: setChoices, selected: model.session.preferredGroupIds.first) { groupId in
+                model.setPreferredSet(groupId)
+            }
         }
     }
 }

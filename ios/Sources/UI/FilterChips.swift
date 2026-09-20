@@ -32,6 +32,8 @@ struct Chip: View {
 struct FilterChipRow: View {
     @Bindable var model: SearchModel
     @Binding var showSetPicker: Bool
+    /// The checklist view of the chosen set. Nil hides the chip.
+    var showMasterSet: Binding<Bool>? = nil
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -48,6 +50,11 @@ struct FilterChipRow: View {
                 if let set = model.selectedSet {
                     Chip(title: set.name, systemImage: "xmark", isSelected: true) {
                         model.filter.groupId = nil
+                    }
+                    if let showMasterSet {
+                        Chip(title: "Master set", systemImage: "checklist", isSelected: showMasterSet.wrappedValue) {
+                            showMasterSet.wrappedValue.toggle()
+                        }
                     }
                 } else {
                     Chip(title: "Set", systemImage: "square.stack", isSelected: false) {

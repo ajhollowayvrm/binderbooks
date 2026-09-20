@@ -14,6 +14,7 @@ struct RipSheet: View {
     var onChange: () -> Void
 
     @Environment(InventoryModel.self) private var model
+    @Environment(CatalogController.self) private var catalog
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @State private var counts: [String: Int] = [:]
@@ -134,12 +135,22 @@ struct RipSheet: View {
     }
 
     private func scan(search: Bool = false) {
-        guard let home = RipPool.prepare(chosen, context: modelContext) else { return }
+        let opening = chosen
+        guard let home = RipPool.prepare(opening, context: modelContext) else { return }
         let session = ScanSession()
         session.purchase = home.purchase
         session.ripTarget = home
+        // The sets these packs belong to, so the matcher knows what to expect.
+        // He is not asked: he has just said which boxes he is opening, and a
+        // box has a set. See `RipSetHint`.
+        session.preferredGroupIds = []
         modelContext.insert(session)
         try? modelContext.save()
+        let productIds = opening.map(\.productId)
+        Task { @MainActor in
+            await RipSetHint.apply(to: session, productIds: productIds, catalog: catalog)
+            try? modelContext.save()
+        }
         onChange()
         onScan(session, search)
         dismiss()

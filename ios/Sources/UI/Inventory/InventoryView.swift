@@ -19,6 +19,7 @@ struct InventoryView: View {
     @State private var showSetPicker = false
     @State private var showTagFilter = false
     @State private var showMetrics = false
+    @State private var showMasterSet = false
     @State private var recentHits: [SearchHit] = []
     @AppStorage(cardLayoutKey) private var layout: CardLayout = .grid
     @AppStorage(InventorySort.defaultsKey) private var defaultSort: InventorySort = .newest
@@ -47,7 +48,11 @@ struct InventoryView: View {
                 CardLayoutButton(layout: $layout, accessory: AnyView(sortMenu))
             }
             Divider()
-            list(stacks)
+            if showMasterSet, let groupId = model.filter.groupId {
+                MasterSetView(groupId: groupId, query: query)
+            } else {
+                list(stacks)
+            }
         }
         // A new default applies at once. Otherwise a change in Settings shows
         // nothing until the next launch.
@@ -68,8 +73,13 @@ struct InventoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .inventorySelectionChrome(rows: rows)
         .sheet(isPresented: $showSetPicker) {
-            SetPickerSheet(sets: model.sets(in: cards, from: allSets), selected: model.filter.groupId) { groupId in
+            let owned = model.sets(in: cards, from: allSets)
+            let ownedIds = Set(owned.map(\.groupId))
+            SetPickerSheet(sets: owned, more: allSets.filter { !ownedIds.contains($0.groupId) }, selected: model.filter.groupId) { groupId in
                 model.filter.groupId = groupId
+                // A set he holds no card from has nothing to filter, so the
+                // checklist is the only useful answer.
+                if let groupId, !ownedIds.contains(groupId) { showMasterSet = true }
             }
         }
         .sheet(isPresented: $showTagFilter) {
@@ -96,6 +106,11 @@ struct InventoryView: View {
             if env["CT_OPEN_METRICS"] == "1" { showMetrics = true }
             // `CT_NO_PURCHASE=1` turns on the No purchase chip.
             if env["CT_NO_PURCHASE"] == "1" { model.filter.noPurchaseOnly = true }
+            // `CT_MASTER_SET=24722` opens that set as a master set checklist.
+            if let groupId = env["CT_MASTER_SET"].flatMap(Int.init) {
+                model.filter.groupId = groupId
+                showMasterSet = true
+            }
             // `CT_SLAB_NEWEST="psa|12345678|10"` stamps a cert and a grade on
             // the newest card, because simctl cannot walk the grading sheets.
             // An empty cert field ("cgc||Pristine 10") is the imported ledger's
@@ -283,6 +298,7 @@ struct InventoryView: View {
                 }
                 if let set = allSets.first(where: { $0.groupId == model.filter.groupId }) {
                     Chip(title: set.name, systemImage: "xmark", isSelected: true) { model.filter.groupId = nil }
+                    Chip(title: "Master set", systemImage: "checklist", isSelected: showMasterSet) { showMasterSet.toggle() }
                 } else {
                     Chip(title: "Set", systemImage: "square.stack", isSelected: false) { showSetPicker = true }
                 }

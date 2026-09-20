@@ -110,4 +110,49 @@ import Testing
         accumulator.add(observation(name: "Dedenne", number: "085/195"), now: start)
         #expect(!accumulator.merged(now: start).sawCard)
     }
+
+    /// The Toxel logged with Vulpix's name. Vulpix was logged, stayed in view
+    /// while he swapped cards, and outvoted Toxel's frames on the name.
+    @Test func theCardJustLoggedStaysOutOfTheNextWindow() {
+        var accumulator = ObservationAccumulator()
+        let vulpix = observation(name: "Vulpix", number: "009/128")
+        accumulator.reset(afterLogging: vulpix, now: start)
+        for i in 1...6 {
+            accumulator.add(observation(name: "Vulpix"), now: start.addingTimeInterval(Double(i) * 0.1))
+        }
+        accumulator.add(observation(name: "Vulpix", number: "009/128"), now: start.addingTimeInterval(0.7))
+        accumulator.add(observation(name: "Toxel"), now: start.addingTimeInterval(0.8))
+        accumulator.add(observation(name: "Toxel", number: "058/128"), now: start.addingTimeInterval(0.9))
+
+        let merged = accumulator.merged(now: start.addingTimeInterval(1.0))
+        #expect(merged.number == "058/128")
+        #expect(merged.nameCandidates == ["Toxel"])
+    }
+
+    /// A second copy of the same card logs once the first has left the lens.
+    @Test func theLoggedCardIsForgottenOnceItLeaves() {
+        var accumulator = ObservationAccumulator()
+        let vulpix = observation(name: "Vulpix", number: "009/128")
+        accumulator.reset(afterLogging: vulpix, now: start)
+        accumulator.add(vulpix, now: start.addingTimeInterval(0.2))
+        #expect(accumulator.merged(now: start.addingTimeInterval(0.3)).isEmpty)
+
+        // No frame of it for longer than `loggedAbsence`.
+        accumulator.add(vulpix, now: start.addingTimeInterval(1.5))
+        #expect(accumulator.merged(now: start.addingTimeInterval(1.6)).number == "009/128")
+    }
+
+    /// A card held in view for good cannot block itself for good.
+    @Test func theLoggedCardIsForgottenAfterItsLifetime() {
+        var accumulator = ObservationAccumulator()
+        let vulpix = observation(name: "Vulpix", number: "009/128")
+        accumulator.reset(afterLogging: vulpix, now: start)
+        var t = 0.0
+        while t < accumulator.loggedLifetime {
+            t += 0.25
+            accumulator.add(vulpix, now: start.addingTimeInterval(t))
+        }
+        accumulator.add(vulpix, now: start.addingTimeInterval(t + 0.25))
+        #expect(accumulator.merged(now: start.addingTimeInterval(t + 0.3)).number == "009/128")
+    }
 }

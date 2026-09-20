@@ -835,6 +835,59 @@ import Testing
         ])
     }
 
+    // MARK: - Search
+
+    private func row(_ title: String, _ detail: String = "", cents: Int) -> LedgerEntry {
+        LedgerEntry(kind: .purchase(UUID()), date: day("2026-09-01"), title: title, detail: detail, amountCents: cents)
+    }
+
+    @Test func anEmptySearchKeepsEverything() {
+        let search = LedgerSearch("   ")
+        #expect(search.isEmpty)
+        #expect(search.keeps(row("NovaTCG", cents: -32_450)))
+    }
+
+    @Test func aVendorMatchesWhateverHeCapitalises() {
+        let entry = row("NovaTCG", cents: -32_450)
+        #expect(LedgerSearch("novatcg").keeps(entry))
+        #expect(LedgerSearch("nova").keeps(entry))
+        #expect(LedgerSearch("TCG").keeps(entry))
+        #expect(LedgerSearch("gamecraft").keeps(entry) == false)
+    }
+
+    @Test func theNoteIsSearchableToo() {
+        let entry = row("NovaTCG", "4 cards · two PSA 10 slabs", cents: -32_450)
+        #expect(LedgerSearch("slabs").keeps(entry))
+    }
+
+    @Test func anAmountMatchesFromTheFront() {
+        let entry = row("NovaTCG", cents: -32_450)
+        #expect(LedgerSearch("324").keeps(entry))
+        #expect(LedgerSearch("324.50").keeps(entry))
+        #expect(LedgerSearch("$324.50").keeps(entry))
+        #expect(LedgerSearch("324.5").keeps(entry))
+        // The middle of the amount is not a match: "45" would otherwise drag
+        // in every row whose cents happen to read 45.
+        #expect(LedgerSearch("45").keeps(entry) == false)
+    }
+
+    @Test func aDollarSignAndCommasAreNotTyping() {
+        let entry = row("Gamecraft", cents: -125_000)
+        #expect(LedgerSearch("$1,250").keeps(entry))
+        #expect(LedgerSearch("1250").keeps(entry))
+    }
+
+    @Test func moneyInIsSearchedByItsAmountNotItsSign() {
+        let sale = LedgerEntry(kind: .sale(UUID()), date: day("2026-09-02"), title: "TCGplayer", detail: "1 card", amountCents: 1_515)
+        #expect(LedgerSearch("15.15").keeps(sale))
+    }
+
+    @Test func aNameThatLooksNumericStillSearchesText() {
+        let entry = row("2026 Prize Pack", cents: -1_000)
+        #expect(LedgerSearch("2026").keeps(entry))
+        #expect(LedgerSearch("prize").keeps(entry))
+    }
+
     @Test func dollarsKeepEveryCent() {
         #expect(LedgerExport.dollars(0) == "0.00")
         #expect(LedgerExport.dollars(5) == "0.05")

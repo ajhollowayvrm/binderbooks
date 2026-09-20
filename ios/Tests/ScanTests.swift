@@ -109,191 +109,8 @@ import Testing
     }
 }
 
-@Suite struct DuplicateGateTests {
-    /// A gate plus a clock, so each step reads as "at t, this reading, expect".
-    private struct Run {
-        var gate = DuplicateGate(absence: 1.5)
-        let t0 = Date(timeIntervalSinceReferenceDate: 0)
-
-        /// A frame that read a number off a card.
-        mutating func see(_ number: String?, at seconds: Double) -> Bool {
-            gate.shouldAccept(
-                DuplicateGate.Reading(number: number, sawCard: number != nil),
-                at: t0.addingTimeInterval(seconds)
-            )
-        }
-
-        /// A frame holding a card whose number could not be read.
-        mutating func seeCardOnly(at seconds: Double) -> Bool {
-            gate.shouldAccept(DuplicateGate.Reading(sawCard: true), at: t0.addingTimeInterval(seconds))
-        }
-
-        /// A frame holding nothing at all.
-        mutating func seeNothing(at seconds: Double) -> Bool {
-            gate.shouldAccept(DuplicateGate.Reading(), at: t0.addingTimeInterval(seconds))
-        }
-    }
-
-    @Test func acceptsOncePerVisitAfterARepeatedReading() {
-        var run = Run()
-        let first = run.see(nil, at: 0)
-        let second = run.see("114/084", at: 0)
-        let third = run.see("114/084", at: 0.1)
-        #expect(!first)
-        #expect(!second)
-        #expect(third)
-        // Held still for a while: the ids may churn, the text does not.
-        var later = false
-        for i in 2...40 { later = later || run.see("114/084", at: Double(i) * 0.1) }
-        #expect(!later)
-    }
-
-    /// His report: automatic mode logged the same card twice. The number is the
-    /// smallest print on a card and it reads intermittently, so a gate that
-    /// ended the visit when the *number* went missing ended it while the card
-    /// was still in the chute. The card in the frame is what holds the visit
-    /// open now, whether or not any word on it can be read.
-    @Test func aCardStillInTheFrameIsNotLoggedAgainWhileItsNumberIsUnreadable() {
-        var run = Run()
-        _ = run.see("25/172", at: 0)
-        let accepted = run.see("25/172", at: 0.1)
-        // Four seconds of frames that see the card and read nothing off it.
-        var unreadable = false
-        for i in 2...40 { unreadable = unreadable || run.seeCardOnly(at: Double(i) * 0.1) }
-        let readAgain = run.see("25/172", at: 4.2)
-        let readAgainConfirmed = run.see("25/172", at: 4.3)
-        #expect(accepted)
-        #expect(!unreadable)
-        #expect(!readAgain && !readAgainConfirmed)
-    }
-
-    @Test func aNewVisitStartsAfterTheCardWasGone() {
-        var run = Run()
-        _ = run.see("4/102", at: 0)
-        let accepted = run.see("4/102", at: 0.1)
-        let gone = run.seeNothing(at: 1.0)
-        let stillGone = run.seeNothing(at: 2.0)
-        let back = run.see("4/102", at: 2.2)
-        let backAgain = run.see("4/102", at: 2.3)
-        #expect(accepted)
-        #expect(!gone && !stillGone)
-        #expect(!back)
-        #expect(backAgain)
-    }
-
-    @Test func aShortGapDoesNotStartANewVisit() {
-        var run = Run()
-        _ = run.see("4/102", at: 0)
-        let accepted = run.see("4/102", at: 0.1)
-        let gap = run.seeNothing(at: 0.5)
-        let back = run.see("4/102", at: 0.8)
-        let backAgain = run.see("4/102", at: 0.9)
-        #expect(accepted)
-        #expect(!gap && !back && !backAgain)
-    }
-
-    @Test func differentCardsInterleave() {
-        var run = Run()
-        _ = run.see("1/102", at: 0)
-        let one = run.see("1/102", at: 0.1)
-        _ = run.see("2/102", at: 0.2)
-        let two = run.see("2/102", at: 0.3)
-        let oneAgain = run.see("1/102", at: 0.4)
-        #expect(one && two && !oneAgain)
-    }
-
-    /// The number flickers between two readings of one card. The picture does
-    /// not, so the picture is what says they are the same card.
-    @Test func oneCardReadTwoWaysIsStillOneCard() {
-        var gate = DuplicateGate(absence: 1.5)
-        let t0 = Date(timeIntervalSinceReferenceDate: 0)
-        let art = Fixture.artDescriptor(seed: 0x0DED)
-        func see(_ number: String, _ art: [Int8], at seconds: Double) -> Bool {
-            gate.shouldAccept(
-                DuplicateGate.Reading(number: number, art: art, sawCard: true),
-                at: t0.addingTimeInterval(seconds)
-            )
-        }
-        _ = see("66/064", art, at: 0)
-        let accepted = see("66/064", art, at: 0.1)
-        // Same card, same picture, and a misread of the set total.
-        _ = see("66/084", art, at: 0.3)
-        let misread = see("66/084", art, at: 0.4)
-        #expect(accepted)
-        #expect(!misread)
-    }
-
-    /// His report: the Dedenne logged correctly, and its own attack line
-    /// "Dede-Short" logged right behind it. Logging a card empties the reading
-    /// window, and the window refills unevenly — words every quarter second, a
-    /// signature only when a frame is sharp enough to be worth taking. In that
-    /// gap the scanner holds a number and no picture, and a second, worse
-    /// reading of the card still in the chute looked like a new card.
-    @Test func aSecondReadingWithNoPictureIsNotANewCard() {
-        var gate = DuplicateGate(absence: 1.5)
-        let t0 = Date(timeIntervalSinceReferenceDate: 0)
-        let dedenne = Fixture.artDescriptor(seed: 0x0DED)
-        func see(_ number: String?, _ art: [Int8]?, at seconds: Double) -> Bool {
-            gate.shouldAccept(
-                DuplicateGate.Reading(number: number, art: art, sawCard: true),
-                at: t0.addingTimeInterval(seconds)
-            )
-        }
-        _ = see("085/195", dedenne, at: 0)
-        let dedenneLogged = see("085/195", dedenne, at: 0.1)
-        // The window is empty again. Words come back before the picture does,
-        // and this time they are junk off the card's own attack line.
-        _ = see("10/60", nil, at: 0.35)
-        let ghost = see("10/60", nil, at: 0.6)
-        let ghostAgain = see("10/60", nil, at: 0.85)
-        #expect(dedenneLogged)
-        #expect(!ghost && !ghostAgain)
-    }
-
-    /// His report: automatic mode logged nothing on Perfect Order. The reader
-    /// signs a card every tenth of a second and reads words every quarter
-    /// second, so the picture often arrives first. Two picture-only frames
-    /// passed the gate, and the gate recorded the card as logged. The
-    /// controller logs only with a number, so it logged nothing. When the
-    /// number came, the picture matched the card the gate already held.
-    @Test func aPictureBeforeTheNumberDoesNotUseUpTheCard() {
-        var gate = DuplicateGate(absence: 1.5)
-        let t0 = Date(timeIntervalSinceReferenceDate: 0)
-        let tyrunt = Fixture.artDescriptor(seed: 0x7A7A)
-        func see(_ number: String?, at seconds: Double) -> Bool {
-            gate.shouldAccept(
-                DuplicateGate.Reading(number: number, art: tyrunt, sawCard: true),
-                at: t0.addingTimeInterval(seconds)
-            )
-        }
-        let first = see(nil, at: 0)
-        let second = see(nil, at: 0.1)
-        _ = see("044/088", at: 0.25)
-        let logged = see("044/088", at: 0.5)
-        #expect(!first && !second)
-        #expect(logged)
-    }
-
-    /// The next card in the stack looks like nothing the last one looked like,
-    /// so it logs, and it logs without the lens ever seeing an empty chute.
-    @Test func theNextCardInTheStackLogs() {
-        var gate = DuplicateGate(absence: 1.5)
-        let t0 = Date(timeIntervalSinceReferenceDate: 0)
-        let first = Fixture.artDescriptor(seed: 0x1111)
-        let second = Fixture.artDescriptor(seed: 0x2222)
-        func see(_ number: String, _ art: [Int8], at seconds: Double) -> Bool {
-            gate.shouldAccept(
-                DuplicateGate.Reading(number: number, art: art, sawCard: true),
-                at: t0.addingTimeInterval(seconds)
-            )
-        }
-        _ = see("1/102", first, at: 0)
-        let one = see("1/102", first, at: 0.1)
-        _ = see("2/102", second, at: 0.5)
-        let two = see("2/102", second, at: 0.6)
-        #expect(one && two)
-    }
-}
+// `DuplicateGateTests` moved to `CardIdentityGateTests.swift` on 2026-09-18,
+// with the gate it covered. Every case it held is kept there.
 
 @Suite struct SimilarityAndPrintingTests {
     @Test func diceIsTolerantOfOcrMisreads() {
@@ -325,11 +142,15 @@ import Testing
         _ observation: ScanObservation,
         bias: [Int] = [],
         defaultPrinting: String? = nil,
-        language: ScanLanguage? = nil
+        language: ScanLanguage? = nil,
+        preferred: [Int] = []
     ) throws -> MatchResult {
         let queue = try Fixture.make()
         return try queue.read { db in
-            try CardMatcher.match(db, observation: observation, bias: bias, defaultPrinting: defaultPrinting, language: language)
+            try CardMatcher.match(
+                db, observation: observation, bias: bias, defaultPrinting: defaultPrinting,
+                language: language, preferred: preferred
+            )
         }
     }
 
@@ -556,6 +377,59 @@ import Testing
             try CardMatcher.match(db, observation: observation, bias: [], defaultPrinting: nil)
         }
         #expect(result.confidence == .uncertain)
+    }
+
+    // MARK: - The rip's set scope
+
+    /// Two cards carry `020/076`, in different sets. With nothing to separate
+    /// them the matcher asks, which is right. Knowing which box he is opening
+    /// is what separates them.
+    @Test func thePreferredSetBreaksATieBetweenTwoCardsSharingANumber() throws {
+        let observation = ScanObservation(number: "020/076")
+        let unscoped = try match(observation)
+        #expect(unscoped.confidence == .uncertain)
+
+        // Tandemaus is groupId 108, Umbreon is 103.
+        #expect(try match(observation, preferred: [108]).productId == 16)
+        #expect(try match(observation, preferred: [103]).productId == 7)
+    }
+
+    /// The scope is a preference and not a filter. A card that is not in the
+    /// box he is opening — a stamped print filed elsewhere, a promo, a card
+    /// that fell into the wrong pile — must still be reachable and must still
+    /// win when its own number and name say so.
+    @Test func aCardOutsideThePreferredSetStillWinsOnItsOwnEvidence() throws {
+        // Charizard ex 125/197 is groupId 100, and the rip is of groupId 107.
+        // One printing, so nothing but the set is left to make it doubtful.
+        let observation = ScanObservation(number: "125/197", name: "Charizard ex")
+        let result = try match(observation, preferred: [107])
+        #expect(result.productId == 1)
+        #expect(result.confidence == .certain)
+    }
+
+    /// The half of the scope that finds cards rather than ranking them. The
+    /// ordinary lookup keys on the printed set total, so a misread denominator
+    /// leaves the right card out of the candidates altogether — and no ranking
+    /// can rescue a card that was never a candidate.
+    @Test func thePreferredSetFindsACardWhoseTotalMisread() throws {
+        // Pidgeot ex is 164/197 in groupId 100, and the total reads as 199.
+        // No name here on purpose: with one, the name search rescues the card
+        // and the widening pass is not what is being tested. This is the card
+        // read through glare, where the number is all there is and it is wrong.
+        let observation = ScanObservation(number: "164/199")
+        #expect(try match(observation).productId == nil)
+        #expect(try match(observation, preferred: [100]).productId == 9)
+    }
+
+    /// The learned bias and the declared scope both say "this set" and both
+    /// apply to the same card, so they stack. Capped together, or a card would
+    /// win for being in the expected box over a card whose name the catalog
+    /// actually confirms.
+    @Test func theTwoSetBiasesDoNotCompoundPastOne() {
+        #expect(CardMatcher.setBiasCap <= CardMatcher.nameAgreement)
+        #expect(CardMatcher.recentBias + CardMatcher.preferredSetBias > CardMatcher.nameAgreement)
+        #expect(min(CardMatcher.recentBias + CardMatcher.preferredSetBias, CardMatcher.setBiasCap)
+            < CardMatcher.nameAgreement)
     }
 
     @Test func reassignFindsTheNumberInAnotherSet() throws {
@@ -1008,6 +882,50 @@ import Testing
         #expect(model.cardsNeedingReview.count == 1)
     }
 
+    /// **The other half of "it will not add a card to the collection".** One
+    /// card the matcher could not place used to disable the Commit button, so
+    /// a whole rip stayed out of the collection until every last row was
+    /// fixed. An unidentified card commits as unidentified: `productId` 0 is a
+    /// shape the store already models and the inventory already renders, and
+    /// he can identify it later from there.
+    @Test @MainActor func aSessionHoldingAnUnidentifiedCardStillCommits() throws {
+        let (model, context) = try makeModel()
+        let known = OwnedCard(productId: 1, printing: "Holofoil", condition: "Near Mint", confidence: .certain)
+        known.scanSession = model.session
+        context.insert(known)
+        let unknown = OwnedCard(productId: 0, printing: "", condition: "Near Mint", confidence: .uncertain)
+        unknown.scanSession = model.session
+        context.insert(unknown)
+
+        let purchase = Purchase(vendor: "Whatnot", itemCostCents: 1_000)
+        context.insert(purchase)
+        model.commit(to: purchase)
+
+        #expect(model.session.isCommitted)
+        #expect(model.cards.count == 2)
+        // Both reach the collection, and the unidentified one is still
+        // findable as unidentified rather than quietly becoming something.
+        #expect(model.cards.allSatisfy { $0.isCommitted })
+        #expect(model.cards.contains { !$0.isIdentified })
+    }
+
+    /// A card logged on its picture alone carries no words, and `isEmpty` asks
+    /// only about words. The guard at the top of `handle` used to drop it here
+    /// — after the loop had decided to log it, and without a word anywhere.
+    @Test @MainActor func anObservationWithOnlyArtworkIsNotDiscarded() throws {
+        let (model, _) = try makeModel()
+        var observation = ScanObservation()
+        observation.sawCard = true
+        observation.artDescriptor = Fixture.artDescriptor(seed: 0xFACE)
+        #expect(!observation.isEmpty == false)
+
+        // No catalog is open in this suite, so the matcher cannot run. What is
+        // being proved is that it got that far: the fault is reported rather
+        // than the observation being dropped in silence.
+        model.handle(observation)
+        #expect(model.fault == .catalogClosed)
+    }
+
     @Test @MainActor func commitCreatesLinesAllocatesAndMarksTheSession() throws {
         let (model, context) = try makeModel()
         for id in [1, 2, 3] {
@@ -1088,5 +1006,41 @@ import Testing
         let session = ScanSession()
         for id in [100, 101, 100, 102] { session.observe(groupId: id) }
         #expect(session.observedGroupIds == [102, 100, 101])
+    }
+
+    private func promoLine(_ text: String, top: CGFloat, height: CGFloat) -> RecognizedText {
+        RecognizedText(id: UUID(), transcript: text, top: top, height: height)
+    }
+
+    /// A promo or an Energy prints "MEP EN 109", and Vision splits it into a
+    /// code line and a digits line. These are the lines Vision read off
+    /// TCGplayer's own images, misreads included.
+    @Test func aPromoNumberSplitOverTwoLinesIsJoined() {
+        func number(_ lines: [(String, CGFloat)]) -> String? {
+            FrameInterpreter.interpret(lines.map { promoLine($0.0, top: $0.1, height: 0.02) }).observation.number
+        }
+        #expect(number([("Basic Energy", 0.05), ("MEE EN", 0.93), ("001", 0.935)]) == "MEE001")
+        #expect(number([("MEE EX", 0.93), ("002", 0.93)]) == "MEE002")
+        #expect(number([("Pikachu eX", 0.05), ("200", 0.6), ("J MEP EN", 0.92), ("109", 0.925)]) == "MEP109")
+        #expect(number([("MEE EN", 0.93), ("016 Illus. YOSHIROTTEN", 0.935)]) == "MEE016")
+        // The damage further up the card is not the number.
+        #expect(number([("200", 0.6), ("J MEP EN", 0.92)]) == nil)
+    }
+
+    @Test func aPromoNumberOnOneLineDropsTheLanguageCode() {
+        #expect(FrameInterpreter.number(in: ["J MEP# 108"])?.value == "MEP108")
+        #expect(FrameInterpreter.number(in: ["MEP EN 109"])?.value == "MEP109")
+        #expect(CollectorNumber.parse("MEP109") == CollectorNumber(numberNum: 109, setCode: "MEP"))
+    }
+
+    /// The code and the digits are not a name.
+    @Test func thePromoLinesAreNotNameCandidates() {
+        let observation = FrameInterpreter.interpret([
+            promoLine("Pikachu ex", top: 0.05, height: 0.05),
+            promoLine("J MEP EN", top: 0.92, height: 0.02),
+            promoLine("109", top: 0.925, height: 0.02),
+        ]).observation
+        #expect(!observation.nameCandidates.contains("J MEP EN"))
+        #expect(observation.name == "Pikachu ex")
     }
 }

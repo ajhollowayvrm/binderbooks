@@ -22,6 +22,22 @@ struct FramePolicy {
     /// degradation that really costs artwork accuracy.
     var minimumSharpness: Double = 25
 
+    /// How long a card may sit in view with nothing signed at all before a
+    /// soft frame is signed anyway.
+    ///
+    /// `minimumSharpness` is the right bar when a sharp frame is coming. In a
+    /// dim room none is: the whole run stays under it, no signature is ever
+    /// taken, and artwork silently stops being a signal at exactly the moment
+    /// the words are struggling too. A soft signature is worse evidence than a
+    /// sharp one and far better than none, so after this long the scanner takes
+    /// what it can get and marks it — see `ScanObservation.artIsBestEffort`.
+    var signingPatience: TimeInterval = 0.8
+
+    /// The floor even a best-effort signature will not go below. An empty
+    /// chute and a lens cap also score low, and signing those describes the
+    /// room rather than a card.
+    var bestEffortFloor: Double = 4
+
     /// Once a frame this sharp has been signed, stop signing. Anything better
     /// is not going to change the answer.
     var goodEnoughSharpness: Double = 160
@@ -36,12 +52,16 @@ struct FramePolicy {
         textInterval: TimeInterval = 0.25,
         cardInterval: TimeInterval = 0.1,
         minimumSharpness: Double = 25,
-        goodEnoughSharpness: Double = 160
+        goodEnoughSharpness: Double = 160,
+        signingPatience: TimeInterval = 0.8,
+        bestEffortFloor: Double = 4
     ) {
         self.textInterval = textInterval
         self.cardInterval = cardInterval
         self.minimumSharpness = minimumSharpness
         self.goodEnoughSharpness = goodEnoughSharpness
+        self.signingPatience = signingPatience
+        self.bestEffortFloor = bestEffortFloor
     }
 
     struct Decision: Equatable {
@@ -72,6 +92,20 @@ struct FramePolicy {
         guard bestSoFar < goodEnoughSharpness else { return false }
         // Only an improvement is worth the work.
         return sharpness > bestSoFar
+    }
+
+    /// Whether to sign a frame the bar above rejected, because the card has sat
+    /// in view this long and **nothing** has been signed for it.
+    ///
+    /// Only ever true while `bestSoFar` is zero. Once any signature exists, the
+    /// ordinary bar governs again: this exists to break a starvation, not to
+    /// lower the standard.
+    func shouldSignBestEffort(sharpness: Double, bestSoFar: Double, unsignedFor: TimeInterval) -> Bool {
+        guard bestSoFar <= 0 else { return false }
+        guard unsignedFor >= signingPatience else { return false }
+        guard sharpness >= bestEffortFloor else { return false }
+        // Still below the real bar, or the caller would not be asking.
+        return sharpness < minimumSharpness
     }
 
     mutating func reset() {

@@ -280,6 +280,26 @@ private func seed(_ context: ModelContext) throws {
         #expect(restoredSession.ripTarget?.productId == 55)
     }
 
+    /// The rip's set scope is derived from packs that are gone by the time the
+    /// session is exported, so the file is the only place it survives. Export
+    /// is the one thing standing between him and total loss, and a field the
+    /// DTO forgets is lost silently.
+    @Test @MainActor func theRipsSetScopeSurvivesTheRoundTrip() throws {
+        let session = ScanSession()
+        session.preferredGroupIds = [107, 100]
+        session.observedGroupIds = [107]
+        source.mainContext.insert(session)
+        try source.mainContext.save()
+
+        let file = try CollectionExport.snapshot(source.mainContext)
+        #expect(file.sessions.first?.preferredGroupIds == [107, 100])
+
+        _ = try CollectionExport.apply(file, to: target.mainContext, mode: .merge)
+        let restored = try #require(try target.mainContext.fetch(FetchDescriptor<ScanSession>()).first)
+        #expect(restored.preferredGroupIds == [107, 100])
+        #expect(restored.observedGroupIds == [107])
+    }
+
     /// A hand-entered card carries the only card name the store holds. A lost
     /// name cannot be read back from the catalog, so the file must keep it.
     @Test @MainActor func aHandEnteredCardSurvivesTheRoundTrip() throws {

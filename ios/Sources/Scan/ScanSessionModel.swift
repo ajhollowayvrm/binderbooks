@@ -15,7 +15,10 @@ final class ScanSessionModel {
     private(set) var hits: [Int: SearchHit] = [:]
     private(set) var prices: [Int: [ProductPrice]] = [:]
     private(set) var inFlight = 0
-    private(set) var lastError: String?
+    /// What has gone wrong, in a form the status bar can act on. This was a
+    /// `String?` that three code paths wrote and no view ever read, so every
+    /// failure below reached him as a scanner that simply did nothing.
+    private(set) var fault: ScannerFault?
     /// Copies already in inventory, by productId, then printing. Read once when
     /// the session opens: nothing commits or sells while he scans.
     private(set) var held: [Int: [String: Int]] = [:]
@@ -116,27 +119,35 @@ final class ScanSessionModel {
     // MARK: - Intake
 
     func handle(_ observation: ScanObservation) {
-        guard !observation.isEmpty else { return }
+        // `isEmpty` asks only about words. A card logged on its picture alone
+        // has none, and this guard used to drop it here — after the loop had
+        // decided to log it, and without a word anywhere. The picture is worth
+        // 95% at rank one on its own, so it is reason enough to look a card up.
+        guard !observation.isEmpty || observation.artDescriptor != nil else { return }
         if let cert = observation.certNumber {
             insertSlab(cert: cert, grader: observation.grader)
             return
         }
         guard let db = catalog.database else {
-            lastError = "The catalog is not open."
+            fault = .catalogClosed
             return
         }
         inFlight += 1
         let bias = session.observedGroupIds
         let defaultPrinting = session.defaultPrinting
         let language = session.scanLanguage
+        let preferred = session.preferredGroupIds
         Task {
             defer { inFlight -= 1 }
             do {
                 let matcher = CardMatcher(database: db, art: catalog.artIndex)
-                let result = try await matcher.match(observation, session: bias, defaultPrinting: defaultPrinting, language: language)
+                let result = try await matcher.match(
+                    observation, session: bias, defaultPrinting: defaultPrinting,
+                    language: language, preferred: preferred
+                )
                 await insert(result, observation: observation)
             } catch {
-                lastError = error.localizedDescription
+                fault = .matchFailed(error.localizedDescription)
             }
         }
     }
@@ -379,6 +390,17 @@ final class ScanSessionModel {
         save()
     }
 
+    /// Replace the derived set scope with one he picked, or clear it with nil.
+    func setPreferredSet(_ groupId: Int?) {
+        session.preferredGroupIds = groupId.map { [$0] } ?? []
+        save()
+    }
+
+    func clearPreferredSets() {
+        session.preferredGroupIds = []
+        save()
+    }
+
     // MARK: - Commit
 
     /// Attach the session to a purchase and mark it committed. A generic
@@ -444,7 +466,17 @@ final class ScanSessionModel {
         do {
             try context.save()
         } catch {
-            lastError = error.localizedDescription
+            fault = .saveFailed(error.localizedDescription)
         }
+    }
+
+    /// He has read the fault and acted on it, or is choosing to carry on.
+    func clearFault() {
+        fault = nil
+    }
+
+    /// Raised by the viewfinder, which owns the camera and not this model.
+    func report(_ fault: ScannerFault?) {
+        self.fault = fault
     }
 }

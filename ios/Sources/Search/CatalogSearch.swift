@@ -296,6 +296,11 @@ struct CatalogSearch: Sendable {
         if filter.groupId != nil {
             sql += " AND p.groupId = ?"
         }
+        // Inlined like `categoryIds` above, not bound: the ids come from the
+        // catalog's own rows, never from anything typed.
+        if !filter.groupIds.isEmpty {
+            sql += " AND p.groupId IN (\(filter.groupIds.sorted().map(String.init).joined(separator: ",")))"
+        }
         return sql
     }
 

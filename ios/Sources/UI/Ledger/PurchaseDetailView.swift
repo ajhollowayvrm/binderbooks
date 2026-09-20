@@ -58,6 +58,25 @@ struct PurchaseDetailView: View {
         return rows
     }
 
+    /// What each purchase put into a rip, this purchase first.
+    static func costShares(of group: [PurchaseItem], on purchase: Purchase) -> [(name: String, cents: Int)] {
+        var order: [UUID] = []
+        var totals: [UUID: (name: String, cents: Int)] = [:]
+        for line in group {
+            guard let owner = line.purchase else { continue }
+            if totals[owner.id] == nil {
+                order.append(owner.id)
+                let vendor = owner.vendor.isEmpty ? owner.date.formatted(date: .abbreviated, time: .omitted) : owner.vendor
+                totals[owner.id] = (owner.id == purchase.id ? "This purchase" : vendor, 0)
+            }
+            totals[owner.id]?.cents += line.allocatedCostCents
+        }
+        // This purchase first, the rest in the order their packs appear.
+        let mine = order.filter { $0 == purchase.id }
+        let others = order.filter { $0 != purchase.id }
+        return (mine + others).compactMap { totals[$0] }
+    }
+
     struct RipRow: Identifiable {
         var home: PurchaseItem
         var group: [PurchaseItem]
@@ -256,10 +275,7 @@ struct PurchaseDetailView: View {
 
     private func ripRow(_ rip: RipRow, on purchase: Purchase) -> some View {
         let result = RipPool.result(of: rip.group, market: { inventory.marketCents(for: $0) })
-        let others = rip.group.compactMap(\.purchase).filter { $0.id != purchase.id }
-        var seenOther = Set<UUID>()
-        let otherNames = others.filter { seenOther.insert($0.id).inserted }
-            .map { $0.vendor.isEmpty ? $0.date.formatted(date: .abbreviated, time: .omitted) : $0.vendor }
+        let shares = Self.costShares(of: rip.group, on: purchase)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(result.packs == 1 ? "1 pack" : "\(result.packs) packs")
@@ -278,10 +294,16 @@ struct PurchaseDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if !otherNames.isEmpty {
-                Text("With packs from " + otherNames.joined(separator: ", "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            // The cost above is every pack in the rip, and the packs came from
+            // more than one purchase. Each line says what one purchase paid, so
+            // the total no longer reads as this purchase's price.
+            if shares.count > 1 {
+                ForEach(shares, id: \.name) { share in
+                    LabeledContent(share.name, value: share.cents.asCurrency)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 12)
+                }
             }
             Menu {
                 Button {
