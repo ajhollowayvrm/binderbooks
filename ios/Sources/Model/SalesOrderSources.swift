@@ -11,19 +11,17 @@ import Foundation
 ///   own and read beside the order list.
 /// - **eBay's All Orders Report**.
 ///
-/// The older Sold Items CSV still imports on its own. It is not picked beside
-/// the others: it holds whole orders itself, and it no longer carries eBay
-/// rows.
+/// TCGplayer's "Sold Items" CSV was a fourth shape until 2026-09-20. He cannot
+/// export it himself, and mixed in with these it quietly lost its cards, so it
+/// is gone.
 enum SalesOrderSources {
     enum Kind: Equatable {
-        case soldItems
         case orderList
         case pullSheet
         case ebayOrders
 
         var label: String {
             switch self {
-            case .soldItems: return SalesOrderCSV.soldItemsLabel
             case .orderList: return SalesOrderCSV.orderListLabel
             case .pullSheet: return SalesOrderCSV.pullSheetLabel
             case .ebayOrders: return EbayOrdersCSV.fileLabel
@@ -65,20 +63,13 @@ enum SalesOrderSources {
     /// What kind of export this file is, or nil when it is none of them.
     ///
     /// eBay first, because it is the only one whose header is not the first
-    /// row, so it is read by looking for the header rather than taking it.
-    /// The rest do not collide: the order list has no "Product Name", so it
-    /// cannot read as a Sold Items CSV, and the Sold Items CSV has a "Product
-    /// Line", which is what tells it from the order list.
+    /// row: it is found by looking for it rather than taken from the top.
     static func kind(of text: String) -> Kind? {
         var body = text
         if body.hasPrefix("\u{FEFF}") { body.removeFirst() }
-        let table = SalesOrderCSV.rows(body)
-        if EbayOrdersCSV.headerIndex(table) != nil { return .ebayOrders }
-        if let tcgplayer = TCGplayerOrderExports.kind(of: text) {
-            return tcgplayer == .pullSheet ? .pullSheet : .orderList
-        }
-        let header = Set((table.first ?? []).map { $0.trimmingCharacters(in: .whitespaces) })
-        return SalesOrderCSV.requiredColumns.allSatisfy(header.contains) ? .soldItems : nil
+        if EbayOrdersCSV.headerIndex(SalesOrderCSV.rows(body)) != nil { return .ebayOrders }
+        guard let tcgplayer = TCGplayerOrderExports.kind(of: text) else { return nil }
+        return tcgplayer == .pullSheet ? .pullSheet : .orderList
     }
 
     /// Reads everything he picked into the one set of orders the import plans
@@ -124,9 +115,6 @@ enum SalesOrderSources {
         }
         for ebay in picked[.ebayOrders] ?? [] {
             add(.ebayOrders, try EbayOrdersCSV.read(ebay))
-        }
-        if let soldItems = picked[.soldItems]?.first {
-            add(.soldItems, try SalesOrderCSV.read(soldItems))
         }
 
         result.contents.unreadableRows.sort { ($0.file, $0.line) < ($1.file, $1.line) }

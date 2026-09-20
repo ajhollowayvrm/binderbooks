@@ -675,8 +675,8 @@ own columns, not from how many he picked, and reads them into one set of orders.
 - **Pull sheet** alone is refused. It holds no money, no date and no status.
 - **eBay report**, alone or beside the others. Several are allowed: the report
   reaches about three months back, so a year of selling is four files.
-- The **Sold Items CSV** still imports on its own. It is no longer where eBay rows
-  come from.
+- The **Sold Items CSV** is gone. He cannot export it himself, and mixed in with
+  these it quietly lost its cards to the one-order-per-number rule below.
 - One order per number across every file picked, first file read wins. Everything
   downstream keys on the number alone, so a repeat would otherwise be created twice.
 - A row that will not read says which file to look in: "eBay orders line 7".
@@ -704,18 +704,27 @@ What eBay's report holds, verified on his export of 2026-09-20 (45 records):
 - The report carries buyer names, emails, phones and addresses. None is read, and
   the test fixture is redacted.
 
-Each order goes to one of four places:
+Each order goes to one of five places:
 
 | Place | Rule | What changes |
 |---|---|---|
-| Already on the books | A sale has the order number. | Nothing. |
+| Already on the books | A sale has the order number, and records its cards. | Nothing. |
+| Cards to add | A sale has the order number and records no cards, and the file names them. | The cards only. Each links to his oldest unsold copy that fits and gets the `sold` tag. The sale's money, fees and postage do not change. |
 | Matched | A sale with no order number, dated 3 days before to 10 days after the order. TCGplayer: the same total to the cent; across channels the card names must also agree. eBay: the card names agree, and the amount is the item price or up to $6 more. | The sale takes the order number and the file's channel. Its money does not change. A sale with no cards gets the file's cards, with no link. |
 | New | No sale matches. | A new sale with `costsEstimated`. Each card links to his oldest unsold copy that fits the condition and printing, or the grader and grade, and gets the `sold` tag. |
 | To remove | A canceled order on the books, or a second sale with the same money on the same days as a settled order. | Nothing, unless he switches it on. A card on a removed sale goes back to inventory. |
 
 A slab takes an eBay sale before a copy that still carries "at CGC". A match to a
 sale with no cards adds lines with no link, because a link would take a copy he
-still holds.
+still holds — unlike "Cards to add", where the order is his own and the copies
+really are the ones that sold.
+
+"Cards to add" exists because the order number alone used to settle an order.
+The pull sheet reaches back only so far — on 2026-09-15 it held 100 of the 149
+orders — and an order list imported on its own has no cards at all, so those
+sales could never be filled in afterwards. A new order and a backfill draw from
+the same copies, so they are walked together, oldest order first, and neither
+takes a copy twice.
 
 **Estimated costs.** `FeeEstimate` fits a fixed fee plus a rate for each channel, by
 least squares over his orders with real fees. Part of each fee is fixed: a $1.56

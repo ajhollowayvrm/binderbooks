@@ -102,7 +102,7 @@ struct SettingsView: View {
             } header: {
                 Text("Orders")
             } footer: {
-                Text("Pick any of TCGplayer's order list and pull sheet, from Orders, Export Orders and Export Pull Sheet, and eBay's All Orders Report, together or one at a time. The pull sheet needs the order list with it, because it holds no money or dates. A Sold Items CSV still works on its own. eBay's report carries no status, so a refunded eBay order is not spotted. You review every change before the app saves it.")
+                Text("Pick any of TCGplayer's order list and pull sheet, from Orders, Export Orders and Export Pull Sheet, and eBay's All Orders Report, together or one at a time. The pull sheet needs the order list with it, because it holds no money or dates. eBay's report carries no status, so a refunded eBay order is not spotted. You review every change before the app saves it.")
             }
 
             Section {

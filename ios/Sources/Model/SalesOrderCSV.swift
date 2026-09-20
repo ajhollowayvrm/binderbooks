@@ -1,30 +1,37 @@
 import Foundation
 
-/// A marketplace's sold-orders CSV, read into orders.
+/// An order that sold, however it was exported.
 ///
-/// TCGplayer's "Sold Items" export and the same file with eBay rows added have
-/// the same columns; the second adds "Marketplace" and "eBay Item ID". One row
-/// is one line of an order. The money columns belong to the order and repeat on
-/// every line: an 18-card order that sold for $10.68 says 10.68 eighteen times.
-/// So the money is read once for each order and never summed over lines.
+/// This is the shape every reader produces and the import plans against:
+/// `TCGplayerOrderExports` joins TCGplayer's order list and pull sheet into it,
+/// and `EbayOrdersCSV` reads eBay's All Orders Report into it. It also holds
+/// what they share — the CSV tokenizer, the date formats, and the row that
+/// would not read.
 ///
-/// "Buyer Name" is never read. The store does not keep who bought a card.
+/// TCGplayer's "Sold Items" CSV was read here too until 2026-09-20. He cannot
+/// export it himself, and the order list and pull sheet give the same orders,
+/// so it is gone.
+///
+/// A buyer's name, address and email are never read. The store does not keep
+/// who bought a card.
 enum SalesOrderCSV {
+    /// Which marketplace the order came from.
     enum Channel: String, Sendable {
         case tcgplayer
         case ebay
     }
 
     struct Line: Equatable, Sendable {
-        /// "Pokemon", "Pokemon Japan": the catalog's category name. eBay rows
-        /// say "Pokemon" for Japanese cards too.
+        /// "Pokemon", "Pokemon Japan": the catalog's category name. An eBay
+        /// row says "Pokemon" for a Japanese card too.
         var productLine: String
         /// TCGplayer's set name, which is the catalog's. Empty on eBay.
         var setName: String
         var number: String
-        /// TCGplayer's product name, or the eBay listing title.
+        /// TCGplayer's product name, or eBay's listing title.
         var productName: String
-        /// "Near Mint Holofoil - Japanese", or on eBay "CGC Pristine 10".
+        /// "Near Mint Holofoil - Japanese", or on eBay the grade its listing
+        /// title carried, "CGC Pristine 10".
         var condition: String
         var skuId: Int?
         var quantity: Int
@@ -37,7 +44,7 @@ enum SalesOrderCSV {
         var soldAt: Date
         var status: String
         var productCents: Int
-        /// What the buyer paid for shipping. Blank on most eBay rows.
+        /// What the buyer paid for shipping.
         var shippingChargedCents: Int
         var lines: [Line]
 
@@ -69,81 +76,19 @@ enum SalesOrderCSV {
         var errorDescription: String? {
             switch self {
             case .missingColumns(let names):
-                return "This is not a sold-orders file. It has no \(names.joined(separator: ", ")) column."
+                return "This file has no \(names.joined(separator: ", ")) column."
             }
         }
     }
 
-    static let requiredColumns = ["Order #", "Order Date", "Status", "Product Name", "Product Amt"]
-
     /// The labels an unreadable row carries, one per kind of file.
-    static let soldItemsLabel = "Sold items"
     static let orderListLabel = "Order list"
     static let pullSheetLabel = "Pull sheet"
 
-    static func read(_ text: String) throws -> Contents {
-        var body = text
-        if body.hasPrefix("\u{FEFF}") { body.removeFirst() }
-        let table = rows(body)
-        let header = (table.first ?? []).map { $0.trimmingCharacters(in: .whitespaces) }
-        let column = Dictionary(header.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
-        let missing = requiredColumns.filter { column[$0] == nil }
-        guard missing.isEmpty else { throw ReadError.missingColumns(missing) }
-
-        var orders: [Order] = []
-        var position: [String: Int] = [:]
-        var unreadable: [UnreadableRow] = []
-
-        for (offset, row) in table.dropFirst().enumerated() {
-            if row.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) { continue }
-            func value(_ name: String) -> String {
-                guard let index = column[name], index < row.count else { return "" }
-                return row[index].trimmingCharacters(in: .whitespaces)
-            }
-
-            let orderId = value("Order #")
-            guard !orderId.isEmpty,
-                  let channel = channel(value("Marketplace")),
-                  let soldAt = day(value("Order Date")),
-                  let productCents = Money.cents(from: value("Product Amt"))
-            else {
-                unreadable.append(UnreadableRow(file: soldItemsLabel, line: offset + 2))
-                continue
-            }
-
-            let line = Line(
-                productLine: value("Product Line"), setName: value("Set"), number: value("Number"),
-                productName: value("Product Name"), condition: value("Condition"),
-                skuId: Int(value("SkuId")), quantity: max(1, Int(value("Qty")) ?? 1)
-            )
-            let key = channel.rawValue + " " + orderId
-            if let index = position[key] {
-                orders[index].lines.append(line)
-            } else {
-                position[key] = orders.count
-                orders.append(Order(
-                    channel: channel, orderId: orderId, soldAt: soldAt, status: value("Status"),
-                    productCents: productCents, shippingChargedCents: Money.cents(from: value("Shipping Amt")) ?? 0,
-                    lines: [line]
-                ))
-            }
-        }
-        return Contents(orders: orders, unreadableRows: unreadable)
-    }
-
-    /// A file with no "Marketplace" column is TCGplayer's own export.
-    static func channel(_ text: String) -> Channel? {
-        switch text.lowercased() {
-        case "", "tcgplayer": return .tcgplayer
-        case "ebay": return .ebay
-        default: return nil
-        }
-    }
-
-    /// TCGplayer's export writes "Friday, 03 July 2026". The combined file
-    /// writes "2026-07-03", and eBay's report "Sep-18-26", or "Sep-18-26
-    /// 14:32:11" when the seller asked it for times. A two-digit year lands in
-    /// Foundation's moving window, which reads 26 as 2026 for decades yet.
+    /// TCGplayer's order list writes "Friday, 03 July 2026", and eBay's report
+    /// "Sep-18-26", or "Sep-18-26 14:32:11" when the seller asked it for times.
+    /// A two-digit year lands in Foundation's moving window, which reads 26 as
+    /// 2026 for decades yet.
     static func day(_ text: String) -> Date? {
         for formatter in dayFormatters {
             if let date = formatter.date(from: text) { return date.addingTimeInterval(12 * 60 * 60) }
@@ -247,7 +192,7 @@ enum TCGplayerOrderExports {
     static let orderListColumns = ["Order #", "Order Date", "Status", "Product Amt", "Shipping Amt"]
     static let pullSheetColumns = ["Product Line", "Product Name", "Condition", "Number", "Set", "SkuId", "Order Quantity"]
 
-    /// The Sold Items CSV has the order list's columns too, and a product line.
+    /// The pull sheet is the one with a product line and an order quantity.
     static func kind(of text: String) -> Kind? {
         let header = Set(columns(table(text)).keys)
         if pullSheetColumns.allSatisfy(header.contains) { return .pullSheet }
