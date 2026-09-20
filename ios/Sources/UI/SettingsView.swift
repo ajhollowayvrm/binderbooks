@@ -97,12 +97,12 @@ struct SettingsView: View {
                     handleSalesImport(result)
                 }
                 .sheet(item: $pendingSales) { file in
-                    SalesImportSheet(contents: file.contents)
+                    SalesImportSheet(sources: file.sources)
                 }
             } header: {
                 Text("Orders")
             } footer: {
-                Text("Pick TCGplayer's order list and pull sheet together, from Orders, Export Orders and Export Pull Sheet. A Sold Items CSV, with or without eBay rows, also works on its own. You review every change before the app saves it.")
+                Text("Pick any of TCGplayer's order list and pull sheet, from Orders, Export Orders and Export Pull Sheet, and eBay's All Orders Report, together or one at a time. The pull sheet needs the order list with it, because it holds no money or dates. A Sold Items CSV still works on its own. eBay's report carries no status, so a refunded eBay order is not spotted. You review every change before the app saves it.")
             }
 
             Section {
@@ -256,8 +256,8 @@ struct SettingsView: View {
         }
     }
 
-    /// One file is a Sold Items CSV. Two files are TCGplayer's order list and
-    /// pull sheet, picked in either order.
+    /// Any number and combination of the orders exports, in any order. What
+    /// each file is is read off its own columns, not off how many he picked.
     private func handleSalesImport(_ result: Result<[URL], Error>) {
         importError = nil
         do {
@@ -266,17 +266,7 @@ struct SettingsView: View {
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 return try String(contentsOf: url, encoding: .utf8)
             }
-            switch texts.count {
-            case 1:
-                pendingSales = PendingSalesFile(contents: try SalesOrderCSV.read(texts[0]))
-            case 2:
-                guard let list = texts.first(where: { TCGplayerOrderExports.kind(of: $0) == .orderList }),
-                      let sheet = texts.first(where: { TCGplayerOrderExports.kind(of: $0) == .pullSheet })
-                else { throw TCGplayerOrderExports.JoinError.notTheTwoFiles }
-                pendingSales = PendingSalesFile(contents: try TCGplayerOrderExports.join(orderList: list, pullSheet: sheet).contents)
-            default:
-                throw TCGplayerOrderExports.JoinError.notTheTwoFiles
-            }
+            pendingSales = PendingSalesFile(sources: try SalesOrderSources.read(texts))
         } catch {
             importError = error.localizedDescription
         }

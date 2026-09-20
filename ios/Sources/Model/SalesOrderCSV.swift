@@ -47,10 +47,20 @@ enum SalesOrderCSV {
         var totalCents: Int { productCents + shippingChargedCents }
     }
 
+    /// A row that would not read, and which file it was in. Several files can
+    /// be imported together, so a bare line number would not say where to look.
+    struct UnreadableRow: Equatable, Sendable {
+        /// The kind of file, not its name: "Order list", "eBay orders".
+        var file: String
+        /// The line in that file, with its header as line 1.
+        var line: Int
+
+        var label: String { "\(file) line \(line)" }
+    }
+
     struct Contents: Equatable, Sendable {
         var orders: [Order]
-        /// Line numbers in the file, with the header as line 1.
-        var unreadableRows: [Int]
+        var unreadableRows: [UnreadableRow]
     }
 
     enum ReadError: LocalizedError, Equatable {
@@ -66,6 +76,11 @@ enum SalesOrderCSV {
 
     static let requiredColumns = ["Order #", "Order Date", "Status", "Product Name", "Product Amt"]
 
+    /// The labels an unreadable row carries, one per kind of file.
+    static let soldItemsLabel = "Sold items"
+    static let orderListLabel = "Order list"
+    static let pullSheetLabel = "Pull sheet"
+
     static func read(_ text: String) throws -> Contents {
         var body = text
         if body.hasPrefix("\u{FEFF}") { body.removeFirst() }
@@ -77,7 +92,7 @@ enum SalesOrderCSV {
 
         var orders: [Order] = []
         var position: [String: Int] = [:]
-        var unreadable: [Int] = []
+        var unreadable: [UnreadableRow] = []
 
         for (offset, row) in table.dropFirst().enumerated() {
             if row.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) { continue }
@@ -92,7 +107,7 @@ enum SalesOrderCSV {
                   let soldAt = day(value("Order Date")),
                   let productCents = Money.cents(from: value("Product Amt"))
             else {
-                unreadable.append(offset + 2)
+                unreadable.append(UnreadableRow(file: soldItemsLabel, line: offset + 2))
                 continue
             }
 
@@ -126,7 +141,9 @@ enum SalesOrderCSV {
     }
 
     /// TCGplayer's export writes "Friday, 03 July 2026". The combined file
-    /// writes "2026-07-03".
+    /// writes "2026-07-03", and eBay's report "Sep-18-26", or "Sep-18-26
+    /// 14:32:11" when the seller asked it for times. A two-digit year lands in
+    /// Foundation's moving window, which reads 26 as 2026 for decades yet.
     static func day(_ text: String) -> Date? {
         for formatter in dayFormatters {
             if let date = formatter.date(from: text) { return date.addingTimeInterval(12 * 60 * 60) }
@@ -134,7 +151,7 @@ enum SalesOrderCSV {
         return nil
     }
 
-    private static let dayFormatters: [DateFormatter] = ["yyyy-MM-dd", "EEEE, dd MMMM yyyy", "M/d/yyyy"].map { format in
+    private static let dayFormatters: [DateFormatter] = ["yyyy-MM-dd", "EEEE, dd MMMM yyyy", "M/d/yyyy", "MMM-dd-yy", "MMM-dd-yy HH:mm:ss"].map { format in
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "UTC")
@@ -220,13 +237,11 @@ enum TCGplayerOrderExports {
     struct Joined: Equatable, Sendable {
         var contents: SalesOrderCSV.Contents
         /// Orders in the list that are not canceled and have no card in the
-        /// pull sheet.
+        /// pull sheet. Every one of them, when no pull sheet was picked.
         var ordersWithoutCards: [String]
         /// Orders the pull sheet names that the order list does not hold. Their
         /// cards are not read.
         var unknownOrders: [String]
-        /// Line numbers in the pull sheet, with the header as line 1.
-        var unreadablePullSheetRows: [Int]
     }
 
     static let orderListColumns = ["Order #", "Order Date", "Status", "Product Amt", "Shipping Amt"]
@@ -240,14 +255,15 @@ enum TCGplayerOrderExports {
         return nil
     }
 
-    static func join(orderList: String, pullSheet: String) throws -> Joined {
-        guard kind(of: orderList) == .orderList, kind(of: pullSheet) == .pullSheet else {
-            throw JoinError.notTheTwoFiles
-        }
+    /// The pull sheet is optional: an order list on its own gives the orders
+    /// and their money, with no cards on any of them.
+    static func join(orderList: String, pullSheet: String?) throws -> Joined {
+        guard kind(of: orderList) == .orderList else { throw JoinError.notTheTwoFiles }
+        if let pullSheet, kind(of: pullSheet) != .pullSheet { throw JoinError.notTheTwoFiles }
 
         var linesByOrder: [String: [SalesOrderCSV.Line]] = [:]
-        var unreadableSheetRows: [Int] = []
-        let sheet = table(pullSheet)
+        var unreadableRows: [SalesOrderCSV.UnreadableRow] = []
+        let sheet = pullSheet.map { table($0) } ?? []
         let sheetColumn = columns(sheet)
         for (offset, row) in sheet.dropFirst().enumerated() {
             if row.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) { continue }
@@ -255,7 +271,7 @@ enum TCGplayerOrderExports {
             if value("Product Line").hasPrefix("Orders Contained") { continue }
             let entries = orderQuantities(value("Order Quantity"))
             guard !entries.isEmpty else {
-                unreadableSheetRows.append(offset + 2)
+                unreadableRows.append(SalesOrderCSV.UnreadableRow(file: SalesOrderCSV.pullSheetLabel, line: offset + 2))
                 continue
             }
             for (orderId, quantity) in entries {
@@ -268,7 +284,6 @@ enum TCGplayerOrderExports {
         }
 
         var orders: [SalesOrderCSV.Order] = []
-        var unreadableListRows: [Int] = []
         var known: Set<String> = []
         var withoutCards: [String] = []
         let list = table(orderList)
@@ -281,7 +296,7 @@ enum TCGplayerOrderExports {
                   let soldAt = SalesOrderCSV.day(value("Order Date")),
                   let productCents = Money.cents(from: value("Product Amt"))
             else {
-                unreadableListRows.append(offset + 2)
+                unreadableRows.append(SalesOrderCSV.UnreadableRow(file: SalesOrderCSV.orderListLabel, line: offset + 2))
                 continue
             }
             guard known.insert(orderId).inserted else { continue }
@@ -295,10 +310,9 @@ enum TCGplayerOrderExports {
         }
 
         return Joined(
-            contents: SalesOrderCSV.Contents(orders: orders, unreadableRows: unreadableListRows),
+            contents: SalesOrderCSV.Contents(orders: orders, unreadableRows: unreadableRows),
             ordersWithoutCards: withoutCards,
-            unknownOrders: linesByOrder.keys.filter { !known.contains($0) }.sorted(),
-            unreadablePullSheetRows: unreadableSheetRows
+            unknownOrders: linesByOrder.keys.filter { !known.contains($0) }.sorted()
         )
     }
 

@@ -1,10 +1,10 @@
 import SwiftData
 import SwiftUI
 
-/// A sold-orders file waiting for review.
+/// The sold-orders files he picked, waiting for review.
 struct PendingSalesFile: Identifiable {
     let id = UUID()
-    var contents: SalesOrderCSV.Contents
+    var sources: SalesOrderSources.Result
 }
 
 /// Review a sold-orders file, then apply it to the books.
@@ -12,7 +12,9 @@ struct PendingSalesFile: Identifiable {
 /// Nothing is saved until he taps Import. A removal starts switched off: the
 /// app found the duplicate, and he decides.
 struct SalesImportSheet: View {
-    let contents: SalesOrderCSV.Contents
+    let sources: SalesOrderSources.Result
+
+    private var contents: SalesOrderCSV.Contents { sources.contents }
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -67,15 +69,18 @@ struct SalesImportSheet: View {
     private func planList(_ plan: SalesOrderImport.Plan) -> some View {
         List {
             Section {
-                LabeledContent("Orders in the file", value: "\(plan.orderCount)")
+                LabeledContent("Orders in the files", value: "\(plan.orderCount)")
                 LabeledContent("Already on your books", value: "\(plan.alreadyOnBooks)")
                 LabeledContent("Matched to a sale", value: "\(plan.matches.count)")
                 LabeledContent("New", value: "\(plan.newSales.count)")
                 if plan.canceledNotOnBooks > 0 {
                     LabeledContent("Canceled, not on your books", value: "\(plan.canceledNotOnBooks)")
                 }
+                if !sources.ordersWithoutCards.isEmpty {
+                    LabeledContent("Orders with no cards listed", value: "\(sources.ordersWithoutCards.count)")
+                }
                 if !plan.unreadableRows.isEmpty {
-                    LabeledContent("Rows not read", value: plan.unreadableRows.map(String.init).joined(separator: ", "))
+                    LabeledContent("Rows not read", value: plan.unreadableRows.map(\.label).joined(separator: ", "))
                 }
             } footer: {
                 if catalogMissing {

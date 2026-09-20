@@ -631,7 +631,8 @@ It needs no sold-orders import first.
 
 **Built 2026-09-12.** Settings → Orders → Import sold orders reads TCGplayer's Sold
 Items CSV. It also reads the same file with eBay rows added. The code is in
-`ios/Sources/Model/SalesOrderCSV.swift` and `SalesOrderImport.swift`.
+`ios/Sources/Model/SalesOrderCSV.swift` and `SalesOrderImport.swift`. See "Three
+files, any combination" below for what it takes now.
 
 The import works on the live store, not through a collection file.
 `CollectionExport.apply` cannot delete a row, and it overwrites every card that he
@@ -663,6 +664,45 @@ the same orders:
   ": " when the title repeats it.
 - On 2026-09-15 the pull sheet held 100 of the 149 orders in the list. The other 49
   (46 older orders and 3 canceled) came through with no cards.
+
+**Three files, any combination.** Amended 2026-09-20: eBay's All Orders Report joins
+the two TCGplayer exports, and the picker takes any number and combination of them.
+`SalesOrderSources` in `SalesOrderSources.swift` decides what each file is from its
+own columns, not from how many he picked, and reads them into one set of orders.
+`EbayOrdersCSV.swift` reads the eBay report.
+
+- **Order list** alone: the orders and their money, no cards on any of them.
+- **Pull sheet** alone is refused. It holds no money, no date and no status.
+- **eBay report**, alone or beside the others. Several are allowed: the report
+  reaches about three months back, so a year of selling is four files.
+- The **Sold Items CSV** still imports on its own. It is no longer where eBay rows
+  come from.
+- One order per number across every file picked, first file read wins. Everything
+  downstream keys on the number alone, so a repeat would otherwise be created twice.
+- A row that will not read says which file to look in: "eBay orders line 7".
+
+What eBay's report holds, verified on his export of 2026-09-20 (45 records):
+
+- The first line is bare commas and the header is the second line, so the header is
+  found by looking for it. A padding row follows it, and the file ends with
+  "45,record(s) downloaded," and "Seller ID : …". A row with no date, no title and
+  no price is the report's own furniture, not a row that would not read.
+- A multi-item order is a summary row, blank in "Item Title", carrying the order's
+  money, then one row per item. Record 119 sold for $28.00, its two items at $13.00
+  and $15.00. The summary row is the money; its items are the lines, and their
+  prices are not added on top. Without a summary row the rows add up.
+- "Sold For" and "Shipping And Handling" are the money, not "Total Price", which
+  adds the tax that `SalesOrderImport.ebayAllowanceCents` already allows for.
+- Two rows carry no "Order Number". Their "Sales Record Number" is the order id.
+  If eBay later gives one a real number, a re-import creates that sale a second time.
+- There is no Status column, so no eBay order is ever canceled and a refund is not
+  spotted.
+- There is no Condition column either. `EbayOrdersCSV.grade(inTitle:)` takes the
+  grade out of the listing title — "… CGC Pristine 10" — anchored on the grader
+  word, because a title is full of other numbers. On all 45 records it reads every
+  graded title right and nothing out of an ungraded one.
+- The report carries buyer names, emails, phones and addresses. None is read, and
+  the test fixture is redacted.
 
 Each order goes to one of four places:
 

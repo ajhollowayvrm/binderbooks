@@ -80,7 +80,7 @@ enum SalesOrderImport {
         var newSales: [NewSale] = []
         var removals: [Removal] = []
         var canceledNotOnBooks = 0
-        var unreadableRows: [Int] = []
+        var unreadableRows: [SalesOrderCSV.UnreadableRow] = []
         /// Cards on new orders that the catalog could not name. They import
         /// with the file's description and no link.
         var unidentifiedCards = 0
@@ -112,9 +112,13 @@ enum SalesOrderImport {
     static let daysBefore = 3
     static let daysAfter = 10
 
-    /// What his books may add to an eBay item price: the tax or the buyer's
-    /// shipping, which the eBay rows do not carry. The largest in his ledger
-    /// is $5.48.
+    /// What his books may add to an eBay item price, over and above the order's
+    /// own total: the tax, which no eBay file carries. It was also the buyer's
+    /// shipping back when the eBay rows carried no shipping either; eBay's All
+    /// Orders Report does carry it, so for those orders this allowance is tax
+    /// alone and the band is wider than it needs to be. A wider band is safe
+    /// here because an eBay order only ever matches a sale that names one of
+    /// its cards — see `score`.
     static let ebayAllowanceCents = 600
 
     // MARK: - Plan

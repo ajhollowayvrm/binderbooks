@@ -92,7 +92,6 @@ import Testing
         let orders = joined.contents.orders
         #expect(orders.map(\.orderId) == ["62955D06-A", "62955D06-B", "62955D06-C", "62955D06-D"])
         #expect(joined.contents.unreadableRows.isEmpty)
-        #expect(joined.unreadablePullSheetRows.isEmpty)
 
         let a = orders[0]
         #expect(a.channel == .tcgplayer)
@@ -114,7 +113,7 @@ import Testing
     @Test func aBadOrderQuantityIsReportedNotHalfRead() throws {
         let text = Self.pullSheet.replacingOccurrences(of: "62955D06-Z:1", with: "62955D06-Z")
         let joined = try TCGplayerOrderExports.join(orderList: Self.orderList, pullSheet: text)
-        #expect(joined.unreadablePullSheetRows == [4])
+        #expect(joined.contents.unreadableRows == [SalesOrderCSV.UnreadableRow(file: "Pull sheet", line: 4)])
         #expect(joined.unknownOrders.isEmpty)
     }
 
@@ -142,7 +141,7 @@ import Testing
     @Test func aRowWithABadDateIsReportedNotDropped() throws {
         let text = Self.combined.replacingOccurrences(of: "T-200,2026-07-05", with: "T-200,5 July")
         let contents = try SalesOrderCSV.read(text)
-        #expect(contents.unreadableRows == [3])
+        #expect(contents.unreadableRows == [SalesOrderCSV.UnreadableRow(file: "Sold items", line: 3)])
         #expect(contents.orders.count == 4)
     }
 
@@ -483,5 +482,191 @@ import Testing
         #expect(again.newSales.isEmpty)
         #expect(again.matches.isEmpty)
         #expect(again.removals.isEmpty)
+    }
+}
+
+/// eBay's All Orders Report, and picking the three exports in any combination.
+/// The fixture copies the shapes of his real report of 2026-09-20: a first line
+/// of bare commas, a padding row, a multi-item order written as a summary row
+/// and its items, an order with no order number, a listing that is not a card,
+/// and the two footer lines.
+@Suite struct SalesOrderSourcesTests {
+    static let ebay = """
+    ,,,,,,,,,,,
+    "Sales Record Number","Order Number","Buyer Name","Item Number","Item Title","Quantity","Sold For","Shipping And Handling","Total Price","Sale Date","Shipped On Date","Tracking Number"
+    "","","","","","","","","","","",""
+    "149","11-10000-00001","buyer_one","220000000001","2024 Pokemon Pikachu ex 122/106 Super Electric Breaker JP SR CGC Pristine 10","1","$90.00","$0.00","$97.99","Sep-18-26","","10000000000001"
+    "145","","buyer_two","220000000002","Reshiram EX 95/99 Full Art Next Destinies Italian Pokemon Card 2012 NM Clean","1","$50.00","$0.00","$50.00","Sep-15-26","",""
+    "142","11-10000-00002","buyer_three","220000000003","Apple AirPods 4 4th Gen MXP63LL/A No ANC White USB-C Case NEW FACTORY SEALED","1","$65.00","$0.00","$65.00","Sep-14-26","Sep-14-26","1Z000000000000001"
+    "119","11-10000-00003","buyer_four","","","2","$28.00","$0.00","$29.55","Aug-25-26","Aug-26-26",""
+    "119","11-10000-00003","buyer_four","220000000004","CGC GEM MINT 10 Numel Mega Dream ex 198/193 Japanese 2025 Holo AR Pokemon","1","$13.00","","","Aug-25-26","Aug-26-26","9400000000000000000001"
+    "119","11-10000-00003","buyer_four","220000000005","CGC GEM MINT 10 Espeon ex Terastal Fest ex 063/187 Japanese Holo DR Pokemon","1","$15.00","","","Aug-25-26","Aug-26-26","9400000000000000000001"
+
+    45,record(s) downloaded,
+    Seller ID : a-seller
+    """
+
+    private func day(_ iso: String) -> Date { SalesOrderCSV.day(iso)! }
+
+    // MARK: - Reading eBay
+
+    @Test func theEbayReportReadsItsOrders() throws {
+        let contents = try EbayOrdersCSV.read(Self.ebay)
+        #expect(contents.orders.map(\.orderId) == ["11-10000-00001", "145", "11-10000-00002", "11-10000-00003"])
+        #expect(contents.orders.allSatisfy { $0.channel == .ebay })
+        // No Status column, so nothing in this file is ever canceled.
+        #expect(contents.orders.allSatisfy { !$0.isCanceled })
+
+        let first = try #require(contents.orders.first)
+        #expect(first.soldAt == day("2026-09-18"))
+        #expect(first.productCents == 9_000)
+        #expect(first.shippingChargedCents == 0)
+        #expect(first.lines.map(\.condition) == ["CGC Pristine 10"])
+        #expect(first.lines.first?.quantity == 1)
+    }
+
+    /// The summary row is the order's money. Its items are the lines, and their
+    /// prices are not added on top of it.
+    @Test func aMultiItemOrderTakesItsMoneyFromTheSummaryRow() throws {
+        let contents = try EbayOrdersCSV.read(Self.ebay)
+        let order = try #require(contents.orders.first { $0.lines.count == 2 })
+        #expect(order.orderId == "11-10000-00003")
+        #expect(order.productCents == 2_800)
+        #expect(order.cardCount == 2)
+        #expect(order.lines.map(\.productName).allSatisfy { $0.hasPrefix("CGC GEM MINT 10") })
+        #expect(order.lines.allSatisfy { $0.condition == "CGC GEM MINT 10" })
+    }
+
+    @Test func aBlankOrderNumberFallsBackToTheSalesRecord() throws {
+        let contents = try EbayOrdersCSV.read(Self.ebay)
+        let order = try #require(contents.orders.first { $0.orderId == "145" })
+        #expect(order.productCents == 5_000)
+        // Nothing in the title grades it, so it imports raw.
+        #expect(order.lines.first?.condition == "")
+    }
+
+    /// The comma line, the padding row and the two footer lines are the
+    /// report's furniture, not rows that would not read.
+    @Test func theReportsOwnFurnitureIsNotAnUnreadableRow() throws {
+        let contents = try EbayOrdersCSV.read(Self.ebay)
+        #expect(contents.unreadableRows.isEmpty)
+    }
+
+    @Test func aRowWithABadDateIsReportedAgainstTheEbayFile() throws {
+        let text = Self.ebay.replacingOccurrences(of: "\"Sep-18-26\"", with: "\"the 18th\"")
+        let contents = try EbayOrdersCSV.read(text)
+        #expect(contents.unreadableRows == [SalesOrderCSV.UnreadableRow(file: "eBay orders", line: 4)])
+        #expect(contents.orders.count == 3)
+    }
+
+    @Test func ebaysDateFormatReads() {
+        #expect(SalesOrderCSV.day("Sep-18-26") == SalesOrderCSV.day("2026-09-18"))
+        #expect(SalesOrderCSV.day("Aug-25-26") == SalesOrderCSV.day("2026-08-25"))
+    }
+
+    /// A title is full of numbers, so the grader word anchors the grade.
+    @Test func theGradeComesOutOfTheListingTitle() {
+        #expect(EbayOrdersCSV.grade(inTitle: "2024 Pokemon Pikachu ex 122/106 Super Electric Breaker JP SR CGC Pristine 10") == "CGC Pristine 10")
+        #expect(EbayOrdersCSV.grade(inTitle: "CGC 10 Zamazenta 107/098 SV10 Glory of Team Rocket Art Rare Holo Japanese 2025") == "CGC 10")
+        #expect(EbayOrdersCSV.grade(inTitle: "CGC GEM MINT 10 Eevee ex Terastal Fest ex 126/187 Japanese Holo DR Pokemon") == "CGC GEM MINT 10")
+        #expect(EbayOrdersCSV.grade(inTitle: "CGC MINT 9 Gengar Nihil Zero 049/080 Japanese 2026 Non-Holo Pokemon") == "CGC MINT 9")
+        #expect(EbayOrdersCSV.grade(inTitle: "2025 Pokemon SV Black Bolt Dwebble 129/086 Illustration Rare Holo PSA 9 MINT") == "PSA 9")
+        // "Tag Team" is a card, not the grader TAG.
+        #expect(EbayOrdersCSV.grade(inTitle: "2019 Pokemon Japanese Espeon & Deoxys GX 001/031 Tag Team Holo CGC Pristine 10") == "CGC Pristine 10")
+        #expect(EbayOrdersCSV.grade(inTitle: "Reshiram EX 95/99 Full Art Next Destinies Italian Pokemon Card 2012 NM Clean") == "")
+        #expect(EbayOrdersCSV.grade(inTitle: "Microsoft Xbox Series S 512GB White Console + Controller, HDMI & Power Cord") == "")
+    }
+
+    /// The grade the title gives is the grade the import matches copies on.
+    @Test func theTitlesGradeReachesTheCondition() {
+        let slab = SoldCondition.parse(EbayOrdersCSV.grade(inTitle: "CGC GEM MINT 10 Numel Mega Dream ex 198/193 Japanese"), channel: .ebay)
+        #expect(slab.grader == "cgc")
+        #expect(slab.grade == 10)
+        #expect(slab.gradeHasWord)
+        #expect(!slab.pristine)
+
+        let raw = SoldCondition.parse(EbayOrdersCSV.grade(inTitle: "Reshiram EX 95/99 Full Art NM Clean"), channel: .ebay)
+        #expect(raw == SoldCondition())
+    }
+
+    // MARK: - Picking the files
+
+    @Test func eachFileIsToldApartByItsColumns() {
+        #expect(SalesOrderSources.kind(of: SalesOrderSourcesTests.ebay) == .ebayOrders)
+        #expect(SalesOrderSources.kind(of: SalesOrderImportTests.orderList) == .orderList)
+        #expect(SalesOrderSources.kind(of: SalesOrderImportTests.pullSheet) == .pullSheet)
+        #expect(SalesOrderSources.kind(of: SalesOrderImportTests.combined) == .soldItems)
+        #expect(SalesOrderSources.kind(of: "a,b,c\n1,2,3\n") == nil)
+    }
+
+    @Test func anyOneFileImportsOnItsOwn() throws {
+        let ebay = try SalesOrderSources.read([Self.ebay])
+        #expect(ebay.contents.orders.count == 4)
+        let soldItems = try SalesOrderSources.read([SalesOrderImportTests.combined])
+        #expect(soldItems.contents.orders.count == 5)
+
+        // The order list alone: the orders and their money, no cards.
+        let list = try SalesOrderSources.read([SalesOrderImportTests.orderList])
+        #expect(list.contents.orders.count == 4)
+        #expect(list.contents.orders.allSatisfy { $0.lines.isEmpty })
+        #expect(list.ordersWithoutCards == ["62955D06-A", "62955D06-C", "62955D06-D"])
+    }
+
+    @Test func theOrderListAndPullSheetStillJoinThroughTheRouter() throws {
+        let picked = try SalesOrderSources.read([SalesOrderImportTests.pullSheet, SalesOrderImportTests.orderList])
+        #expect(picked.kinds == [.orderList, .pullSheet])
+        #expect(picked.contents.orders.map(\.orderId) == ["62955D06-A", "62955D06-B", "62955D06-C", "62955D06-D"])
+        #expect(picked.contents.orders[0].lines.map(\.quantity) == [1, 2])
+        #expect(picked.ordersWithoutCards == ["62955D06-D"])
+        #expect(picked.unknownOrders == ["62955D06-Z"])
+    }
+
+    @Test func allThreeFilesComeInTogether() throws {
+        let picked = try SalesOrderSources.read([
+            Self.ebay, SalesOrderImportTests.orderList, SalesOrderImportTests.pullSheet,
+        ])
+        #expect(picked.kinds == [.orderList, .pullSheet, .ebayOrders])
+        #expect(picked.contents.orders.filter { $0.channel == .tcgplayer }.count == 4)
+        #expect(picked.contents.orders.filter { $0.channel == .ebay }.count == 4)
+        #expect(picked.contents.unreadableRows.isEmpty)
+    }
+
+    @Test func theOrderListAndTheEbayReportComeInTogether() throws {
+        let picked = try SalesOrderSources.read([SalesOrderImportTests.orderList, Self.ebay])
+        #expect(picked.kinds == [.orderList, .ebayOrders])
+        #expect(picked.contents.orders.count == 8)
+    }
+
+    /// Every file that would not make sense on its own says what is missing.
+    @Test func thePicksThatDoNotMakeSenseAreRefused() {
+        #expect(throws: SalesOrderSources.PickError.pullSheetAlone) {
+            try SalesOrderSources.read([SalesOrderImportTests.pullSheet])
+        }
+        #expect(throws: SalesOrderSources.PickError.nothingPicked) {
+            try SalesOrderSources.read([])
+        }
+        #expect(throws: SalesOrderSources.PickError.unrecognized) {
+            try SalesOrderSources.read(["Name,Price\nCharizard,10.00\n"])
+        }
+        #expect(throws: SalesOrderSources.PickError.pickedTwice("Order list")) {
+            try SalesOrderSources.read([SalesOrderImportTests.orderList, SalesOrderImportTests.orderList])
+        }
+    }
+
+    /// eBay's report reaches about three months back, so a year of selling is
+    /// several of them. Overlapping months come through once.
+    @Test func severalEbayReportsComeInTogether() throws {
+        let picked = try SalesOrderSources.read([Self.ebay, Self.ebay])
+        #expect(picked.kinds == [.ebayOrders, .ebayOrders])
+        #expect(picked.contents.orders.count == 4)
+    }
+
+    /// A row that would not read says which file to look in, now that several
+    /// come in at once.
+    @Test func anUnreadableRowNamesItsFile() throws {
+        let sheet = SalesOrderImportTests.pullSheet.replacingOccurrences(of: "62955D06-Z:1", with: "62955D06-Z")
+        let ebay = Self.ebay.replacingOccurrences(of: "\"Sep-14-26\"", with: "\"the 14th\"")
+        let picked = try SalesOrderSources.read([SalesOrderImportTests.orderList, sheet, ebay])
+        #expect(picked.contents.unreadableRows.map(\.label) == ["Pull sheet line 4", "eBay orders line 6"])
     }
 }
