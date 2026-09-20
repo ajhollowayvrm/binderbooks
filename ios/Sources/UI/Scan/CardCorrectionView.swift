@@ -10,6 +10,7 @@ struct CardCorrectionView: View {
     @Environment(CatalogController.self) private var catalog
     @State private var search = SearchModel(context: .scanning)
     @State private var showDelete = false
+    @State private var markingGraded = false
     /// Bumped after a photo is saved or removed, so the thumbnail — which
     /// reads a file at a URL that does not itself change — redraws.
     @State private var photoRefresh = UUID()
@@ -39,8 +40,8 @@ struct CardCorrectionView: View {
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
                             }
-                            if let cert = card.certNumber {
-                                Text("Cert \(cert) (\(card.graderRaw ?? "grader unknown"))")
+                            if card.isSlabbed {
+                                Text(slabLine)
                                     .font(.caption)
                             }
                         }
@@ -131,6 +132,27 @@ struct CardCorrectionView: View {
                     ))
                 }
 
+                // A slab goes through the scanner like any other card, and the
+                // barcode is not always read. Without this he had to find the
+                // card again in Inventory afterwards to say it was graded,
+                // which is the trip this screen exists to save.
+                Section {
+                    Button {
+                        markingGraded = true
+                    } label: {
+                        Label(card.gradeLabel == nil ? "Mark as graded…" : "Edit the grade…", systemImage: "seal")
+                    }
+                    .disabled(card.isSChinese)
+                } header: {
+                    Text("Grading")
+                } footer: {
+                    if card.isSChinese {
+                        Text("Grading is not tracked for S-Chinese cards.")
+                    } else if card.isSlabbed {
+                        Text("A graded card keeps its condition, which the slab makes moot.")
+                    }
+                }
+
                 if !card.isSChinese {
                     Section("Search") {
                         HStack {
@@ -156,6 +178,9 @@ struct CardCorrectionView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .sheet(isPresented: $markingGraded) {
+                MarkGradedSheet(cards: [card], name: { _ in model.hit(for: card)?.name ?? "Card" }) {}
+            }
             .confirmationDialog("Delete this card?", isPresented: $showDelete, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
                     model.delete([card])
@@ -171,6 +196,16 @@ struct CardCorrectionView: View {
                 }
             }
         }
+    }
+
+    /// What the slab says, in the order he reads a label: grader, grade, cert.
+    /// The cert is often missing, because a card marked graded by hand has no
+    /// barcode to have read one from.
+    private var slabLine: String {
+        let grader = (card.graderRaw ?? "slab").uppercased()
+        let grade = card.gradeLabel.map { " \($0)" } ?? ""
+        let cert = card.certNumber.map { " · cert \($0)" } ?? ""
+        return "\(grader)\(grade)\(cert)"
     }
 
     private var confidenceLabel: String {
