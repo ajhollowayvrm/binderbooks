@@ -139,6 +139,61 @@ import Testing
         #expect(try search("charzard").first?.cleanName.hasPrefix("charizard") == true)
     }
 
+    // MARK: - Set codes
+
+    /// "MEP" is the abbreviation of "ME: Mega Evolution Promo", and all 141 of
+    /// its cards carry a bare "001".."141" with no set code of their own. The
+    /// search field matched a typed code against `product.setCode` only, so
+    /// this query returned four Digimon cards named Mephistomon.
+    @Test func aBareSetCodeFindsItsSet() throws {
+        let hits = try search("MEP")
+        #expect(hits.contains { $0.setName == "ME: Mega Evolution Promo" }, "\(names(hits, 5))")
+        #expect(hits.first?.setName == "ME: Mega Evolution Promo", "\(names(hits, 5))")
+    }
+
+    /// The same code with the number on it. The scanner could already find this
+    /// card and the search field could not.
+    @Test func aSetCodeAndNumberFindTheCard() throws {
+        let hits = try search("MEP 015")
+        #expect(hits.contains { $0.setName == "ME: Mega Evolution Promo" }, "\(names(hits, 5))")
+        #expect(hits.first?.number?.contains("015") == true, "\(names(hits, 5))")
+    }
+
+    /// `CollectorNumber` uppercases every code it parses, and the Japanese sets
+    /// are written "SV4a". A case sensitive match meant no Japanese set whose
+    /// code ends in a lowercase letter could be reached by its code at all.
+    @Test func aJapaneseSetCodeIsFoundWhateverItsCase() throws {
+        let queue = try queue()
+        let (upper, lower, setNames) = try queue.read { db in
+            (
+                try SetCodeIndex.groupIds(db, code: "SV4A"),
+                try SetCodeIndex.groupIds(db, code: "sv4a"),
+                try SetCodeIndex.setNames(db, code: "SV4A")
+            )
+        }
+        #expect(!upper.isEmpty)
+        #expect(upper == lower)
+        #expect(setNames.contains { $0.hasPrefix("SV4a") }, "\(setNames)")
+    }
+
+    /// A code is not unique: "PR" is 21 sets. Every one of them is returned,
+    /// because picking one of 21 is a guess the ranker is better placed to make.
+    @Test func aSharedCodeReturnsEverySetThatWearsIt() throws {
+        let queue = try queue()
+        let groups = try queue.read { db in try SetCodeIndex.groupIds(db, code: "PR") }
+        #expect(groups.count > 5, "PR resolved to \(groups.count) sets")
+    }
+
+    /// The shape test keeps a name out of the code path. "151" is a number and
+    /// "charizard" is a name; neither is a set code.
+    @Test func onlyACodeShapedQueryIsTreatedAsACode() {
+        #expect(SetCodeIndex.looksLikeCode("MEP"))
+        #expect(SetCodeIndex.looksLikeCode("SV4a"))
+        #expect(SetCodeIndex.looksLikeCode("151") == false)
+        #expect(SetCodeIndex.looksLikeCode("charizard") == false)
+        #expect(SetCodeIndex.looksLikeCode("M") == false)
+    }
+
     // MARK: - Speed
 
     /// The broadest prefixes are the slowest queries the field can send. The

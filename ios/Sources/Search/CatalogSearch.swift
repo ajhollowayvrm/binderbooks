@@ -74,8 +74,14 @@ struct CatalogSearch: Sendable {
                 sql += " OR (numberNum = ? AND setTotal = ?)"
                 arguments += [n, total]
             } else if let n = parsed.numberNum, let code = parsed.setCode {
-                sql += " OR (numberNum = ? AND setCode = ?)"
-                arguments += [n, code]
+                // The code is on the product for 20,450 of them and on the set
+                // for the rest, so both are asked. NOCASE because the parser
+                // uppercases what it read and the Japanese codes are "SV4a".
+                sql += """
+                     OR (numberNum = ? AND (setCode = ? COLLATE NOCASE
+                         OR groupId IN (SELECT groupId FROM cardSet WHERE abbreviation = ? COLLATE NOCASE)))
+                    """
+                arguments += [n, code, code]
             } else if let n = parsed.numberNum {
                 sql += " OR numberNum = ?"
                 arguments += [n]
@@ -87,6 +93,20 @@ struct CatalogSearch: Sendable {
                     candidates[id] = .init(hit: placeholder(id), numberLookup: true)
                 } else {
                     candidates[id]?.numberLookup = true
+                }
+            }
+        }
+
+        // A bare set code. "MEP" is a set, not a word, and the name index has
+        // never heard of it — it answered with Digimon cards named Mephistomon.
+        // Merged with whatever the name search found, never substituted for it,
+        // because a code can also be somebody's name.
+        if SetCodeIndex.looksLikeCode(text) {
+            for id in try SetCodeIndex.productIds(db, code: text, limit: candidateLimit) {
+                if candidates[id] == nil {
+                    candidates[id] = .init(hit: placeholder(id), setCodeLookup: true)
+                } else {
+                    candidates[id]?.setCodeLookup = true
                 }
             }
         }

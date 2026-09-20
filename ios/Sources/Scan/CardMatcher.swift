@@ -772,7 +772,8 @@ struct CardMatcher: Sendable {
             ids = try Int.fetchAll(db, sql: """
                 SELECT productId FROM product
                 WHERE numberNum = ? AND isSealed = 0
-                  AND (setCode = ? OR groupId IN (SELECT groupId FROM cardSet WHERE abbreviation = ?))
+                  AND (setCode = ? COLLATE NOCASE
+                       OR groupId IN (SELECT groupId FROM cardSet WHERE abbreviation = ? COLLATE NOCASE))
                 LIMIT 50
                 """, arguments: [n, code, code])
         } else if let total = parsed.setTotal {

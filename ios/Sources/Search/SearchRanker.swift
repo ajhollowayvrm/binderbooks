@@ -20,11 +20,17 @@ enum SearchRanker {
         var trigramRank: Double?
         /// Found by the direct number lookup.
         var numberLookup: Bool = false
+        /// Found because the query is this card's set code.
+        var setCodeLookup: Bool = false
     }
 
     static let exactNumberBoost = 1_000.0
     static let exactNameBoost = 500.0
     static let numberInNameBoost = 250.0
+    /// A bare set code. Under `exactNameBoost`, because a card actually named
+    /// what he typed beats a sweep of every card in a set that wears it as a
+    /// code — "SA" is five starter sets and could still be a name.
+    static let setCodeBoost = 300.0
     static let contextBoost = 50.0
     static let trigramPenalty = 20.0
 
@@ -69,6 +75,10 @@ enum SearchRanker {
 
         if matchesNumberInName(hit, query: query) {
             boost += numberInNameBoost
+        }
+
+        if candidate.setCodeLookup {
+            boost += setCodeBoost
         }
 
         switch request.context {
