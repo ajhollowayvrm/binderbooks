@@ -113,8 +113,8 @@ def signing_identity() -> tuple[str, str]:
     return name, ou.group(1)
 
 
-def pick_device(wanted: str | None) -> tuple[str, str]:
-    """(udid, name) of the connected iPhone. Wireless pairing counts."""
+def list_phones() -> list[tuple[str, str, str]]:
+    """Every physical iPhone devicectl knows, as (udid, name, tunnel state)."""
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         path = tmp.name
     subprocess.run(["xcrun", "devicectl", "list", "devices", "--json-output", path], check=True, capture_output=True)
@@ -132,17 +132,70 @@ def pick_device(wanted: str | None) -> tuple[str, str]:
         state = conn.get("tunnelState", "")
         if platform != "iOS":
             continue
+        # devicectl lists simulators next to real hardware, and both report
+        # platform "iOS". A simulator is `reality: simulated`, and it accepts no
+        # devicectl install: it fails with "The capability Install Application
+        # is not supported by this device". Keep the real hardware only.
+        if hw.get("reality") != "physical":
+            continue
         phones.append((udid, name, state))
 
+    return phones
+
+
+def wake_tunnel(udid: str) -> None:
+    """Make devicectl open its tunnel to one phone.
+
+    `devicectl list devices` reports the last state it saw. It opens nothing.
+    So a phone that is plugged in, unlocked, and trusted still reads
+    "disconnected" until something asks it for work, and the preflight used to
+    refuse a phone that was sitting there ready. `device info details` is the
+    cheapest thing that makes the tunnel come up.
+    """
+    subprocess.run(
+        ["xcrun", "devicectl", "device", "info", "details", "--device", udid],
+        capture_output=True,
+        timeout=90,
+    )
+
+
+def ready_phones(phones: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
+    # "unavailable" means devicectl sees no tunnel to the phone. "disconnected"
+    # means the phone was not attached the last time it looked.
+    return [p for p in phones if p[2] not in ("unavailable", "disconnected")]
+
+
+def pick_device(wanted: str | None) -> tuple[str, str]:
+    """(udid, name) of the connected iPhone. Wireless pairing counts."""
+    phones = list_phones()
+
     if wanted:
-        for udid, name, state in phones:
+        for udid, name, _ in phones:
             if wanted in (udid, name):
+                wake_tunnel(udid)
                 return udid, name
         sys.exit(f"No iPhone named or identified '{wanted}'. Seen: {[n for _, n, _ in phones]}")
 
-    ready = [p for p in phones if p[2] != "unavailable"]
+    ready = ready_phones(phones)
+    if not ready and phones:
+        # Nothing reads ready, so ask each phone directly before giving up. A
+        # phone on the far side of a cold boot answers this and then reads
+        # connected.
+        print("No iPhone reads as connected. Waking each one...", flush=True)
+        for udid, _, _ in phones:
+            try:
+                wake_tunnel(udid)
+            except subprocess.TimeoutExpired:
+                continue
+        phones = list_phones()
+        ready = ready_phones(phones)
+
     if not ready:
-        sys.exit("No available iPhone. Plug one in, unlock it, and trust this Mac. Seen: " + ", ".join(f"{n} ({s})" for _, n, s in phones))
+        sys.exit(
+            "No available iPhone. Plug one in, unlock it, and trust this Mac.\n"
+            "A locked phone reads as unavailable. Simulators do not count.\n"
+            "Seen: " + (", ".join(f"{n} ({s})" for _, n, s in phones) or "no physical iPhone")
+        )
     udid, name, _ = ready[0]
     return udid, name
 
