@@ -72,9 +72,9 @@ import Testing
         #expect(contents.emptyRows.first?.line.quantity == 0)
     }
 
-    @Test func aSoldOrdersFileIsRefused() {
+    @Test func anOrdersFileIsRefused() {
         #expect(throws: TCGplayerPricingCSV.ReadError.missingColumns(["TCGplayer Id", "Set Name", "Total Quantity"])) {
-            try TCGplayerPricingCSV.read(SalesOrderImportTests.tcgplayerOnly)
+            try TCGplayerPricingCSV.read(SalesOrderImportTests.mixedOrderList)
         }
     }
 
@@ -279,8 +279,8 @@ import Testing
         )
         let orders = joined.contents.orders
         #expect(orders.count == 149)
+        // The pull sheet's own bad rows land here too now, labelled.
         #expect(joined.contents.unreadableRows.isEmpty)
-        #expect(joined.unreadablePullSheetRows.isEmpty)
         #expect(joined.unknownOrders.isEmpty)
         #expect(joined.ordersWithoutCards.count == 46)
         #expect(orders.reduce(0) { $0 + $1.cardCount } == 207)

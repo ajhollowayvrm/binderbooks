@@ -1,10 +1,10 @@
 import SwiftData
 import SwiftUI
 
-/// A sold-orders file waiting for review.
+/// The sold-orders files he picked, waiting for review.
 struct PendingSalesFile: Identifiable {
     let id = UUID()
-    var contents: SalesOrderCSV.Contents
+    var sources: SalesOrderSources.Result
 }
 
 /// Review a sold-orders file, then apply it to the books.
@@ -12,7 +12,9 @@ struct PendingSalesFile: Identifiable {
 /// Nothing is saved until he taps Import. A removal starts switched off: the
 /// app found the duplicate, and he decides.
 struct SalesImportSheet: View {
-    let contents: SalesOrderCSV.Contents
+    let sources: SalesOrderSources.Result
+
+    private var contents: SalesOrderCSV.Contents { sources.contents }
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -59,7 +61,7 @@ struct SalesImportSheet: View {
 
     private var hasWork: Bool {
         guard let plan else { return false }
-        return !plan.matches.isEmpty || !plan.newSales.isEmpty || !removing.isEmpty
+        return !plan.matches.isEmpty || !plan.newSales.isEmpty || !plan.cardsToAdd.isEmpty || !removing.isEmpty
     }
 
     // MARK: - Plan
@@ -67,15 +69,21 @@ struct SalesImportSheet: View {
     private func planList(_ plan: SalesOrderImport.Plan) -> some View {
         List {
             Section {
-                LabeledContent("Orders in the file", value: "\(plan.orderCount)")
+                LabeledContent("Orders in the files", value: "\(plan.orderCount)")
                 LabeledContent("Already on your books", value: "\(plan.alreadyOnBooks)")
                 LabeledContent("Matched to a sale", value: "\(plan.matches.count)")
                 LabeledContent("New", value: "\(plan.newSales.count)")
                 if plan.canceledNotOnBooks > 0 {
                     LabeledContent("Canceled, not on your books", value: "\(plan.canceledNotOnBooks)")
                 }
+                if !plan.cardsToAdd.isEmpty {
+                    LabeledContent("Already on your books, cards to add", value: "\(plan.cardsToAdd.count)")
+                }
+                if !sources.ordersWithoutCards.isEmpty {
+                    LabeledContent("Orders with no cards listed", value: "\(sources.ordersWithoutCards.count)")
+                }
                 if !plan.unreadableRows.isEmpty {
-                    LabeledContent("Rows not read", value: plan.unreadableRows.map(String.init).joined(separator: ", "))
+                    LabeledContent("Rows not read", value: plan.unreadableRows.map(\.label).joined(separator: ", "))
                 }
             } footer: {
                 if catalogMissing {
@@ -104,6 +112,10 @@ struct SalesImportSheet: View {
 
             if !plan.newSales.isEmpty {
                 newSection(plan)
+            }
+
+            if !plan.cardsToAdd.isEmpty {
+                cardsToAddSection(plan)
             }
 
             if !plan.removals.isEmpty {
@@ -164,6 +176,34 @@ struct SalesImportSheet: View {
             Text("New orders")
         } footer: {
             Text("The file has no fees. The app estimates each order's fees and postage from your other orders on its channel, and marks the order estimated. A linked card is tagged sold, and its cost goes on the line.")
+        }
+    }
+
+    @ViewBuilder private func cardsToAddSection(_ plan: SalesOrderImport.Plan) -> some View {
+        let cardCount = plan.cardsToAdd.reduce(0) { $0 + $1.lines.count }
+        let linked = plan.cardsToAdd.reduce(0) { $0 + $1.linkedCount }
+
+        Section {
+            LabeledContent("Cards linked to inventory", value: "\(linked) of \(cardCount)")
+            ForEach(plan.cardsToAdd) { addition in
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(LedgerEntry.channelName(addition.order.channel.rawValue)) · \(addition.order.soldAt.formatted(date: .abbreviated, time: .omitted))")
+                        Text(addition.lines.map(\.describedAs).joined(separator: ", "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 8)
+                    Text("\(addition.linkedCount) of \(addition.lines.count) linked")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Cards for orders already on your books")
+        } footer: {
+            Text("These sales are on your books with no cards recorded — an order list imported without its pull sheet, or an order the pull sheet did not reach. The money on them does not change. A linked card is tagged sold, and its cost goes on the line.")
         }
     }
 

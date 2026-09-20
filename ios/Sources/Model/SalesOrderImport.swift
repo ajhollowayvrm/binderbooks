@@ -9,7 +9,7 @@ import SwiftData
 /// remove a duplicate, and it would overwrite every card he edited on the phone
 /// after the seed import.
 ///
-/// Each order goes to one of four places:
+/// Each order goes to one of five places:
 ///
 /// - **Already on the books.** A sale carries its order number. Nothing changes.
 /// - **Matched.** A sale with no order number is the same order: the same money,
@@ -17,6 +17,9 @@ import SwiftData
 ///   file's channel when the two disagree. Its money stays as he recorded it.
 /// - **New.** No sale is the order. The import creates one with estimated
 ///   costs. Each card links to his oldest unsold copy and is tagged sold.
+/// - **Cards to add.** An order already on the books, on a sale that records no
+///   cards, where the file names them. Only the cards are added. This is how an
+///   order list imported without its pull sheet is filled in later.
 /// - **To remove.** A canceled order that is on the books, or a second sale of
 ///   an order already matched. Nothing is removed unless he switches it on.
 ///
@@ -56,6 +59,22 @@ enum SalesOrderImport {
         var linkedCount: Int { lines.filter { $0.cardId != nil }.count }
     }
 
+    /// An order already on his books, on a sale that records no cards, where
+    /// the file names them. Its money stays as it is; only the cards are added.
+    ///
+    /// His pull sheet reaches back only so far — on 2026-09-15 it held 100 of
+    /// 149 orders — and an order list imported on its own has no cards at all.
+    /// Without this, those sales could never be filled in: the order number is
+    /// on them, so a later import calls them settled and moves on.
+    struct CardsToAdd: Identifiable, Equatable {
+        var order: Order
+        var saleId: UUID
+        var lines: [NewLine]
+
+        var id: String { order.orderId }
+        var linkedCount: Int { lines.filter { $0.cardId != nil }.count }
+    }
+
     struct Removal: Identifiable, Equatable {
         enum Reason: Equatable {
             case canceled(orderId: String)
@@ -78,9 +97,10 @@ enum SalesOrderImport {
         var alreadyOnBooks = 0
         var matches: [Match] = []
         var newSales: [NewSale] = []
+        var cardsToAdd: [CardsToAdd] = []
         var removals: [Removal] = []
         var canceledNotOnBooks = 0
-        var unreadableRows: [Int] = []
+        var unreadableRows: [SalesOrderCSV.UnreadableRow] = []
         /// Cards on new orders that the catalog could not name. They import
         /// with the file's description and no link.
         var unidentifiedCards = 0
@@ -112,9 +132,13 @@ enum SalesOrderImport {
     static let daysBefore = 3
     static let daysAfter = 10
 
-    /// What his books may add to an eBay item price: the tax or the buyer's
-    /// shipping, which the eBay rows do not carry. The largest in his ledger
-    /// is $5.48.
+    /// What his books may add to an eBay item price, over and above the order's
+    /// own total: the tax, which no eBay file carries. It was also the buyer's
+    /// shipping back when the eBay rows carried no shipping either; eBay's All
+    /// Orders Report does carry it, so for those orders this allowance is tax
+    /// alone and the band is wider than it needs to be. A wider band is safe
+    /// here because an eBay order only ever matches a sale that names one of
+    /// its cards — see `score`.
     static let ebayAllowanceCents = 600
 
     // MARK: - Plan
@@ -134,9 +158,11 @@ enum SalesOrderImport {
             if !id.isEmpty, numbered[id] == nil { numbered[id] = sale }
         }
 
-        // The order number is on a sale already.
+        // The order number is on a sale already. It still wants its cards when
+        // the sale records none and the file names them.
         var settled: [String: UUID] = [:]
         var open: [Order] = []
+        var toFill: [String: UUID] = [:]
         for order in orders {
             guard let sale = numbered[order.orderId] else {
                 open.append(order)
@@ -145,6 +171,8 @@ enum SalesOrderImport {
             settled[order.orderId] = sale.id
             if order.isCanceled {
                 plan.removals.append(removal(sale, .canceled(orderId: order.orderId)))
+            } else if sale.lines.isEmpty, !order.lines.isEmpty {
+                toFill[order.orderId] = sale.id
             } else {
                 plan.alreadyOnBooks += 1
             }
@@ -191,17 +219,19 @@ enum SalesOrderImport {
             }
         }
 
-        // New orders. Oldest order first, so each takes his oldest copy.
+        // The cards. A new order and a backfill draw from the same copies, so
+        // they are walked together in the file's own order — oldest first, so
+        // each takes his oldest copy, and neither takes one twice.
         let estimate = FeeEstimate.derived(from: sales) { channelOf[$0.id] ?? $0.channelRaw }
         let pool = Dictionary(grouping: cards.filter(isSellable), by: \.productId)
             .mapValues { $0.sorted { ($0.acquiredAt, $0.id.uuidString) < ($1.acquiredAt, $1.id.uuidString) } }
         var used: Set<UUID> = []
+        // Counted here and not straight onto `plan`: a nested function that
+        // wrote to `plan` while `plan.newSales.append` was reading it would be
+        // two overlapping accesses to the same variable.
+        var unidentified = 0
 
-        for order in open where !matchedOrders.contains(order.orderId) {
-            if order.isCanceled {
-                plan.canceledNotOnBooks += 1
-                continue
-            }
+        func linked(_ order: Order) -> [NewLine] {
             var lines: [NewLine] = []
             for (index, line) in order.lines.enumerated() {
                 let condition = SoldCondition.parse(line.condition, channel: order.channel)
@@ -209,7 +239,7 @@ enum SalesOrderImport {
                     let key = SalesOrderCatalog.CopyKey(orderId: order.orderId, line: index, copy: copy)
                     var new = NewLine(describedAs: line.productName, productId: products[key], skuId: line.skuId)
                     guard let productId = products[key] else {
-                        plan.unidentifiedCards += 1
+                        unidentified += 1
                         lines.append(new)
                         continue
                     }
@@ -222,6 +252,22 @@ enum SalesOrderImport {
                     lines.append(new)
                 }
             }
+            return lines
+        }
+
+        let openIds = Set(open.map(\.orderId)).subtracting(matchedOrders)
+        for order in orders {
+            if let saleId = toFill[order.orderId] {
+                let lines = linked(order)
+                plan.cardsToAdd.append(CardsToAdd(order: order, saleId: saleId, lines: lines))
+                continue
+            }
+            guard openIds.contains(order.orderId) else { continue }
+            if order.isCanceled {
+                plan.canceledNotOnBooks += 1
+                continue
+            }
+            let lines = linked(order)
             let fit = estimate.fit(for: order.channel.rawValue)
             plan.newSales.append(NewSale(
                 order: order,
@@ -230,6 +276,7 @@ enum SalesOrderImport {
                 lines: lines
             ))
         }
+        plan.unidentifiedCards = unidentified
         return plan
     }
 
@@ -377,6 +424,29 @@ enum SalesOrderImport {
                 let saleLine = SaleLine(sale: sale, card: card, basisCents: basis ?? 0, basisIncomplete: basis == nil)
                 saleLine.describedAs = line.describedAs
                 context.insert(saleLine)
+                if let card {
+                    if card.skuId == nil { card.skuId = line.skuId }
+                    sold.append(card)
+                }
+            }
+            editor.add(ReservedTag.sold, to: sold)
+            report.cardsLinked += sold.count
+        }
+
+        // Cards for an order that is already on his books. Unlike the lines a
+        // match adds, these link real copies: the order is his, the sale just
+        // never recorded what was in it. The empty-lines guard makes a second
+        // run of the same file a no-op, and the sale's money is left alone.
+        for addition in plan.cardsToAdd {
+            guard let sale = sales[addition.saleId], sale.lines.isEmpty else { continue }
+            var sold: [OwnedCard] = []
+            for line in addition.lines {
+                let card = line.cardId.flatMap { cards[$0] }.flatMap { CardTagIndex.isSold($0) ? nil : $0 }
+                let basis = card == nil ? nil : line.basisCents
+                let saleLine = SaleLine(sale: sale, card: card, basisCents: basis ?? 0, basisIncomplete: basis == nil)
+                saleLine.describedAs = line.describedAs
+                context.insert(saleLine)
+                report.linesAdded += 1
                 if let card {
                     if card.skuId == nil { card.skuId = line.skuId }
                     sold.append(card)
