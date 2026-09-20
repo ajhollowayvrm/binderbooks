@@ -10,6 +10,9 @@ import SwiftUI
 struct MasterSetView: View {
     var groupId: Int
     var query: String = ""
+    /// The set name, for a pushed screen's title. Empty when the view is swapped
+    /// in under the search field, which has its own title.
+    var title: String = ""
 
     @Environment(CatalogController.self) private var catalog
     @Query private var cards: [OwnedCard]
@@ -42,6 +45,8 @@ struct MasterSetView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
         // Keyed on the price version too, so a price refresh updates the cost
         // to finish.
         .task(id: "\(groupId)#\(catalog.database?.path ?? "")#\(catalog.version)") {

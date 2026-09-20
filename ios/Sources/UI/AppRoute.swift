@@ -12,6 +12,11 @@ enum AppRoute: Hashable {
     /// while the screen is open drops out of it.
     case cardStack(UUID)
     case ledger
+    /// Every set in the catalog.
+    case sets
+    /// One set as a checklist. The name rides along so the pushed screen has
+    /// its title before the contents load.
+    case masterSet(Int, String)
 }
 
 import SwiftUI

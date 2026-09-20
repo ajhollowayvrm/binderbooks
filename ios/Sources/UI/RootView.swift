@@ -43,6 +43,13 @@ struct RootView: View {
                 // While he selects, the bar holds Select all, the count, and
                 // Done, and these step aside.
                 if !selection.isSelecting {
+                    // Reading a set is a first-class thing to do, not a
+                    // filter he reaches through a card he already owns.
+                    ToolbarItem(placement: .topBarTrailing) {
+                        NavigationLink(value: AppRoute.sets) {
+                            Label("Sets", systemImage: "square.stack")
+                        }
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         NavigationLink(value: AppRoute.ledger) {
                             Label("Ledger", systemImage: "list.bullet.rectangle")
@@ -112,6 +119,8 @@ struct RootView: View {
                 case .cardStack(let id): CardStackView(leadCardID: id)
                 case .ledger:
                     LedgerView(tab: Self.debugLedgerTab, filter: Self.debugLedgerFilter, adding: Self.debugLedgerAdding)
+                case .sets: SetBrowserView()
+                case .masterSet(let id, let name): MasterSetView(groupId: id, title: name)
                 }
             }
             .navigationDestination(for: LedgerEntry.Kind.self) { kind in

@@ -1,14 +1,31 @@
+import SwiftData
 import SwiftUI
 
-/// Catalog data for one product: image, identity, every printing's prices.
+/// Catalog data for one product: what he holds of it, the image, the identity,
+/// and every printing's prices.
+///
+/// The page used to read the catalog alone, so the set checklist could mark a
+/// card as held and then open a page that never mentioned his copy. Every
+/// route into this view had the same blind spot — the search results, the
+/// scanner's candidates, recently viewed. His own cards come first now, above
+/// the prices, because on a card he owns that is the question he came with.
 struct ProductDetailView: View {
     var productId: Int
 
     @Environment(CatalogController.self) private var catalog
     @Environment(RecentlyViewed.self) private var recents
+    @Environment(InventoryModel.self) private var inventory
+    @Query private var mine: [OwnedCard]
     @State private var detail: ProductDetail?
     @State private var errorMessage: String?
     @State private var adding = false
+
+    init(productId: Int) {
+        self.productId = productId
+        // `#Predicate` cannot read a computed property, so the query takes the
+        // stored id and `stacks` drops the uncommitted and the sold.
+        _mine = Query(filter: #Predicate<OwnedCard> { $0.productId == productId })
+    }
 
     var body: some View {
         Group {
@@ -78,6 +95,17 @@ struct ProductDetailView: View {
                     }
                 }
                 .listRowSeparator(.hidden)
+            }
+
+            // Nothing at all when he owns none. A "0 in your collection" row
+            // is a line to read on every card he has never bought.
+            let stacks = inventory.stacks(from: mine, applyFilter: false)
+            if !stacks.isEmpty {
+                Section("In your collection (\(stacks.count))") {
+                    ForEach(stacks) { stack in
+                        SelectableStackRow(stack: stack)
+                    }
+                }
             }
 
             Section {
