@@ -62,6 +62,32 @@ import Testing
         #expect(held.unpricedMissing == 0)
     }
 
+    // MARK: - Reading a set rather than completing one
+
+    /// "What is the most expensive card in this set" should be the first row.
+    /// The fixture's Obsidian Flames prices are 4,500, 800, 40 and 10.
+    @Test func byValuePutsTheDearestCardFirst() throws {
+        let set = try build([])
+        let byValue = MasterSet.byValue(set.slots)
+        #expect(byValue.map(\.marketCents) == [4_500, 800, 40, 10])
+        #expect(byValue.first?.id == "1|Holofoil")
+    }
+
+    /// An unpriced card is unknown, not worthless, so it sorts last instead of
+    /// leading a set sorted by value.
+    @Test func anUnpricedCardSortsLastNotFirst() throws {
+        let set = try build([], groupId: 102)
+        let byValue = MasterSet.byValue(set.slots)
+        #expect(byValue.last?.marketCents == nil)
+    }
+
+    /// Sorting by value never drops or duplicates a card.
+    @Test func byValueKeepsEverySlot() throws {
+        let set = try build([])
+        #expect(Set(MasterSet.byValue(set.slots).map(\.id)) == Set(set.slots.map(\.id)))
+        #expect(MasterSet.byValue(set.slots).count == set.slots.count)
+    }
+
     @Test func soldLostAndSealedCardsDoNotCount() throws {
         let container = try CollectionStore.container(inMemory: true)
         func card(_ configure: (OwnedCard) -> Void) -> OwnedCard {

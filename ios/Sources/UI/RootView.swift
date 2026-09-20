@@ -120,7 +120,7 @@ struct RootView: View {
                 case .ledger:
                     LedgerView(tab: Self.debugLedgerTab, filter: Self.debugLedgerFilter, adding: Self.debugLedgerAdding)
                 case .sets: SetBrowserView()
-                case .masterSet(let id, let name): MasterSetView(groupId: id, title: name)
+                case .masterSet(let id, let name): MasterSetView(groupId: id, title: name, style: .reference)
                 }
             }
             .navigationDestination(for: LedgerEntry.Kind.self) { kind in

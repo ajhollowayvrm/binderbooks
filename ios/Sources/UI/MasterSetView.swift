@@ -1,9 +1,20 @@
 import SwiftData
 import SwiftUI
 
-/// One set as a checklist. The set chip on the inventory page and on the
-/// search page turns it on, so it works for every set in the catalog, not
-/// only the sets he holds cards from.
+/// One set, read two ways.
+///
+/// As a **checklist**, from the set chip on the inventory page and the search
+/// page: collector order, and the cards he lacks faded, because the question is
+/// what is still missing.
+///
+/// As a **reference**, from the Sets button: dearest card first and nothing
+/// faded, because the question is "what is the most expensive card in Fusion
+/// Strike" and the answer should be the first row. Fading four fifths of a
+/// 284-card set greys the whole screen and buries it.
+///
+/// One view, because the two differ only in where they start. He can sort
+/// either one either way once it is open, and the progress figures are worth
+/// having in both.
 ///
 /// The search field narrows the list by name or number. The layout button
 /// rules it the same as every other card list.
@@ -13,13 +24,31 @@ struct MasterSetView: View {
     /// The set name, for a pushed screen's title. Empty when the view is swapped
     /// in under the search field, which has its own title.
     var title: String = ""
+    var style: Style = .checklist
+
+    enum Style { case checklist, reference }
+
+    enum Sort: String, CaseIterable, Identifiable {
+        case number = "Number", value = "Value"
+        var id: String { rawValue }
+        var symbol: String { self == .number ? "number" : "dollarsign" }
+    }
 
     @Environment(CatalogController.self) private var catalog
     @Query private var cards: [OwnedCard]
     @AppStorage(cardLayoutKey) private var layout: CardLayout = .grid
     @State private var contents: (hits: [SearchHit], prices: [Int: [ProductPrice]])?
     @State private var show: Show = .all
+    @State private var sort: Sort
     @State private var errorMessage: String?
+
+    init(groupId: Int, query: String = "", title: String = "", style: Style = .checklist) {
+        self.groupId = groupId
+        self.query = query
+        self.title = title
+        self.style = style
+        _sort = State(initialValue: style == .reference ? .value : .number)
+    }
 
     enum Show: String, CaseIterable, Identifiable {
         case all = "All", missing = "Missing", have = "Have"
@@ -68,7 +97,7 @@ struct MasterSetView: View {
 
     private func visible(_ masterSet: MasterSet) -> [MasterSet.Slot] {
         let needle = NameCleaner.clean(query.trimmingCharacters(in: .whitespaces))
-        return masterSet.slots.filter { slot in
+        let kept = masterSet.slots.filter { slot in
             switch show {
             case .all: break
             case .missing: if slot.isOwned { return false }
@@ -77,6 +106,13 @@ struct MasterSetView: View {
             guard !needle.isEmpty else { return true }
             return NameCleaner.clean(slot.hit.name).contains(needle) || (slot.hit.number?.lowercased().contains(needle) ?? false)
         }
+        return sorted(kept)
+    }
+
+    /// `MasterSet.build` returns collector order, so number sorting is already
+    /// done and only value needs a pass.
+    private func sorted(_ slots: [MasterSet.Slot]) -> [MasterSet.Slot] {
+        sort == .value ? MasterSet.byValue(slots) : slots
     }
 
     @ViewBuilder
@@ -91,7 +127,7 @@ struct MasterSetView: View {
                     .listRowSeparator(.hidden)
                 ForEach(slots) { slot in
                     NavigationLink(value: slot.hit) {
-                        MasterSetRow(slot: slot)
+                        MasterSetRow(slot: slot, fadeMissing: style == .checklist)
                     }
                 }
             }
@@ -104,7 +140,7 @@ struct MasterSetView: View {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 14) {
                         ForEach(slots) { slot in
                             NavigationLink(value: slot.hit) {
-                                MasterSetCell(slot: slot)
+                                MasterSetCell(slot: slot, fadeMissing: style == .checklist)
                             }
                             .buttonStyle(.plain)
                         }
@@ -135,6 +171,16 @@ struct MasterSetView: View {
                 figure("Have", masterSet.ownedValueCents.asCurrency)
                 figure("To finish", masterSet.costToFinishCents.asCurrency)
                 Spacer()
+                // A menu, not a third segmented control. The header already
+                // carries one, and two is a control panel.
+                Menu {
+                    Picker("Sort", selection: $sort) {
+                        ForEach(Sort.allCases) { Label($0.rawValue, systemImage: $0.symbol).tag($0) }
+                    }
+                } label: {
+                    Label(sort.rawValue, systemImage: "arrow.up.arrow.down")
+                        .font(.subheadline)
+                }
             }
             if masterSet.unpricedMissing > 0 {
                 Text("To finish leaves out \(masterSet.unpricedMissing) missing \(masterSet.unpricedMissing == 1 ? "card" : "cards") with no market price.")
@@ -164,6 +210,9 @@ struct MasterSetView: View {
 /// the page exists to give.
 private struct MasterSetRow: View {
     var slot: MasterSet.Slot
+    /// Reading a set, the check alone says what he holds. Fading the rest
+    /// would grey four fifths of the screen.
+    var fadeMissing: Bool = true
 
     var body: some View {
         HStack(spacing: 12) {
@@ -172,7 +221,7 @@ private struct MasterSetRow: View {
                 .foregroundStyle(slot.isOwned ? AnyShapeStyle(.green) : AnyShapeStyle(.tertiary))
             ProductThumbnail(urlString: slot.hit.imageUrl, isSealed: false)
                 .frame(width: 36, height: 50)
-                .opacity(slot.isOwned ? 1 : 0.45)
+                .opacity(slot.isOwned || !fadeMissing ? 1 : 0.45)
             VStack(alignment: .leading, spacing: 2) {
                 Text(slot.hit.name)
                     .lineLimit(2)
@@ -204,6 +253,7 @@ private struct MasterSetRow: View {
 /// empty pocket in a binder reads.
 private struct MasterSetCell: View {
     var slot: MasterSet.Slot
+    var fadeMissing: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -216,8 +266,8 @@ private struct MasterSetCell: View {
             }
             .aspectRatio(5.0 / 7.0, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .saturation(slot.isOwned ? 1 : 0)
-            .opacity(slot.isOwned ? 1 : 0.4)
+            .saturation(slot.isOwned || !fadeMissing ? 1 : 0)
+            .opacity(slot.isOwned || !fadeMissing ? 1 : 0.4)
             .overlay(alignment: .topTrailing) {
                 if slot.isOwned {
                     Image(systemName: "checkmark.circle.fill")

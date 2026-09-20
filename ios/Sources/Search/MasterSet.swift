@@ -51,6 +51,22 @@ struct MasterSet: Equatable, Sendable {
             .map { OwnedCopy(productId: $0.productId, printing: $0.printing, quantity: max(1, $0.quantity)) }
     }
 
+    /// Dearest first, for reading a set rather than completing one.
+    ///
+    /// A card with no market price sorts last rather than as nothing: an
+    /// unpriced card is unknown, not worthless. Ties keep the order they came
+    /// in, which is collector order, so the sort is stable where `sort` is not.
+    static func byValue(_ slots: [Slot]) -> [Slot] {
+        slots.enumerated().sorted { a, b in
+            switch (a.element.marketCents, b.element.marketCents) {
+            case let (x?, y?) where x != y: return x > y
+            case (nil, .some): return false
+            case (.some, nil): return true
+            default: return a.offset < b.offset
+            }
+        }.map(\.element)
+    }
+
     /// The checklist order: collector number, then name, then printing.
     static func build(hits: [SearchHit], prices: [Int: [ProductPrice]], owned: [OwnedCopy]) -> MasterSet {
         var held: [Int: [String: Int]] = [:]
