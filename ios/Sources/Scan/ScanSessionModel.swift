@@ -341,6 +341,32 @@ final class ScanSessionModel {
         save()
     }
 
+    // MARK: - Clean up
+
+    /// The cards a price sweep takes: worth `cents` or less.
+    ///
+    /// A card with no market price stays. An unpriced card is unknown, not
+    /// cheap, and `unidentifiedCards` is the sweep for those. A slab stays
+    /// too, because the price here is the raw card's, not the slab's.
+    func cardsWorth(atMost cents: Int) -> [OwnedCard] {
+        Self.cardsWorth(atMost: cents, in: cards) { marketCents(for: $0) ?? $0.manualMarketCents }
+    }
+
+    /// The rule itself, apart from the catalog, so a test can price a card
+    /// without one.
+    static func cardsWorth(atMost cents: Int, in cards: [OwnedCard], value: (OwnedCard) -> Int?) -> [OwnedCard] {
+        cards.filter { card in
+            guard !card.isSlabbed, let worth = value(card) else { return false }
+            return worth <= cents
+        }
+    }
+
+    /// The cards no card stands behind: the matcher placed none of them, and
+    /// he typed none of them in by hand.
+    var unidentifiedCards: [OwnedCard] {
+        cards.filter { !$0.isIdentified && !$0.isHandEntered }
+    }
+
     func delete(_ cards: [OwnedCard]) {
         CardPhotoStore.remove(cards.map(\.id))
         for card in cards {

@@ -872,6 +872,59 @@ import Testing
         return (ScanSessionModel(session: session, context: context, catalog: catalog), context)
     }
 
+    // MARK: - Clean up
+
+    /// The price sweep takes the penny cards and leaves the rest. An unpriced
+    /// card is unknown, not cheap, and a slab's raw price is not the slab's.
+    @Test @MainActor func thePriceSweepTakesTheCheapCardsOnly() throws {
+        let (_, context) = try makeModel()
+        let penny = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .certain)
+        let quarter = OwnedCard(productId: 2, printing: "Normal", condition: "Near Mint", confidence: .certain)
+        let dear = OwnedCard(productId: 3, printing: "Normal", condition: "Near Mint", confidence: .certain)
+        let unpriced = OwnedCard(productId: 4, printing: "Normal", condition: "Near Mint", confidence: .certain)
+        let slab = OwnedCard(productId: 5, printing: "Normal", condition: "Near Mint", confidence: .certain)
+        slab.certNumber = "12345678"
+        slab.graderRaw = "psa"
+        slab.gradeLabel = "10"
+        for card in [penny, quarter, dear, unpriced, slab] { context.insert(card) }
+        let worth: [Int: Int] = [1: 1, 2: 25, 3: 500, 5: 1]
+
+        let cards = [penny, quarter, dear, unpriced, slab]
+        let swept = ScanSessionModel.cardsWorth(atMost: 25, in: cards) { worth[$0.productId] }
+        #expect(swept.map(\.id) == [penny.id, quarter.id])
+
+        let pennies = ScanSessionModel.cardsWorth(atMost: 1, in: cards) { worth[$0.productId] }
+        #expect(pennies.map(\.id) == [penny.id])
+    }
+
+    /// A hand-entered card carries its own price, and the sweep reads it.
+    @Test @MainActor func thePriceSweepReadsAPriceHeTyped() throws {
+        let (model, _) = try makeModel()
+        let typed = OwnedCard(productId: 0, printing: "", condition: "Near Mint", confidence: .manual)
+        typed.manualName = "Pikachu"
+        typed.manualMarketCents = 5
+        typed.scanSession = model.session
+        #expect(model.cardsWorth(atMost: 10).map(\.id) == [typed.id])
+        #expect(model.cardsWorth(atMost: 1).isEmpty)
+        // He typed it in, so the unknown sweep leaves it.
+        #expect(model.unidentifiedCards.isEmpty)
+    }
+
+    @Test @MainActor func theUnknownSweepTakesTheRowsNoCardStandsBehind() throws {
+        let (model, _) = try makeModel()
+        let unknown = OwnedCard(productId: 0, printing: "", condition: "Near Mint", confidence: .uncertain)
+        unknown.ocrName = "Ạạỗl10 G"
+        unknown.scanSession = model.session
+        let matched = OwnedCard(productId: 7, printing: "Normal", condition: "Near Mint", confidence: .certain)
+        matched.scanSession = model.session
+        #expect(unknown.isIdentified == false)
+        #expect(model.cards.count == 2)
+        #expect(model.unidentifiedCards.count == 1)
+
+        model.delete(model.unidentifiedCards)
+        #expect(model.cards.map(\.id) == [matched.id])
+    }
+
     @Test @MainActor func slabsLandUnidentifiedWithTheirCert() throws {
         let (model, _) = try makeModel()
         model.handle(ScanObservation(certNumber: "12345678", grader: "psa"))

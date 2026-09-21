@@ -15,6 +15,7 @@ struct ReviewView: View {
     @State private var showCommit = false
     @State private var showUnidentifiedWarning = false
     @State private var showDiscard = false
+    @State private var showCleanUp = false
     @State private var reassignMissed = 0
     @State private var setChoices: [SetSummary] = []
     @State private var tagTarget: TagSheetTarget?
@@ -98,6 +99,14 @@ struct ReviewView: View {
                         .fixedSize()
                 } else {
                     Button("Discard session", role: .destructive) { showDiscard = true }
+                    Button {
+                        showCleanUp = true
+                    } label: {
+                        Image(systemName: "wand.and.sparkles")
+                    }
+                    .accessibilityLabel("Clean up")
+                    .help("Clean up")
+                    .disabled(model.cards.isEmpty)
                     Spacer()
                     Text("\(model.cards.count) · \(model.sessionTotalCents.asCurrency)")
                         .font(.footnote.monospacedDigit())
@@ -115,6 +124,9 @@ struct ReviewView: View {
         }
         .sheet(item: $tagTarget) { target in
             TagSheet(target: target, uses: CardTagIndex.uses(in: allCards), allCards: allCards)
+        }
+        .sheet(isPresented: $showCleanUp) {
+            CleanUpSheet(model: model) { selection = [] }
         }
         .sheet(isPresented: $showCommit) {
             CommitSheet(model: model) {
