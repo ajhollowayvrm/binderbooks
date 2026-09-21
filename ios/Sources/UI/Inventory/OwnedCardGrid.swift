@@ -53,6 +53,8 @@ struct OwnedCardCard: View {
     var isSelected = false
     var isSelecting = false
 
+    @Environment(\.masterSetHeld) private var masterSetHeld
+
     /// The copy the cell draws. Every copy in a stack would draw the same one.
     private var row: InventoryRow { stack.lead }
 
@@ -119,6 +121,9 @@ struct OwnedCardCard: View {
                 if let language = CardLanguage.badge(row.card.language) {
                     Text(language)
                 }
+            }
+            if stack.cardIds.contains(where: masterSetHeld.contains) {
+                MasterSetBadge()
             }
         }
         .font(.caption2)

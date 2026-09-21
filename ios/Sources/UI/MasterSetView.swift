@@ -37,6 +37,7 @@ struct MasterSetView: View {
     @Environment(CatalogController.self) private var catalog
     @Query private var cards: [OwnedCard]
     @AppStorage(cardLayoutKey) private var layout: CardLayout = .grid
+    @AppStorage(MasterSetHold.defaultsKey) private var masterSetGroups = ""
     @State private var contents: (hits: [SearchHit], prices: [Int: [ProductPrice]])?
     @State private var show: Show = .all
     @State private var sort: Sort
@@ -191,8 +192,26 @@ struct MasterSetView: View {
                 ForEach(Show.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
+            masterSettingToggle
         }
         .padding(.vertical, 4)
+    }
+
+    /// The flag the TCGplayer export reads. A set he is master setting keeps
+    /// one copy of each card out of the listing file. See `MasterSetHold`.
+    private var masterSettingToggle: some View {
+        Toggle(isOn: Binding(
+            get: { MasterSetHold.ids(masterSetGroups).contains(groupId) },
+            set: { masterSetGroups = MasterSetHold.text(masterSetGroups, setting: groupId, to: $0) }
+        )) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Master setting")
+                    .font(.subheadline)
+                Text("One copy of each card stays out of the TCGplayer file.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func figure(_ label: String, _ value: String) -> some View {

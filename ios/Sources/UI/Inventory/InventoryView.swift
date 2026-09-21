@@ -23,8 +23,18 @@ struct InventoryView: View {
     @State private var recentHits: [SearchHit] = []
     @AppStorage(cardLayoutKey) private var layout: CardLayout = .grid
     @AppStorage(InventorySort.defaultsKey) private var defaultSort: InventorySort = .newest
+    @AppStorage(MasterSetHold.defaultsKey) private var masterSetGroups = ""
 
     private var rows: [InventoryRow] { model.rows(from: cards, query: query) }
+
+    /// The copies a master set keeps out of the TCGplayer file. It reads every
+    /// card, not the rows the query and the chips leave, because the hold
+    /// counts every copy he holds of the card.
+    private var masterSetHeld: Set<UUID> {
+        let groups = MasterSetHold.ids(masterSetGroups)
+        guard !groups.isEmpty else { return [] }
+        return MasterSetHold.keep(from: model.rows(from: cards, applyFilter: false), prices: model.prices, groups: groups)
+    }
     private var tagUses: [TagUse] { model.tagUses(in: cards) }
     private var committed: [OwnedCard] { cards.filter(\.isCommitted) }
     private var pricedIds: [Int] { PriceRefresh.productIds(of: cards) }
@@ -52,6 +62,7 @@ struct InventoryView: View {
                 MasterSetView(groupId: groupId, query: query)
             } else {
                 list(stacks)
+                    .environment(\.masterSetHeld, masterSetHeld)
             }
         }
         // A new default applies at once. Otherwise a change in Settings shows

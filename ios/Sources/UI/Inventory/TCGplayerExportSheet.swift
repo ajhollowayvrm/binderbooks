@@ -27,6 +27,7 @@ struct TCGplayerExportSheet: View {
     @Environment(InventoryModel.self) private var model
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var cards: [OwnedCard]
     @AppStorage(TCGplayerListingExport.shippingDefaultsKey) private var shippingText = ""
+    @AppStorage(MasterSetHold.defaultsKey) private var masterSetGroups = ""
 
     @State private var selection: Set<UUID> = []
     @State private var didSeed = false
@@ -42,12 +43,34 @@ struct TCGplayerExportSheet: View {
     @State private var stockCheck: TCGplayerStockCheck.Result?
     @State private var stockTagged = 0
     @State private var checkError: String?
+    /// On by default, because the set flag already says he is master setting.
+    /// He turns it off to list every copy for one run.
+    @State private var holdBack = true
 
     /// Sold cards are already gone from these rows.
     private var rows: [InventoryRow] { model.rows(from: cards, applyFilter: false) }
 
     private var listableRows: [InventoryRow] {
         rows.filter { Export.skipReason(for: $0, prices: model.prices) == nil }
+    }
+
+    /// The copies that stay for a master set. Empty when he turns the hold
+    /// off, or when no card in the export belongs to a set he is building.
+    private var held: Set<UUID> {
+        holdBack ? MasterSetHold.keep(from: rows, prices: model.prices, groups: MasterSetHold.ids(masterSetGroups)) : []
+    }
+
+    /// The held cards that hold their only copy. A bulk card keeps one copy
+    /// and lists the rest, so it stays ticked.
+    private func wholeHeld(_ rows: [InventoryRow], held: Set<UUID>) -> Set<UUID> {
+        Set(rows.filter { held.contains($0.card.id) && $0.card.quantity <= 1 }.map(\.card.id))
+    }
+
+    /// True when the export carries a card from a set he is master setting.
+    private var touchesMasterSet: Bool {
+        let groups = MasterSetHold.ids(masterSetGroups)
+        guard !groups.isEmpty else { return false }
+        return rows.contains { $0.hit.map { groups.contains($0.groupId) } ?? false }
     }
 
     private var skippedCounts: [(reason: Export.SkipReason, count: Int)] {
@@ -78,8 +101,12 @@ struct TCGplayerExportSheet: View {
                 }
             }
         }
+        // The pick list says "Kept for the master set" on the row itself, so
+        // the inventory mark would say it twice.
+        .environment(\.masterSetHeld, [])
         .interactiveDismissDisabled(builder.isRunning)
         .onAppear { seed() }
+        .onChange(of: holdBack) { _, _ in applyHold() }
         .fileImporter(isPresented: $pickingStock, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
             Task { await checkStock(result) }
         }
@@ -92,7 +119,10 @@ struct TCGplayerExportSheet: View {
     private var pickList: some View {
         let listable = listableRows
         let skipped = skippedCounts
-        let allTicked = !listable.isEmpty && listable.allSatisfy { selection.contains($0.card.id) }
+        let held = self.held
+        let whole = wholeHeld(listable, held: held)
+        let tickable = listable.filter { !whole.contains($0.card.id) }
+        let allTicked = !tickable.isEmpty && tickable.allSatisfy { selection.contains($0.card.id) }
         return List {
             Section {
                 Button {
@@ -121,6 +151,17 @@ struct TCGplayerExportSheet: View {
                 Text("In Seller Portal, export your pricing file, then pick it here. TCGplayer takes a card off its stock when a buyer pays, so open orders count. A card TCGplayer listed before and has no stock for now stays unticked.")
             }
 
+            if touchesMasterSet {
+                Section {
+                    Toggle("Keep one of each card", isOn: $holdBack)
+                        .disabled(builder.isRunning)
+                } footer: {
+                    Text(holdBack
+                         ? "You are master setting a set in this export. \(held.count) \(held.count == 1 ? "copy stays" : "copies stay") out of the file, one for each card and printing. A card you also hold as a slab or in your personal collection keeps nothing back. Turn this off to list every copy."
+                         : "Every copy goes in the file, including the cards of the set you are master setting.")
+                }
+            }
+
             Section {
                 HStack {
                     Text("Shipping you charge")
@@ -146,6 +187,11 @@ struct TCGplayerExportSheet: View {
                                 .foregroundStyle(selection.contains(row.card.id) ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
                             VStack(alignment: .leading, spacing: 2) {
                                 OwnedCardRow(row: row)
+                                if held.contains(row.card.id) {
+                                    Label(row.card.quantity > 1 ? "One copy stays for the master set" : "Kept for the master set", systemImage: "star.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.green)
+                                }
                                 if stockCheck?.toCheck.contains(row.card.id) == true {
                                     Label("Was on TCGplayer. Check that you still have it.", systemImage: "exclamationmark.triangle")
                                         .font(.caption)
@@ -162,10 +208,10 @@ struct TCGplayerExportSheet: View {
                     Text("\(selection.count) of \(listable.count) selected")
                     Spacer()
                     Button(allTicked ? "None" : "All") {
-                        selection = allTicked ? [] : Set(listable.map(\.card.id))
+                        selection = allTicked ? [] : Set(tickable.map(\.card.id))
                     }
                     .font(.caption)
-                    .disabled(listable.isEmpty || builder.isRunning)
+                    .disabled(tickable.isEmpty || builder.isRunning)
                 }
                 .textCase(nil)
             }
@@ -292,6 +338,25 @@ struct TCGplayerExportSheet: View {
         } else {
             selection = Set(listable.filter { !CardTagIndex.has(ReservedTag.listed, on: $0.card) }.map(\.card.id))
         }
+        selection.subtract(wholeHeld(listable, held: held))
+    }
+
+    /// Reads the hold switch again over the ticks he has now. Turning the hold
+    /// on unticks the copies it keeps. Turning it off ticks them, unless they
+    /// already carry the `listed` tag.
+    private func applyHold() {
+        let listable = listableRows
+        if holdBack {
+            selection.subtract(wholeHeld(listable, held: held))
+        } else {
+            let groups = MasterSetHold.ids(masterSetGroups)
+            let heldBefore = MasterSetHold.keep(from: rows, prices: model.prices, groups: groups)
+            let back = listable.filter {
+                heldBefore.contains($0.card.id) && $0.card.quantity <= 1
+                    && !CardTagIndex.has(ReservedTag.listed, on: $0.card)
+            }
+            selection.formUnion(back.map(\.card.id))
+        }
     }
 
     private func toggle(_ id: UUID) {
@@ -299,7 +364,11 @@ struct TCGplayerExportSheet: View {
     }
 
     private func start(_ selected: [InventoryRow]) {
-        let plan = Export.plan(selected, prices: model.prices)
+        // A ticked card he holds for the master set is a bulk card: it lists
+        // every copy but one. A card he ticked by hand overrides the hold.
+        let held = self.held
+        let holdingOne = Set(selected.filter { held.contains($0.card.id) && $0.card.quantity > 1 }.map(\.card.id))
+        let plan = Export.plan(selected, prices: model.prices, holdingOne: holdingOne)
         let shipping = Money.cents(from: shippingText) ?? 0
         run = Task {
             let result = await builder.build(plan, shippingChargedCents: shipping, market: TCGplayerMarketClient())

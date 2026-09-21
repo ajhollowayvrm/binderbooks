@@ -101,7 +101,10 @@ enum TCGplayerListingExport {
         var skipped: [SkipReason: Int] = [:]
     }
 
-    static func plan(_ rows: [InventoryRow], prices: [Int: [ProductPrice]]) -> Plan {
+    /// `holdingOne` names the cards that must leave one copy behind, for a set
+    /// he is master setting. A card with one copy drops out of the file. See
+    /// `MasterSetHold`.
+    static func plan(_ rows: [InventoryRow], prices: [Int: [ProductPrice]], holdingOne: Set<UUID> = []) -> Plan {
         var plan = Plan()
         var byKey: [SkuKey: Line] = [:]
         for row in rows {
@@ -121,7 +124,12 @@ enum TCGplayerListingExport {
                 marketCents: rows.first { $0.subTypeName == printing }?.marketCents,
                 cardIds: []
             )
-            line.quantity += max(1, row.card.quantity)
+            var quantity = max(1, row.card.quantity)
+            if holdingOne.contains(row.card.id) { quantity -= 1 }
+            // Every copy stays for the master set, so the card is not in the
+            // file and must not be tagged listed.
+            guard quantity > 0 else { continue }
+            line.quantity += quantity
             line.cardIds.append(row.card.id)
             byKey[key] = line
         }

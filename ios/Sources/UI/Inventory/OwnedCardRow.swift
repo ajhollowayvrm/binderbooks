@@ -7,6 +7,10 @@ import SwiftUI
 /// the total value under the price so the two are never read as one figure.
 struct OwnedCardRow: View {
     let row: InventoryRow
+
+    /// The cards a master set keeps out of the TCGplayer file. See
+    /// `MasterSetHold`.
+    @Environment(\.masterSetHeld) private var masterSetHeld
     /// Set when the line stands for several copies of the same thing. Nil
     /// wherever a screen lists cards one at a time: a picker, an export, the
     /// copies inside a stack.
@@ -45,6 +49,7 @@ struct OwnedCardRow: View {
                     }
                     if copies > 1 { Text("×\(copies)") }
                     if row.card.isPersonalCollection { Text("PC") }
+                    if isHeldForMasterSet { MasterSetBadge() }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -101,6 +106,14 @@ struct OwnedCardRow: View {
     /// True only for a line that stands for more than one card. A bulk line of
     /// 40 is one card, and its figures are already its own.
     private var isStacked: Bool { stack?.isStacked ?? false }
+
+    /// A line stands for its copies, so the mark shows when the master set
+    /// keeps any copy on the line.
+    private var isHeldForMasterSet: Bool {
+        guard !masterSetHeld.isEmpty else { return false }
+        if let stack { return stack.cardIds.contains(where: masterSetHeld.contains) }
+        return masterSetHeld.contains(row.card.id)
+    }
 
     /// The cost and the gain cover every copy the line stands for, so they can
     /// be read against the total above them.
