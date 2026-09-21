@@ -132,6 +132,42 @@ import Testing
         #expect(entry.detail == "no cards yet · 6x Chaos Rising Booster Pack")
     }
 
+    /// A picker row says what is in the purchase: its lines, its cards, and the
+    /// sealed items still unopened.
+    @Test @MainActor func aPickerRowSaysWhatIsInThePurchase() throws {
+        let container = try store()
+        let context = container.mainContext
+        let purchase = Purchase(
+            date: day("2026-09-19"), vendor: "GameCraft", itemCostCents: 16_158,
+            shippingCents: 400, taxCents: 100
+        )
+        context.insert(purchase)
+
+        let booster = PurchaseItem(productId: 1, quantity: 3, isSealed: true)
+        context.insert(booster)
+        booster.purchase = purchase
+        let opened = PurchaseItem(productId: 2, quantity: 1, isSealed: true)
+        opened.isRipped = true
+        context.insert(opened)
+        opened.purchase = purchase
+        for _ in 0..<2 {
+            let card = OwnedCard(productId: 9, printing: "Normal", condition: CardCondition.nearMint.rawValue, confidence: .manual)
+            context.insert(card)
+            card.sourceItem = opened
+        }
+        try context.save()
+
+        #expect(LedgerEntry.purchaseContents(purchase) == "2 lines · 2 cards · 3 sealed unopened")
+        #expect(LedgerEntry.purchaseExtras(purchase) == "$5.00 of the total is shipping, tax, and fees")
+
+        // A purchase with nothing off the top carries no extras line.
+        let plain = Purchase(date: day("2026-09-19"), vendor: "Walmart", itemCostCents: 2_845)
+        context.insert(plain)
+        try context.save()
+        #expect(LedgerEntry.purchaseContents(plain) == "0 lines · no cards yet")
+        #expect(LedgerEntry.purchaseExtras(plain).isEmpty)
+    }
+
     /// The row says how many cards came out of the purchase, so money with
     /// nothing to show for it stands out in the list.
     @Test @MainActor func aPurchaseRowCountsItsCards() throws {

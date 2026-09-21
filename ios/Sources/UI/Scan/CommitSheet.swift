@@ -17,13 +17,13 @@ struct CommitSheet: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @Query(sort: \Purchase.date, order: .reverse) private var purchases: [Purchase]
 
     @State private var vendor = ""
     @State private var date = Date()
     @State private var totalText = ""
     @State private var note = ""
     @State private var existing: Purchase?
+    @State private var picking = false
 
     private var totalCents: Int? { Money.cents(from: totalText) }
 
@@ -102,32 +102,25 @@ struct CommitSheet: View {
                     Text(commitNote)
                 }
 
-                if !purchases.isEmpty {
-                    Section("Or attach to a recent purchase") {
-                        ForEach(purchases.prefix(12)) { purchase in
-                            Button {
-                                existing = existing == purchase ? nil : purchase
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(purchase.vendor.isEmpty ? "Purchase" : purchase.vendor)
-                                            .foregroundStyle(.primary)
-                                        Text("\(purchase.date.formatted(date: .abbreviated, time: .omitted)) · \(purchase.landedCostCents.asCurrency) · \(purchase.items.count) lines")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    if existing == purchase {
-                                        Image(systemName: "checkmark").foregroundStyle(.tint)
-                                    }
-                                }
-                            }
-                        }
+                Section {
+                    Button {
+                        picking = true
+                    } label: {
+                        chosenRow
                     }
+                    .buttonStyle(.plain)
+                    if existing != nil {
+                        Button("Attach to no purchase", role: .destructive) { existing = nil }
+                    }
+                } header: {
+                    Text("Or attach to a purchase")
+                } footer: {
+                    Text("Search every purchase on the books by vendor, product, amount, or date. The ones bought around today come first.")
                 }
             }
             .navigationTitle("Commit")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $picking) { picker }
             .onAppear {
                 if existing == nil { existing = model.session.purchase }
             }
@@ -138,6 +131,62 @@ struct CommitSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Commit") { commit() }
                         .disabled(!canCommit)
+                }
+            }
+        }
+    }
+
+    /// The purchase he has chosen, or the invitation to choose one. It carries
+    /// the same lines as a picker row, so the row he tapped is the row he sees.
+    @ViewBuilder
+    private var chosenRow: some View {
+        if let existing {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(existing.vendor.isEmpty ? "Purchase" : existing.vendor)
+                    Text("\(existing.date.formatted(date: .abbreviated, time: .omitted)) · \(LedgerEntry.purchaseContents(existing))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if !existing.note.isEmpty {
+                        Text(existing.note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer()
+                Text(existing.landedCostCents.asCurrency)
+                    .font(.callout.monospacedDigit())
+            }
+            .contentShape(Rectangle())
+        } else {
+            LabeledContent("Purchase", value: "Choose…")
+                .contentShape(Rectangle())
+        }
+    }
+
+    private var picker: some View {
+        NavigationStack {
+            PurchasePickerList(
+                around: date,
+                footer: "The cards take their share of that purchase's total. A cost already on a card stays, and it comes out of the total first.",
+                isCurrent: { $0.id == existing?.id },
+                leading: {
+                    Button("No purchase") {
+                        existing = nil
+                        picking = false
+                    }
+                },
+                onPick: { purchase in
+                    existing = purchase
+                    picking = false
+                }
+            )
+            .navigationTitle("Attach to a purchase")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { picking = false }
                 }
             }
         }

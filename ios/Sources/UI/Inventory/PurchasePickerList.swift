@@ -27,8 +27,10 @@ struct PurchasePickerList<Leading: View>: View {
         return purchases.filter { abs($0.date.timeIntervalSince(around)) <= 7 * 86_400 }
     }
 
-    /// Every typed word must appear in the vendor, the note, the amount, or the
-    /// date. The note names what was bought: "11x Destined Rivals Booster Pack".
+    /// Every typed word must appear in the vendor, the note, the amount, the
+    /// date, or the contents line. The note names what was bought: "11x
+    /// Destined Rivals Booster Pack", and the contents line carries "sealed"
+    /// and the card count.
     private var matching: [Purchase] {
         let words = query.lowercased().split(separator: " ").map(String.init)
         guard !words.isEmpty else { return purchases }
@@ -37,6 +39,7 @@ struct PurchasePickerList<Leading: View>: View {
                 purchase.vendor, purchase.note, purchase.landedCostCents.asCurrency,
                 purchase.date.formatted(date: .abbreviated, time: .omitted),
                 purchase.date.formatted(.dateTime.month(.wide).year()),
+                LedgerEntry.purchaseContents(purchase),
             ].joined(separator: " ").lowercased()
             return words.allSatisfy { text.contains($0) }
         }
@@ -78,7 +81,7 @@ struct PurchasePickerList<Leading: View>: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(purchase.vendor.isEmpty ? "Purchase" : purchase.vendor)
                         .foregroundStyle(.primary)
-                    Text("\(purchase.date.formatted(date: .abbreviated, time: .omitted)) · \(LedgerEntry.cardCount(purchase))")
+                    Text("\(purchase.date.formatted(date: .abbreviated, time: .omitted)) · \(LedgerEntry.purchaseContents(purchase))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if !purchase.note.isEmpty {
@@ -86,6 +89,12 @@ struct PurchasePickerList<Leading: View>: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
+                    }
+                    let extras = LedgerEntry.purchaseExtras(purchase)
+                    if !extras.isEmpty {
+                        Text(extras)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                 }
                 Spacer()

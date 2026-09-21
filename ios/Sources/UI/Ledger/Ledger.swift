@@ -113,6 +113,28 @@ struct LedgerEntry: Identifiable, Hashable {
         }
     }
 
+    /// What a purchase holds, for a picker row: its lines, its cards, and the
+    /// sealed items still unopened. A count of lines alone said nothing about
+    /// what was in the purchase, so a row could not be told from the row above
+    /// it.
+    static func purchaseContents(_ purchase: Purchase) -> String {
+        var parts = ["\(purchase.items.count) \(purchase.items.count == 1 ? "line" : "lines")"]
+        parts.append(cardCount(purchase))
+        let sealed = purchase.items
+            .filter { $0.isSealed && !$0.isRipped }
+            .reduce(0) { $0 + max(1, $1.quantity) }
+        if sealed > 0 { parts.append("\(sealed) sealed unopened") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The part of the total that is not the cards themselves. Empty when he
+    /// paid none, so a row carries the line only when it says something.
+    static func purchaseExtras(_ purchase: Purchase) -> String {
+        let extra = purchase.shippingCents + purchase.taxCents + purchase.feesCents
+        guard extra > 0 else { return "" }
+        return "\(extra.asCurrency) of the total is shipping, tax, and fees"
+    }
+
     /// The purchases that hold the pulls of each rip this purchase shares with
     /// another purchase. Empty when every rip on it was its own.
     static func sharedRipHomes(of purchase: Purchase) -> [Purchase] {
