@@ -84,7 +84,7 @@ struct SettingsView: View {
             } header: {
                 Text("TCGplayer")
             } footer: {
-                Text("List builds the CSV that Seller Portal imports, with each card at the cheapest live listing of its condition and printing. Import reads Seller Portal's pricing export and puts the stock you list into inventory, tagged listed.")
+                Text("List reads Seller Portal's pricing export and builds the CSV that Seller Portal imports. Each row adds the copies you hold less the copies TCGplayer lists, at the cheapest live listing of its condition and printing. Import reads Seller Portal's pricing export and puts the stock you list into inventory, tagged listed.")
             }
 
             Section {

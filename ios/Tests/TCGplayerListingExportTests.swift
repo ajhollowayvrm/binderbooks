@@ -114,6 +114,35 @@ import Testing
         #expect(Export.skipReason(for: bulk, hit: hit(1)) == nil)
     }
 
+    /// TCGplayer sells raw cards only, so every graded card stays out, whether
+    /// it carries a cert number, a grade, a grader, or only the label.
+    @Test @MainActor func everyGradedCardStaysOut() {
+        let slab = card(1)
+        slab.certNumber = "12345678"
+        #expect(Export.skipReason(for: slab, hit: hit(1)) == .slab)
+
+        let graded = card(1)
+        graded.graderRaw = "psa"
+        graded.gradeLabel = "10"
+        #expect(Export.skipReason(for: graded, hit: hit(1)) == .slab)
+
+        // Half a record is still a graded card.
+        let gradeOnly = card(1)
+        gradeOnly.gradeLabel = "9.5"
+        #expect(Export.skipReason(for: gradeOnly, hit: hit(1)) == .slab)
+
+        let graderOnly = card(1)
+        graderOnly.graderRaw = "cgc"
+        #expect(Export.skipReason(for: graderOnly, hit: hit(1)) == .slab)
+
+        let labelled = card(1)
+        labelled.tags = [ReservedTag.graded]
+        #expect(Export.skipReason(for: labelled, hit: hit(1)) == .slab)
+
+        // A raw card carries none of the four, so it still lists.
+        #expect(Export.skipReason(for: card(1), hit: hit(1)) == nil)
+    }
+
     @Test @MainActor func copiesOfOneSkuBecomeOneRow() throws {
         let prices: [Int: [ProductPrice]] = [
             1: [ProductPrice(subTypeName: "Holofoil", marketCents: 202, asOf: "2026-09-11")],
@@ -148,6 +177,116 @@ import Testing
         let prices = [3: [ProductPrice(subTypeName: "Holofoil", marketCents: 100, asOf: "2026-09-11")]]
         let plan = Export.plan([InventoryRow(card: card(3), hit: hit(3, category: TCGCategory.pokemonJapan))], prices: prices)
         #expect(plan.lines.first?.key.language == "Japanese")
+    }
+
+    // MARK: - What TCGplayer lists now
+
+    /// The fixture export: Charizard ex (product 1) NM Holofoil ×2, Charmander
+    /// (3) NM Reverse Holofoil ×3, Pidgeot ex (9) listed before with none
+    /// now, Umbreon (7) NM Japanese ×1, and Missingno, which the catalog
+    /// cannot name.
+    private func fixtureStock() throws -> Export.Stock {
+        let contents = try TCGplayerPricingCSV.read(TCGplayerListingImportTests.export)
+        return Export.stock(contents, products: [5001: 1, 5003: 3, 5002: 9, 7001: 7])
+    }
+
+    @Test func theStockMatchesEachSku() throws {
+        let stock = try fixtureStock()
+        #expect(stock.row(for: .init(productId: 1, condition: "Near Mint", printing: "Holofoil", language: "English"))?.line.quantity == 2)
+        #expect(stock.row(for: .init(productId: 7, condition: "Near Mint", printing: "Normal", language: "Japanese"))?.skuId == 7001)
+        #expect(stock.row(for: .init(productId: 1, condition: "Lightly Played", printing: "Holofoil", language: "English")) == nil)
+        #expect(stock.unmatched.map(\.skuId) == [9001])
+    }
+
+    /// AJ's rule, 2026-09-21: the file adds what he holds less what TCGplayer
+    /// lists. One held and one listed writes 0.
+    @Test @MainActor func eachLineAddsWhatHeHoldsLessWhatTCGplayerLists() throws {
+        let stock = try fixtureStock()
+        let prices: [Int: [ProductPrice]] = [
+            1: [ProductPrice(subTypeName: "Holofoil", marketCents: 4_500, asOf: "")],
+            3: [ProductPrice(subTypeName: "Reverse Holofoil", marketCents: 40, asOf: "")],
+            7: [ProductPrice(subTypeName: "Normal", marketCents: 120, asOf: "")],
+            9: [ProductPrice(subTypeName: "Holofoil", marketCents: 800, asOf: "")],
+            2: [ProductPrice(subTypeName: "Holofoil", marketCents: 300, asOf: "")],
+        ]
+        let charizards = card(1)
+        charizards.quantity = 2
+        let charmander = card(3, printing: "Reverse Holofoil")
+        let umbreon = card(7, printing: "Normal")
+        let pidgeot = card(9)
+        let fresh = card(2)
+        fresh.quantity = 3
+        let plan = Export.plan([
+            InventoryRow(card: charizards, hit: hit(1)),
+            InventoryRow(card: charmander, hit: hit(3)),
+            InventoryRow(card: umbreon, hit: hit(7, category: TCGCategory.pokemonJapan)),
+            InventoryRow(card: pidgeot, hit: hit(9)),
+            InventoryRow(card: fresh, hit: hit(2)),
+        ], prices: prices, stock: stock)
+
+        func line(_ productId: Int) throws -> Export.Line { try #require(plan.lines.first { $0.key.productId == productId }) }
+        // Two held, two listed.
+        #expect(try line(1).addQuantity == 0)
+        // One held, three listed: two come off.
+        #expect(try line(3).addQuantity == -2)
+        // One held, one listed, in Japanese.
+        #expect(try line(7).addQuantity == 0)
+        // TCGplayer sold out of it before, so the sheet warns.
+        #expect(try line(9).addQuantity == 1)
+        #expect(try line(9).listedBefore)
+        // Never listed.
+        #expect(try line(2).addQuantity == 3)
+        #expect(try line(2).stock == nil)
+    }
+
+    /// A SKU TCGplayer lists that no listable card fills takes its stock off.
+    /// An unticked card still fills its SKU, and a card with no printing
+    /// leaves its product alone.
+    @Test @MainActor func aSkuHeNoLongerHoldsComesOff() throws {
+        let stock = try fixtureStock()
+        let prices: [Int: [ProductPrice]] = [
+            1: [ProductPrice(subTypeName: "Holofoil", marketCents: 4_500, asOf: "")],
+            3: [ProductPrice(subTypeName: "Normal", marketCents: 10, asOf: ""),
+                ProductPrice(subTypeName: "Reverse Holofoil", marketCents: 40, asOf: "")],
+            7: [ProductPrice(subTypeName: "Normal", marketCents: 120, asOf: "")],
+        ]
+        let personal = card(7, printing: "Normal")
+        personal.isPersonalCollection = true
+        let rows = [
+            InventoryRow(card: card(1), hit: hit(1)),
+            // Charmander with no printing chosen: could be the listed SKU.
+            InventoryRow(card: card(3, printing: ""), hit: hit(3)),
+            // Umbreon moved to the personal collection: nothing to list.
+            InventoryRow(card: personal, hit: hit(7, category: TCGCategory.pokemonJapan)),
+        ]
+        let removals = Export.removals(stock, rows: rows, prices: prices)
+        #expect(removals.remove.map(\.skuId) == [7001])
+        #expect(removals.unsure.map(\.skuId) == [5003])
+    }
+
+    @Test func aRemovalRowTakesTheStockOffAtHisPrice() throws {
+        let stock = try fixtureStock()
+        let umbreon = try #require(stock.rows.values.first { $0.skuId == 7001 })
+        let lines = Export.csv([], removals: [umbreon], categoryNames: [:]).components(separatedBy: "\r\n")
+        #expect(lines[1] == "7001,Pokemon Japan,M6: Storm Emeralda,Umbreon - 020/076,,020/076,,Near Mint - Japanese,,,,,,-1,1.00,")
+    }
+
+    /// A SKU TCGplayer lists keeps its row under the floor, so the stock still
+    /// comes out right. It takes its id and name from the pricing export.
+    @Test @MainActor func aListedSkuSkipsTheFloorAndTheDetailsCall() async throws {
+        let stock = try fixtureStock()
+        let key = Export.SkuKey(productId: 3, condition: "Near Mint", printing: "Reverse Holofoil", language: "English")
+        var listed = line(key, market: 40)
+        listed.stock = stock.row(for: key)
+        let market = StubMarket(listings: [3: .init(skuId: 5003, priceCents: 5, shippingCents: 99)], refuseDetails: true)
+
+        let outcome = await TCGplayerListingBuilder().build(Export.Plan(lines: [listed]), shippingChargedCents: 0, market: market, pause: .zero)
+
+        #expect(outcome.report.belowFloor == 0)
+        #expect(outcome.report.failed == 0)
+        #expect(outcome.rows.map(\.skuId) == [5003])
+        #expect(outcome.rows.first?.productName == "Charmander - 026/197")
+        #expect(outcome.rows.first?.line.addQuantity == -2)
     }
 
     // MARK: - Price
@@ -191,6 +330,21 @@ import Testing
         #expect(Export.isBelowFloor(lowest: nil, marketCents: 10))
         #expect(Export.isBelowFloor(lowest: nil, marketCents: nil))
         #expect(!Export.isBelowFloor(lowest: listing(10), marketCents: 600))
+
+        // He sets the floor himself. A higher one leaves more out, and a floor
+        // of nothing leaves nothing out on price alone.
+        #expect(Export.isBelowFloor(lowest: listing(45), marketCents: 59, floorCents: 50))
+        #expect(!Export.isBelowFloor(lowest: listing(15), marketCents: 59, floorCents: 10))
+        #expect(!Export.isBelowFloor(lowest: listing(1), marketCents: 59, floorCents: 0))
+        #expect(!Export.isBelowFloor(lowest: nil, marketCents: 5, floorCents: 5))
+    }
+
+    /// The summary names the floor the run used, not the rule's own figure.
+    @Test func theSummaryNamesTheFloorHeSet() {
+        var report = Export.Report()
+        report.belowFloor = 3
+        report.floorCents = 75
+        #expect(report.summary.contains("under $0.75"))
     }
 
     /// The app shows what a card sells for: market at $5 and up, TCGplayer's
@@ -305,6 +459,7 @@ private struct StubMarket: TCGplayerMarket {
     var skuLists: [Int: [TCGplayerMarketClient.Sku]] = [:]
     var names: [Int: String] = [:]
     var refuse = false
+    var refuseDetails = false
 
     func cheapestListing(productId: Int, condition: String, printing: String, language: String) async throws -> TCGplayerMarketClient.Listing? {
         if refuse { throw TCGplayerMarketClient.Failure.http(403) }
@@ -312,6 +467,7 @@ private struct StubMarket: TCGplayerMarket {
     }
 
     func details(productId: Int) async throws -> TCGplayerMarketClient.Details {
-        TCGplayerMarketClient.Details(productName: names[productId], skus: skuLists[productId] ?? [])
+        if refuseDetails { throw TCGplayerMarketClient.Failure.http(500) }
+        return TCGplayerMarketClient.Details(productName: names[productId], skus: skuLists[productId] ?? [])
     }
 }

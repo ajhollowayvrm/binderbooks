@@ -4,30 +4,27 @@ import UniformTypeIdentifiers
 
 /// Pick cards, price them against TCGplayer, and share the Seller Portal CSV.
 ///
-/// Every inventory card that can be listed is on the list. A card tagged
-/// `listed` starts unticked, because the import adds quantity and a second
-/// upload lists the card twice. The cards in the file take the tag when the
-/// file is made. The cards that cannot be listed show as a count for each
-/// reason, so no card leaves the file in silence.
+/// The pricing export from Seller Portal comes first. It says what TCGplayer
+/// lists now, and each row of the file adds the copies he holds less that
+/// stock. See `TCGplayerListingExport`.
 ///
-/// "Check against TCGplayer" reads the pricing export first. It tags the cards
-/// he listed by hand and unticks the ones that may have sold. See
-/// `TCGplayerStockCheck`.
+/// Every inventory card that can be listed is on the list and starts ticked.
+/// An unticked card leaves its SKU alone on TCGplayer. The cards that cannot
+/// be listed show as a count for each reason, so no card leaves the file in
+/// silence.
 struct TCGplayerExportSheet: View {
-    /// The cards to tick at the start. Nil ticks every listable card that is
-    /// not already tagged `listed`.
+    /// The cards to tick at the start. Nil ticks every listable card.
     var preselected: Set<UUID>?
-    var onTagged: () -> Void = {}
 
     private typealias Export = TCGplayerListingExport
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
     @Environment(CatalogController.self) private var catalog
     @Environment(InventoryModel.self) private var model
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var cards: [OwnedCard]
     @AppStorage(TCGplayerListingExport.shippingDefaultsKey) private var shippingText = ""
     @AppStorage(MasterSetHold.defaultsKey) private var masterSetGroups = ""
+    @AppStorage(TCGplayerListingExport.floorDefaultsKey) private var floorText = Money.fieldText(TCGplayerListingExport.defaultFloorCents)
 
     @State private var selection: Set<UUID> = []
     @State private var didSeed = false
@@ -35,13 +32,12 @@ struct TCGplayerExportSheet: View {
     @State private var run: Task<Void, Never>?
     @State private var outcome: TCGplayerListingBuilder.Outcome?
     @State private var categoryNames: [Int: String] = [:]
-    @State private var taggedCount: Int?
-    /// The cards this export tagged, so Undo takes the tag off only those.
-    @State private var taggedIds: [UUID] = []
     @State private var pickingStock = false
     @State private var checking = false
-    @State private var stockCheck: TCGplayerStockCheck.Result?
-    @State private var stockTagged = 0
+    /// What TCGplayer lists now. Nil until he picks the pricing export.
+    @State private var stock: Export.Stock?
+    /// The SKUs whose stock comes off, by SKU id.
+    @State private var removalSelection: Set<Int> = []
     @State private var checkError: String?
     /// On by default, because the set flag already says he is master setting.
     /// He turns it off to list every copy for one run.
@@ -71,6 +67,22 @@ struct TCGplayerExportSheet: View {
         let groups = MasterSetHold.ids(masterSetGroups)
         guard !groups.isEmpty else { return false }
         return rows.contains { $0.hit.map { groups.contains($0.groupId) } ?? false }
+    }
+
+    /// What he typed, or the rule's own figure while the field is empty or
+    /// half typed.
+    private var floorCents: Int { Money.cents(from: floorText) ?? TCGplayerListingExport.defaultFloorCents }
+
+    private var removals: (remove: [TCGplayerPricingCSV.Row], unsure: [TCGplayerPricingCSV.Row]) {
+        guard let stock else { return ([], []) }
+        return Export.removals(stock, rows: rows, prices: model.prices)
+    }
+
+    /// The SKU's row in the pricing export, for the pick list.
+    private func stockRow(for row: InventoryRow) -> TCGplayerPricingCSV.Row? {
+        guard let stock, let hit = row.hit,
+              let printing = Export.printing(for: row.card, prices: model.prices[hit.productId] ?? []) else { return nil }
+        return stock.row(for: .init(productId: hit.productId, condition: row.card.condition, printing: printing, language: Export.language(categoryId: hit.categoryId)))
     }
 
     private var skippedCounts: [(reason: Export.SkipReason, count: Int)] {
@@ -129,17 +141,18 @@ struct TCGplayerExportSheet: View {
                     pickingStock = true
                 } label: {
                     Label(
-                        checking ? "Checking…" : (stockCheck == nil ? "Check against TCGplayer…" : "Check again…"),
-                        systemImage: "arrow.triangle.2.circlepath"
+                        checking ? "Reading…" : (stock == nil ? "Pick the pricing export…" : "Pick it again…"),
+                        systemImage: "doc.text"
                     )
                 }
                 .disabled(checking || builder.isRunning)
-                if let stockCheck {
-                    LabeledContent("Listed by hand, now tagged", value: "\(stockTagged)")
-                    LabeledContent("Was on TCGplayer, check", value: "\(stockCheck.toCheck.count)")
-                    LabeledContent("Sold on TCGplayer", value: "\(stockCheck.soldOnTCGplayer)")
-                    if stockCheck.unmatchedRows > 0 {
-                        LabeledContent("TCGplayer rows not matched", value: "\(stockCheck.unmatchedRows)")
+                if let stock {
+                    LabeledContent("SKUs TCGplayer lists", value: "\(stock.rows.values.filter { $0.line.quantity > 0 }.count)")
+                    if !stock.unmatched.isEmpty {
+                        LabeledContent("TCGplayer rows not matched", value: "\(stock.unmatched.count)")
+                    }
+                    if !stock.unreadableRows.isEmpty {
+                        LabeledContent("Rows not read", value: "\(stock.unreadableRows.count)")
                     }
                 }
                 if let checkError {
@@ -147,8 +160,10 @@ struct TCGplayerExportSheet: View {
                         .font(.footnote)
                         .foregroundStyle(.red)
                 }
+            } header: {
+                Text("What TCGplayer lists now")
             } footer: {
-                Text("In Seller Portal, export your pricing file, then pick it here. TCGplayer takes a card off its stock when a buyer pays, so open orders count. A card TCGplayer listed before and has no stock for now stays unticked.")
+                Text("In Seller Portal, export your pricing file, then pick it here. Each row of the upload adds the copies you hold less the copies TCGplayer lists: one held and one listed adds 0 and only changes the price. TCGplayer takes a card off its stock when a buyer pays, so import your sold orders first. A row TCGplayer does not match stays as it is.")
             }
 
             if touchesMasterSet {
@@ -163,18 +178,10 @@ struct TCGplayerExportSheet: View {
             }
 
             Section {
-                HStack {
-                    Text("Shipping you charge")
-                    Spacer()
-                    Text("$").foregroundStyle(.secondary)
-                    TextField("0.00", text: $shippingText)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .font(.body.monospacedDigit())
-                        .frame(maxWidth: 80)
-                }
+                moneyRow("Shipping you charge", text: $shippingText)
+                moneyRow("Leave out under", text: $floorText)
             } footer: {
-                Text("A card worth $5 or more lists at its market price. A cheaper card lists at the cheapest live listing of the same condition and printing, plus that listing's shipping, less what you charge to ship. A card whose cheapest listing is under $0.20 stays out of the file. A card nobody sells takes its market price.")
+                Text("A card worth \(ProductPrice.marketRuleCents.asCurrency) or more lists at its market price. A cheaper card lists at the cheapest live listing of the same condition and printing, plus that listing's shipping, less what you charge to ship. A card whose cheapest listing is under \(floorCents.asCurrency) stays out of the file. A card nobody sells takes its market price.")
             }
 
             Section {
@@ -192,10 +199,11 @@ struct TCGplayerExportSheet: View {
                                         .font(.caption)
                                         .foregroundStyle(.green)
                                 }
-                                if stockCheck?.toCheck.contains(row.card.id) == true {
-                                    Label("Was on TCGplayer. Check that you still have it.", systemImage: "exclamationmark.triangle")
+                                if stock != nil {
+                                    let listed = stockRow(for: row)
+                                    Text("TCGplayer lists \(listed?.line.quantity ?? 0)")
                                         .font(.caption)
-                                        .foregroundStyle(.orange)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
                         }
@@ -216,6 +224,10 @@ struct TCGplayerExportSheet: View {
                 .textCase(nil)
             }
 
+            if stock != nil {
+                removalSection
+            }
+
             if !skipped.isEmpty {
                 Section("Not listed") {
                     ForEach(skipped, id: \.reason) { item in
@@ -229,8 +241,79 @@ struct TCGplayerExportSheet: View {
         }
     }
 
+    /// SKUs TCGplayer lists that no listable card fills. Their rows take the
+    /// stock off, so he checks each one.
+    @ViewBuilder
+    private var removalSection: some View {
+        let removals = self.removals
+        if !removals.remove.isEmpty {
+            Section {
+                ForEach(removals.remove) { row in
+                    Button {
+                        if removalSelection.contains(row.skuId) { removalSelection.remove(row.skuId) } else { removalSelection.insert(row.skuId) }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: removalSelection.contains(row.skuId) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(removalSelection.contains(row.skuId) ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                            stockRowLabel(row, trailing: "−\(row.line.quantity)")
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(builder.isRunning)
+                }
+            } header: {
+                Text("Take off TCGplayer: \(removalSelection.intersection(removals.remove.map(\.skuId)).count) of \(removals.remove.count)")
+                    .textCase(nil)
+            } footer: {
+                Text("TCGplayer lists these and you hold no listable copy. A card you sold, graded, or moved to your personal collection lands here. Untick a row to leave it on TCGplayer.")
+            }
+        }
+        if !removals.unsure.isEmpty {
+            Section {
+                ForEach(removals.unsure) { row in
+                    stockRowLabel(row, trailing: "\(row.line.quantity)")
+                }
+            } header: {
+                Text("Left on TCGplayer, check by hand")
+                    .textCase(nil)
+            } footer: {
+                Text("You hold a copy of these cards with no printing chosen, so the app cannot tell which SKU it is. Choose the printing to include them.")
+            }
+        }
+    }
+
+    private func stockRowLabel(_ row: TCGplayerPricingCSV.Row, trailing: String) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.line.productName)
+                    .lineLimit(1)
+                Text("\(row.line.setName) · \(row.line.condition)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Text(trailing)
+                .font(.body.monospacedDigit())
+        }
+    }
+
+    private func moneyRow(_ label: String, text: Binding<String>) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text("$").foregroundStyle(.secondary)
+            TextField("0.00", text: text)
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .font(.body.monospacedDigit())
+                .frame(maxWidth: 80)
+        }
+    }
+
     private func buildBar(selected: [InventoryRow]) -> some View {
-        VStack(spacing: 6) {
+        let removing = removalSelection.intersection(removals.remove.map(\.skuId)).count
+        return VStack(spacing: 6) {
             if builder.isRunning {
                 ProgressView(value: Double(builder.done), total: Double(max(1, builder.total)))
                 Text("Pricing \(builder.done) of \(builder.total)")
@@ -240,12 +323,12 @@ struct TCGplayerExportSheet: View {
             Button {
                 start(selected)
             } label: {
-                Text(builder.isRunning ? "Pricing…" : "Price \(selected.count) \(selected.count == 1 ? "card" : "cards")")
+                Text(builder.isRunning ? "Pricing…" : (stock == nil ? "Pick the pricing export first" : "Price \(selected.count) \(selected.count == 1 ? "card" : "cards")"))
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(selected.isEmpty || builder.isRunning)
+            .disabled(stock == nil || (selected.isEmpty && removing == 0) || builder.isRunning)
         }
         .padding()
         .background(.bar)
@@ -255,38 +338,40 @@ struct TCGplayerExportSheet: View {
 
     private func resultList(_ outcome: TCGplayerListingBuilder.Outcome) -> some View {
         let name = Export.suggestedFileName()
-        let file = CSVFile(text: Export.csv(outcome.rows, categoryNames: categoryNames), name: name)
-        let cardIds = outcome.rows.flatMap(\.line.cardIds)
+        let removing = removals.remove.filter { removalSelection.contains($0.skuId) }
+        let file = CSVFile(text: Export.csv(outcome.rows, removals: removing, categoryNames: categoryNames), name: name)
+        let rowCount = outcome.rows.count + removing.count
+        let listedBefore = outcome.rows.filter(\.line.listedBefore).count
         return List {
             Section {
                 Text(outcome.report.summary)
                     .font(.footnote)
-                if !outcome.rows.isEmpty {
+                if listedBefore > 0 {
+                    Label("\(listedBefore) \(listedBefore == 1 ? "row lists a SKU" : "rows list SKUs") TCGplayer sold out of. If one of those sold and is not marked sold, import your sold orders first.", systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+                if rowCount > 0 {
                     ShareLink(item: file, preview: SharePreview(name, image: Image(systemName: "tablecells"))) {
-                        Label("Share CSV (\(outcome.rows.count) rows)", systemImage: "square.and.arrow.up")
-                    }
-                    if let taggedCount {
-                        HStack {
-                            Label("Tagged \(taggedCount) cards listed", systemImage: "tag")
-                            Spacer()
-                            Button("Undo") { undoTags() }
-                                .buttonStyle(.borderless)
-                        }
-                    } else {
-                        Button {
-                            tagListed(cardIds)
-                        } label: {
-                            Label("Tag these \(cardIds.count) cards listed", systemImage: "tag")
-                        }
+                        Label("Share CSV (\(rowCount) rows)", systemImage: "square.and.arrow.up")
                     }
                 }
             } footer: {
-                Text("In Seller Portal, open Inventory and choose Import Inventory. Check the staged inventory before it goes live. The import adds to the quantity you already list. The cards in this file are tagged listed, so they are not offered again. If you do not upload the file, tap Undo.")
+                Text("In Seller Portal, open Inventory and choose Import Inventory. Check the staged inventory before it goes live. Each row adds the copies you hold less the copies TCGplayer lists, so the upload leaves TCGplayer at what you hold. Export a new pricing file before the next upload.")
             }
 
-            Section("Rows") {
-                ForEach(outcome.rows) { row in
-                    pricedRow(row)
+            if !outcome.rows.isEmpty {
+                Section("Rows") {
+                    ForEach(outcome.rows) { row in
+                        pricedRow(row)
+                    }
+                }
+            }
+            if !removing.isEmpty {
+                Section("Taken off TCGplayer") {
+                    ForEach(removing) { row in
+                        stockRowLabel(row, trailing: "−\(row.line.quantity)")
+                    }
                 }
             }
         }
@@ -301,12 +386,14 @@ struct TCGplayerExportSheet: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                Text("\(Export.conditionText(row.line.key)) · ×\(row.line.quantity)")
+                Text("\(Export.conditionText(row.line.key)) · hold \(row.line.quantity), TCGplayer lists \(row.line.listed)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
+                Text(row.line.addQuantity > 0 ? "+\(row.line.addQuantity)" : "\(row.line.addQuantity)")
+                    .font(.body.monospacedDigit().bold())
                 Text(row.priceCents.asCurrency)
                     .font(.body.monospacedDigit())
                 Text(sourceText(row))
@@ -336,14 +423,13 @@ struct TCGplayerExportSheet: View {
         if let preselected {
             selection = Set(listable.map(\.card.id)).intersection(preselected)
         } else {
-            selection = Set(listable.filter { !CardTagIndex.has(ReservedTag.listed, on: $0.card) }.map(\.card.id))
+            selection = Set(listable.map(\.card.id))
         }
         selection.subtract(wholeHeld(listable, held: held))
     }
 
     /// Reads the hold switch again over the ticks he has now. Turning the hold
-    /// on unticks the copies it keeps. Turning it off ticks them, unless they
-    /// already carry the `listed` tag.
+    /// on unticks the copies it keeps. Turning it off ticks them.
     private func applyHold() {
         let listable = listableRows
         if holdBack {
@@ -351,10 +437,7 @@ struct TCGplayerExportSheet: View {
         } else {
             let groups = MasterSetHold.ids(masterSetGroups)
             let heldBefore = MasterSetHold.keep(from: rows, prices: model.prices, groups: groups)
-            let back = listable.filter {
-                heldBefore.contains($0.card.id) && $0.card.quantity <= 1
-                    && !CardTagIndex.has(ReservedTag.listed, on: $0.card)
-            }
+            let back = listable.filter { heldBefore.contains($0.card.id) && $0.card.quantity <= 1 }
             selection.formUnion(back.map(\.card.id))
         }
     }
@@ -368,35 +451,13 @@ struct TCGplayerExportSheet: View {
         // every copy but one. A card he ticked by hand overrides the hold.
         let held = self.held
         let holdingOne = Set(selected.filter { held.contains($0.card.id) && $0.card.quantity > 1 }.map(\.card.id))
-        let plan = Export.plan(selected, prices: model.prices, holdingOne: holdingOne)
+        guard let stock else { return }
+        let plan = Export.plan(selected, prices: model.prices, holdingOne: holdingOne, stock: stock)
         let shipping = Money.cents(from: shippingText) ?? 0
         run = Task {
-            let result = await builder.build(plan, shippingChargedCents: shipping, market: TCGplayerMarketClient())
-            if !Task.isCancelled {
-                outcome = result
-                // Tagged now, not after he taps a button. A card in the file
-                // that stays untagged is offered again, and sold twice.
-                tagListed(result.rows.flatMap(\.line.cardIds))
-            }
+            let result = await builder.build(plan, shippingChargedCents: shipping, market: TCGplayerMarketClient(), floorCents: floorCents)
+            if !Task.isCancelled { outcome = result }
         }
-    }
-
-    /// Only the cards with no tag yet, so Undo leaves an older tag alone.
-    private func tagListed(_ ids: [UUID]) {
-        let wanted = Set(ids)
-        let newly = cards.filter { wanted.contains($0.id) && !CardTagIndex.has(ReservedTag.listed, on: $0) }
-        CardTagEditor(context: modelContext).add(ReservedTag.listed, to: newly)
-        taggedIds = newly.map(\.id)
-        taggedCount = newly.count
-        onTagged()
-    }
-
-    private func undoTags() {
-        let wanted = Set(taggedIds)
-        CardTagEditor(context: modelContext).remove(ReservedTag.listed, from: cards.filter { wanted.contains($0.id) })
-        taggedIds = []
-        taggedCount = nil
-        onTagged()
     }
 
     private func checkStock(_ result: Result<URL, Error>) async {
@@ -413,20 +474,16 @@ struct TCGplayerExportSheet: View {
             }
             let contents = try TCGplayerPricingCSV.read(text)
             guard let database = catalog.database else {
-                checkError = "Install the catalog first. The check matches each TCGplayer row to a catalog card."
+                checkError = "Install the catalog first. The app matches each TCGplayer row to a catalog card."
                 return
             }
             let rows = contents.rows + contents.emptyRows
             let products = try await database.asyncRead { db in try TCGplayerPricingCSV.products(db, rows: rows) }
-            let check = TCGplayerStockCheck.check(contents, cards: cards, products: products)
-            let toTag = Set(check.toTag)
-            let handListed = cards.filter { toTag.contains($0.id) }
-            CardTagEditor(context: modelContext).add(ReservedTag.listed, to: handListed)
-            stockTagged = handListed.count
-            selection.subtract(toTag)
-            selection.subtract(check.toCheck)
-            stockCheck = check
-            onTagged()
+            let read = Export.stock(contents, products: products)
+            stock = read
+            // A single card picked from inventory must not take the whole
+            // store's stock off, so those rows start unticked there.
+            removalSelection = preselected == nil ? Set(Export.removals(read, rows: self.rows, prices: model.prices).remove.map(\.skuId)) : []
         } catch {
             checkError = error.localizedDescription
         }

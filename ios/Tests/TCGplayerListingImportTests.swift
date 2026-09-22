@@ -73,7 +73,9 @@ import Testing
     }
 
     @Test func anOrdersFileIsRefused() {
-        #expect(throws: TCGplayerPricingCSV.ReadError.missingColumns(["TCGplayer Id", "Set Name", "Total Quantity"])) {
+        // The order list shares no column with a pricing export, so every
+        // required column is missing. `mixedOrderList` changed shape in #13.
+        #expect(throws: TCGplayerPricingCSV.ReadError.missingColumns(TCGplayerPricingCSV.requiredColumns)) {
             try TCGplayerPricingCSV.read(SalesOrderImportTests.mixedOrderList)
         }
     }
@@ -165,43 +167,36 @@ import Testing
         #expect(again.alreadyListedCount == 6)
     }
 
-    // MARK: - Stock check
-
-    /// His situation, 2026-09-15: open orders the app has not imported, and
-    /// cards he listed by hand.
-    @Test @MainActor func theStockCheckTagsHandListingsAndFlagsWhatMaySold() throws {
+    /// One card record can hold several copies. A record of two against a
+    /// stock of two adds nothing.
+    @Test @MainActor func theImportCountsCopiesNotRecords() throws {
         let store = try CollectionStore.container(inMemory: true)
         let context = store.mainContext
-
-        // Charizard ex: three copies tagged listed, and TCGplayer has two left.
-        for day in ["2026-07-01", "2026-07-02", "2026-07-03"] {
-            _ = card(context, 1, printing: "Holofoil", acquired: day, tags: ["listed"])
-        }
-        // Charmander: one tagged copy and three untagged, against a stock of
-        // three. He listed two by hand.
-        _ = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-05-01", tags: ["listed"])
-        let oldest = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-05-02")
-        let middle = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-05-03")
-        let newest = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-05-04")
-        // Pidgeot ex: TCGplayer listed it once and has none left.
-        let pidgeot = card(context, 9, printing: "Holofoil", acquired: "2026-06-01")
-        _ = card(context, 9, printing: "Holofoil", acquired: "2026-06-02", tags: ["sold"])
-        // Base Set Charizard: TCGplayer never listed it.
-        let fresh = card(context, 2, printing: "Holofoil", acquired: "2026-08-01")
+        let pair = card(context, 1, printing: "Holofoil", acquired: "2026-07-01")
+        pair.quantity = 2
+        let bulk = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-07-01")
+        bulk.quantity = 5
         try context.save()
 
         let contents = try TCGplayerPricingCSV.read(Self.export)
-        let products = try Fixture.make().read { db in
-            try TCGplayerPricingCSV.products(db, rows: contents.rows + contents.emptyRows)
-        }
-        let result = TCGplayerStockCheck.check(contents, cards: try context.fetch(FetchDescriptor<OwnedCard>()), products: products)
+        let plan = TCGplayerListingImport.plan(contents, cards: try context.fetch(FetchDescriptor<OwnedCard>()), products: [5001: 1, 5003: 3])
 
-        #expect(result.soldOnTCGplayer == 1)
-        #expect(result.toTag == [oldest.id, middle.id])
-        #expect(result.toCheck == [newest.id, pidgeot.id])
-        #expect(!result.toTag.contains(fresh.id) && !result.toCheck.contains(fresh.id))
-        // Missingno has stock and no product.
-        #expect(result.unmatchedRows == 1)
+        // Charizard ex: stock 2, one record of 2.
+        let charizard = try #require(plan.lines.first { $0.row.skuId == 5001 })
+        #expect(charizard.toTag == [pair.id])
+        #expect(charizard.toAdd == 0)
+        // Charmander: stock 3, one record of 5. Nothing to add.
+        let charmander = try #require(plan.lines.first { $0.row.skuId == 5003 })
+        #expect(charmander.toTag == [bulk.id])
+        #expect(charmander.toAdd == 0)
+    }
+
+    /// The pricing export keeps his own price, which a row that takes stock
+    /// off must carry.
+    @Test func theMarketplacePriceIsRead() throws {
+        let contents = try TCGplayerPricingCSV.read(Self.export)
+        #expect(contents.rows.first { $0.skuId == 5001 }?.marketplaceCents == 4_400)
+        #expect(contents.rows.first { $0.skuId == 5003 }?.marketplaceCents == 30)
     }
 
     @Test @MainActor func noCostLeavesTheBasisEmpty() throws {

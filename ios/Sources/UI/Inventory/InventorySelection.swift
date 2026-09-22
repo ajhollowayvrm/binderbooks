@@ -212,9 +212,7 @@ private struct InventorySelectionChrome: ViewModifier {
                 }
             }
             .sheet(item: $listTarget) { target in
-                TCGplayerExportSheet(preselected: Set(target.cards.map(\.id))) {
-                    model.invalidateHaystacks()
-                }
+                TCGplayerExportSheet(preselected: Set(target.cards.map(\.id)))
             }
             .sheet(item: $purchaseTarget) { target in
                 ChoosePurchaseSheet(cards: target.cards) {

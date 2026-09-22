@@ -8,8 +8,11 @@ import Foundation
 /// thirteen are TCGplayer's reference columns. The import requires all sixteen,
 /// in this order, so the file keeps them and fills what the app knows.
 ///
-/// "Add to Quantity" adds to the stock already listed. A second import of the
-/// same cards lists them twice, which is why the sheet offers the `listed` tag.
+/// "Add to Quantity" adds to the stock already listed, and a negative value
+/// takes stock off. So the file needs what TCGplayer lists now, from Seller
+/// Portal's pricing export. Each row adds the copies he holds less the copies
+/// TCGplayer lists: one held and one listed writes 0, which changes only the
+/// price. A SKU TCGplayer lists and he no longer holds takes its stock off.
 enum TCGplayerListingExport {
     /// What he charges a buyer to ship one card, as typed. Empty is zero.
     static let shippingDefaultsKey = "tcgplayerShippingChargedCents"
@@ -44,12 +47,24 @@ enum TCGplayerListingExport {
     static func skipReason(for card: OwnedCard, hit: SearchHit?) -> SkipReason? {
         if CardTagIndex.isSold(card) { return .sold }
         guard card.isIdentified, let hit else { return .notInCatalog }
-        if card.isSlabbed { return .slab }
+        if isGraded(card) { return .slab }
         if card.isSealedSelf || hit.isSealed { return .sealed }
         if card.isPersonalCollection { return .personal }
         if ReservedTag.allAtGrader.contains(where: { CardTagIndex.has($0, on: card) }) { return .atGrader }
         if CardCondition(rawValue: card.condition) == nil { return .unknownCondition }
         return nil
+    }
+
+    /// True for every graded card. TCGplayer sells raw cards only, so a graded
+    /// card has no SKU there at all, and listing one as Near Mint
+    /// misdescribes it.
+    ///
+    /// `OwnedCard.isSlabbed` asks for a cert number, or a grader and a grade
+    /// together. A card that carries only one of the two, or only the `graded`
+    /// label, is graded all the same, and this reads all four signals.
+    static func isGraded(_ card: OwnedCard) -> Bool {
+        card.isSlabbed || card.certNumber != nil || card.graderRaw != nil || card.gradeLabel != nil
+            || CardTagIndex.has(ReservedTag.graded, on: card)
     }
 
     /// The card's own printing, or the product's only printing when the card
@@ -89,11 +104,22 @@ enum TCGplayerListingExport {
     struct Line: Identifiable, Equatable, Sendable {
         var key: SkuKey
         var hit: SearchHit
+        /// The copies he holds.
         var quantity: Int
         var marketCents: Int?
         var cardIds: [UUID]
+        /// The SKU's row in the pricing export. Nil when TCGplayer never
+        /// listed it.
+        var stock: TCGplayerPricingCSV.Row? = nil
 
         var id: SkuKey { key }
+        /// The copies TCGplayer lists now.
+        var listed: Int { stock?.line.quantity ?? 0 }
+        /// "Add to Quantity". Negative when TCGplayer lists more than he holds.
+        var addQuantity: Int { quantity - listed }
+        /// TCGplayer listed the SKU before and has none now. A copy that sold
+        /// there and is not marked sold looks the same, so the sheet says so.
+        var listedBefore: Bool { stock != nil && listed == 0 }
     }
 
     struct Plan: Equatable {
@@ -101,10 +127,78 @@ enum TCGplayerListingExport {
         var skipped: [SkipReason: Int] = [:]
     }
 
+    // MARK: - What TCGplayer lists now
+
+    /// A SKU as both files name it. The product fixes the language, because
+    /// the catalog files Japanese cards under their own category.
+    struct StockKey: Hashable, Sendable {
+        var productId: Int
+        var condition: String
+        var printing: String
+
+        init(productId: Int, condition: String, printing: String) {
+            self.productId = productId
+            self.condition = condition.lowercased()
+            self.printing = printing.lowercased()
+        }
+
+        init(_ key: SkuKey) {
+            self.init(productId: key.productId, condition: key.condition, printing: key.printing)
+        }
+    }
+
+    /// Seller Portal's pricing export, keyed so a line finds its SKU.
+    struct Stock: Equatable, Sendable {
+        /// Every SKU the catalog names, with stock or without.
+        var rows: [StockKey: TCGplayerPricingCSV.Row] = [:]
+        /// Rows with stock that the catalog cannot name, or with a condition
+        /// the app does not read. The file leaves them alone.
+        var unmatched: [TCGplayerPricingCSV.Row] = []
+        var unreadableRows: [Int] = []
+
+        func row(for key: SkuKey) -> TCGplayerPricingCSV.Row? { rows[StockKey(key)] }
+    }
+
+    static func stock(_ contents: TCGplayerPricingCSV.Contents, products: [Int: Int]) -> Stock {
+        var stock = Stock(unreadableRows: contents.unreadableRows)
+        for row in contents.rows + contents.emptyRows {
+            let wanted = SoldCondition.parse(row.line.condition, channel: .tcgplayer)
+            guard let productId = products[row.skuId], let condition = wanted.condition, let printing = wanted.printing else {
+                if row.line.quantity > 0 { stock.unmatched.append(row) }
+                continue
+            }
+            stock.rows[StockKey(productId: productId, condition: condition, printing: printing)] = row
+        }
+        return stock
+    }
+
+    /// The SKUs TCGplayer lists that no listable card on the books fills.
+    /// Their rows take the stock off. `rows` is the whole inventory, not the
+    /// cards he ticked, so an unticked card keeps its SKU on TCGplayer.
+    ///
+    /// A card with no printing chosen could be any printing of its product,
+    /// so that product's SKUs go to `unsure` and stay on TCGplayer.
+    static func removals(_ stock: Stock, rows: [InventoryRow], prices: [Int: [ProductPrice]]) -> (remove: [TCGplayerPricingCSV.Row], unsure: [TCGplayerPricingCSV.Row]) {
+        var held: Set<StockKey> = []
+        var unsureProducts: Set<Int> = []
+        for row in rows {
+            let reason = skipReason(for: row, prices: prices)
+            if reason == .noPrinting, let hit = row.hit { unsureProducts.insert(hit.productId) }
+            guard reason == nil, let hit = row.hit, let printing = printing(for: row.card, prices: prices[hit.productId] ?? []) else { continue }
+            held.insert(StockKey(productId: hit.productId, condition: row.card.condition, printing: printing))
+        }
+        var remove: [TCGplayerPricingCSV.Row] = []
+        var unsure: [TCGplayerPricingCSV.Row] = []
+        for (key, row) in stock.rows where row.line.quantity > 0 && !held.contains(key) {
+            if unsureProducts.contains(key.productId) { unsure.append(row) } else { remove.append(row) }
+        }
+        return (remove.sorted { $0.lineNumber < $1.lineNumber }, unsure.sorted { $0.lineNumber < $1.lineNumber })
+    }
+
     /// `holdingOne` names the cards that must leave one copy behind, for a set
     /// he is master setting. A card with one copy drops out of the file. See
     /// `MasterSetHold`.
-    static func plan(_ rows: [InventoryRow], prices: [Int: [ProductPrice]], holdingOne: Set<UUID> = []) -> Plan {
+    static func plan(_ rows: [InventoryRow], prices: [Int: [ProductPrice]], holdingOne: Set<UUID> = [], stock: Stock = Stock()) -> Plan {
         var plan = Plan()
         var byKey: [SkuKey: Line] = [:]
         for row in rows {
@@ -122,7 +216,8 @@ enum TCGplayerListingExport {
             var line = byKey[key] ?? Line(
                 key: key, hit: hit, quantity: 0,
                 marketCents: rows.first { $0.subTypeName == printing }?.marketCents,
-                cardIds: []
+                cardIds: [],
+                stock: stock.row(for: key)
             )
             var quantity = max(1, row.card.quantity)
             if holdingOne.contains(row.card.id) { quantity -= 1 }
@@ -171,7 +266,12 @@ enum TCGplayerListingExport {
     /// AJ's rule, 2026-09-15: a card with no listing under 20 cents is not
     /// worth an order. A single cheap order leaves about 31 cents after fees
     /// and postage, nearly all of it from the shipping he charges.
-    static let floorCents = 20
+    ///
+    /// He sets the figure in the export sheet, because what an order is worth
+    /// moves with the fees and with what he charges to ship. Twenty cents is
+    /// where it started.
+    static let defaultFloorCents = 20
+    static let floorDefaultsKey = "tcgplayerFloorCents"
 
     /// AJ's rule, 2026-09-11, amended 2026-09-15. At $5 and up the card lists
     /// at its market price and waits: matching the cheapest listing sold nine
@@ -194,8 +294,10 @@ enum TCGplayerListingExport {
 
     /// True when the card stays out of the file: its cheapest listing, not
     /// counting shipping, is under the floor. With no listing the market price
-    /// decides. A card worth $5 or more is never under it.
-    static func isBelowFloor(lowest: TCGplayerMarketClient.Listing?, marketCents: Int?) -> Bool {
+    /// decides. A card worth $5 or more is never under it. The builder asks
+    /// only about a SKU TCGplayer does not list, because a listed SKU needs
+    /// its row to keep the stock right.
+    static func isBelowFloor(lowest: TCGplayerMarketClient.Listing?, marketCents: Int?, floorCents: Int = defaultFloorCents) -> Bool {
         if let marketCents, marketCents >= ProductPrice.marketRuleCents { return false }
         if let lowest { return lowest.priceCents < floorCents }
         return (marketCents ?? 0) < floorCents
@@ -217,7 +319,9 @@ enum TCGplayerListingExport {
     // MARK: - The file
 
     /// CRLF line ends, the way a spreadsheet writes a CSV.
-    static func csv(_ rows: [Priced], categoryNames: [Int: String]) -> String {
+    /// `removals` are pricing-export rows whose stock comes off. They keep
+    /// TCGplayer's own names and his own price.
+    static func csv(_ rows: [Priced], removals: [TCGplayerPricingCSV.Row] = [], categoryNames: [Int: String]) -> String {
         var lines = [header.map(field).joined(separator: ",")]
         for row in rows {
             let hit = row.line.hit
@@ -235,8 +339,19 @@ enum TCGplayerListingExport {
                 row.lowest.map { Money.fieldText($0.totalCents) } ?? "",
                 row.lowest.map { Money.fieldText($0.priceCents) } ?? "",
                 "",
-                String(row.line.quantity),
+                String(row.line.addQuantity),
                 Money.fieldText(row.priceCents),
+                "",
+            ]
+            lines.append(values.map(field).joined(separator: ","))
+        }
+        for row in removals {
+            let line = row.line
+            let values = [
+                String(row.skuId), line.productLine, line.setName, line.productName, "", line.number, "", line.condition,
+                "", "", "", "", "",
+                String(-line.quantity),
+                Money.fieldText(max(minimumPriceCents, row.marketplaceCents ?? 0)),
                 "",
             ]
             lines.append(values.map(field).joined(separator: ","))
@@ -271,6 +386,8 @@ enum TCGplayerListingExport {
         var market = 0
         var atMarket = 0
         var belowFloor = 0
+        /// The floor this run used, so the summary names his figure.
+        var floorCents = defaultFloorCents
         var noSku = 0
         var unpriced = 0
         var failed = 0

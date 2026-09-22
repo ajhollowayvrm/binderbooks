@@ -16,6 +16,9 @@ enum TCGplayerPricingCSV {
         /// The row in the shape `SalesOrderCatalog` reads. Its quantity is
         /// "Total Quantity".
         var line: SalesOrderCSV.Line
+        /// "TCG Marketplace Price", his own price now. A row that takes stock
+        /// off keeps it, because the import requires a price on every row.
+        var marketplaceCents: Int? = nil
 
         var id: Int { skuId }
     }
@@ -84,7 +87,8 @@ enum TCGplayerPricingCSV {
                     line: SalesOrderCSV.Line(
                         productLine: value("Product Line"), setName: value("Set Name"), number: value("Number"),
                         productName: value("Product Name"), condition: value("Condition"), skuId: skuId, quantity: quantity
-                    )
+                    ),
+                    marketplaceCents: cents(value("TCG Marketplace Price"))
                 )
             }
             guard quantity > 0 else {
@@ -98,6 +102,12 @@ enum TCGplayerPricingCSV {
             contents.rows.append(makeRow(skuId))
         }
         return contents
+    }
+
+    /// The export writes four decimals, "44.0000", which `Money.cents` refuses.
+    static func cents(_ text: String) -> Int? {
+        guard !text.isEmpty, let value = Decimal(string: text) else { return nil }
+        return NSDecimalNumber(decimal: value * 100).rounding(accordingToBehavior: nil).intValue
     }
 
     /// The catalog product behind each SKU, keyed by SKU id. The file names the
@@ -124,9 +134,8 @@ enum TCGplayerPricingCSV {
 /// - **To tag.** A held copy has no `listed` tag. It takes the tag.
 /// - **To add.** No held copy is left. The import adds a card with the tag.
 ///
-/// The `listed` tag is what keeps `TCGplayerExportSheet` from uploading the
-/// copy a second time. The import never removes a tag or a card. A file that
-/// lists fewer copies than he holds leaves the other copies alone.
+/// The import never removes a tag or a card. A file that lists fewer copies
+/// than he holds leaves the other copies alone.
 @MainActor
 enum TCGplayerListingImport {
     typealias Row = TCGplayerPricingCSV.Row
@@ -198,17 +207,22 @@ enum TCGplayerListingImport {
                 continue
             }
 
-            let taken = (pool[productId] ?? [])
-                .filter { !used.contains($0.id) && wanted.fits($0) }
-                .sorted(by: holdOrder)
-                .prefix(row.line.quantity)
+            // One card record can hold several copies, so the stock counts
+            // against copies, not against records.
+            var taken: [OwnedCard] = []
+            var covered = 0
+            for card in (pool[productId] ?? []).filter({ !used.contains($0.id) && wanted.fits($0) }).sorted(by: holdOrder) {
+                guard covered < row.line.quantity else { break }
+                taken.append(card)
+                covered += max(1, card.quantity)
+            }
             used.formUnion(taken.map(\.id))
 
             plan.lines.append(Line(
                 row: row, productId: productId, condition: condition, printing: printing,
                 alreadyListed: taken.filter { CardTagIndex.has(ReservedTag.listed, on: $0) }.map(\.id),
                 toTag: taken.filter { !CardTagIndex.has(ReservedTag.listed, on: $0) }.map(\.id),
-                toAdd: row.line.quantity - taken.count
+                toAdd: max(0, row.line.quantity - covered)
             ))
         }
         return plan
@@ -257,62 +271,5 @@ enum TCGplayerListingImport {
         CardTagEditor(context: context).add(ReservedTag.listed, to: tagged + added)
         try context.save()
         return Report(tagged: tagged.count, added: added.count)
-    }
-}
-
-/// The pricing export against the cards the listing export would upload.
-///
-/// TCGplayer takes a copy off its stock the moment a buyer pays, so the
-/// pricing export counts what is still for sale, open orders included. He lists
-/// some cards by hand, and he often has open orders the app has not imported.
-/// The listing export uploads only copies with no `listed` tag, so only those
-/// copies need a decision:
-///
-/// - **To tag.** TCGplayer has more stock than he has tagged. He listed those
-///   copies by hand, so they take the tag.
-/// - **To check.** The other untagged copies of a SKU TCGplayer has listed.
-///   Probably a hand listing that sold, but a copy he never listed looks the
-///   same, so he decides.
-///
-/// Tagged copies beyond the stock sold on TCGplayer. The export already leaves
-/// them unticked, so they are only counted.
-@MainActor
-enum TCGplayerStockCheck {
-    struct Result: Equatable {
-        var toTag: [UUID] = []
-        var toCheck: Set<UUID> = []
-        var soldOnTCGplayer = 0
-        /// Rows with stock that the catalog cannot name, or with a condition
-        /// the app does not read.
-        var unmatchedRows = 0
-        var unreadableRows: [Int] = []
-    }
-
-    static func check(_ contents: TCGplayerPricingCSV.Contents, cards: [OwnedCard], products: [Int: Int]) -> Result {
-        var result = Result(unreadableRows: contents.unreadableRows)
-        let pool = Dictionary(grouping: cards.filter(SalesOrderImport.isSellable), by: \.productId)
-        var used: Set<UUID> = []
-        // Rows with stock first, so a copy with no printing counts against stock
-        // before it counts against a SKU that has none.
-        for row in contents.rows + contents.emptyRows {
-            let wanted = SoldCondition.parse(row.line.condition, channel: .tcgplayer)
-            guard let productId = products[row.skuId], wanted.condition != nil, wanted.printing != nil else {
-                if row.line.quantity > 0 { result.unmatchedRows += 1 }
-                continue
-            }
-            let copies = (pool[productId] ?? []).filter { !used.contains($0.id) && wanted.fits($0) }
-            used.formUnion(copies.map(\.id))
-
-            let tagged = copies.filter { CardTagIndex.has(ReservedTag.listed, on: $0) }
-            let untagged = copies
-                .filter { !CardTagIndex.has(ReservedTag.listed, on: $0) }
-                .sorted { ($0.acquiredAt, $0.id.uuidString) < ($1.acquiredAt, $1.id.uuidString) }
-            let stock = row.line.quantity
-            result.soldOnTCGplayer += max(0, tagged.count - stock)
-            let handListed = max(0, stock - tagged.count)
-            result.toTag += untagged.prefix(handListed).map(\.id)
-            result.toCheck.formUnion(untagged.dropFirst(handListed).map(\.id))
-        }
-        return result
     }
 }
