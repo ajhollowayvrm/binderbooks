@@ -4,8 +4,7 @@ import Foundation
 ///
 /// The ledger answers "what happened". This answers AJ's questions, in his
 /// words of 2026-09-22: what do I have, what have I spent, what have I earned,
-/// and what is the potential. Grading potential he judges himself, from the
-/// comps on each card.
+/// and what is the potential, grading included, from his own comps.
 ///
 /// It totals and it does not slice. No vendor, no set, no product, no channel —
 /// decision 23 in docs/00-brief.md, amended 2026-09-11 to allow the totals and
@@ -35,6 +34,20 @@ struct LedgerSummary: Equatable {
     /// Every held card out at a grader, the personal collection too.
     var atGraderCount = 0
 
+    // Grading. A slab that came back counts at his comp for its grade, in
+    // `heldAtMarketCents` too. A card still at a grader makes a range: his
+    // lowest comp for that grader to his best. He judges the grade himself,
+    // so the range is his own figures, not a forecast.
+    /// The cards to sell, with every card at a grader at its lowest comp.
+    var gradedLowCents = 0
+    /// The same, at its best comp.
+    var gradedHighCents = 0
+    /// Cards to sell that are at a grader and carry comps for it.
+    var atGraderWithCompsCount = 0
+    /// Cards to sell that are at a grader with no comps. They count at the
+    /// raw print's price in both figures.
+    var atGraderWithoutCompsCount = 0
+
     /// Everything that went out: purchases, grading, and expenses.
     var spentCents: Int { purchasesCents + gradingCents + expensesCents }
 
@@ -48,6 +61,17 @@ struct LedgerSummary: Equatable {
     /// selling costs.
     func ifSoldTodayCents(_ costs: SellingCosts) -> Int {
         profitCents + costs.net(heldAtMarketCents)
+    }
+
+    /// The profit if every card at a grader comes back at its lowest comp,
+    /// and he then sells every card to sell.
+    func ifGradedLowCents(_ costs: SellingCosts) -> Int {
+        profitCents + costs.net(gradedLowCents)
+    }
+
+    /// The same, with every card at a grader at its best comp.
+    func ifGradedHighCents(_ costs: SellingCosts) -> Int {
+        profitCents + costs.net(gradedHighCents)
     }
 }
 
@@ -80,6 +104,16 @@ extension LedgerSummary {
         return !CardTagIndex.has(ReservedTag.graded, on: card) && card.gradeLabel == nil
     }
 
+    /// What one card is worth now. A slab that came back counts at his comp
+    /// for the grade it got. Everything else, and a slab with no comp for its
+    /// grade, counts at the catalog's price.
+    static func valueCents(_ card: OwnedCard, marketCents: (OwnedCard) -> Int?) -> Int {
+        if let graded = GradedComps.value(grader: card.graderRaw, grade: card.gradeLabel, in: card.effectiveCompCents) {
+            return graded
+        }
+        return marketCents(card) ?? 0
+    }
+
     /// Cash and profit, from the money rows alone.
     ///
     /// `held` is the cards still in inventory, already filtered by `isHeld`.
@@ -110,13 +144,27 @@ extension LedgerSummary {
             if Self.isAtGrader(card) { s.atGraderCount += quantity }
             // His call, 2026-09-22: a card he keeps is not for sale, so it
             // does not count in what he could sell today.
+            let value = Self.valueCents(card, marketCents: marketCents) * quantity
             if card.isPersonalCollection {
                 s.personalCardCount += quantity
-                s.personalAtMarketCents += (marketCents(card) ?? 0) * quantity
-            } else {
-                s.heldCardCount += quantity
-                s.heldAtMarketCents += (marketCents(card) ?? 0) * quantity
+                s.personalAtMarketCents += value
+                continue
             }
+            s.heldCardCount += quantity
+            s.heldAtMarketCents += value
+
+            if Self.isAtGrader(card) {
+                let grader = GradedComps.graderAtGrader(tags: card.tags)
+                if let grader, let range = GradedComps.range(for: grader, in: card.effectiveCompCents) {
+                    s.atGraderWithCompsCount += quantity
+                    s.gradedLowCents += range.lowerBound * quantity
+                    s.gradedHighCents += range.upperBound * quantity
+                    continue
+                }
+                s.atGraderWithoutCompsCount += quantity
+            }
+            s.gradedLowCents += value
+            s.gradedHighCents += value
         }
 
         return s

@@ -60,7 +60,8 @@ reads a basis.
   money in less money out. "If you sold today" adds the market value of the held
   cards, less selling costs, with the personal collection left out. The grading
   outlook is gone: the Summary answers AJ's questions (what he has, spent, earned,
-  and the potential), and he judges grading potential from each card's comps.
+  and the potential). The potential counts a returned slab at its grade's comp,
+  and adds a low and a best figure from the comps of the cards at a grader.
 
 ---
 

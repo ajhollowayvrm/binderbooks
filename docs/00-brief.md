@@ -221,9 +221,11 @@ reason attached.
     The outlook also reads a fee rate off his own orders, which is the settings
     surface `02` asks for. Keep it to that one rate; the bulk-listing floor and the
     grade-or-not calculator are still not built and still need his sign-off first.
-    **Amended 2026-09-22:** the grading outlook is removed. He judges grading
-    potential himself, from the comps on each card. The Summary answers his four
-    other questions: what he has, what he spent, what he earned, and the potential.
+    **Amended 2026-09-22:** the grading outlook and its grade picker are removed.
+    The Summary answers his questions: what he has, what he spent, what he earned,
+    and the potential. The potential includes grading from his own comps: a slab
+    that came back counts at its grade's comp, and the cards at a grader add a
+    low and a best figure.
 
 ---
 

@@ -5,8 +5,9 @@ import SwiftUI
 /// order of 2026-09-22. What do I have, what have I spent, what have I earned,
 /// where does that leave me, and what is the potential.
 ///
-/// Grading potential is not here. He judges it himself, from the comps on
-/// each card.
+/// Grading potential sits in the potential, as his own comps: a slab that
+/// came back counts at its grade's comp, and a card still at a grader gives a
+/// low and a best figure. There is no grade picker; he judges the grade.
 ///
 /// Every figure covers the whole business over the whole period. Nothing here
 /// is broken down by vendor, set, or product — decision 23.
@@ -89,10 +90,14 @@ struct LedgerSummaryView: View {
                 row("Cards to sell, at market", s.heldAtMarketCents)
                 deduction("Selling costs (\(costs.percentText))", s.heldAtMarketCents - costs.net(s.heldAtMarketCents))
                 signed("If you sold today", s.ifSoldTodayCents(costs), weight: .bold)
+                if s.atGraderWithCompsCount > 0 {
+                    signed("If graded cards come back low", s.ifGradedLowCents(costs))
+                    signed("If graded cards come back best", s.ifGradedHighCents(costs), weight: .bold)
+                }
             } header: {
                 Text("The potential")
             } footer: {
-                Text("Where you are, plus what the cards to sell would bring at market, less your selling costs. Your personal collection is not counted. Selling costs come from your own orders. Change the rate in Settings.")
+                Text(potentialFootnote(s))
             }
         }
         .task(id: cards.count) {
@@ -101,13 +106,24 @@ struct LedgerSummaryView: View {
     }
 
     private func haveFootnote(_ s: LedgerSummary) -> String {
-        var parts = ["Market value comes from the catalog's prices. Sold cards are not counted."]
+        var parts = ["Market value comes from the catalog's prices. A graded card that came back counts at your comp for its grade. Sold cards are not counted."]
         if s.atGraderCount > 0 {
-            // Their market figure is the raw print, not the slab. Saying so
-            // beats quietly swapping in a projection, which would put a guess
-            // inside a position figure.
-            parts.append("Cards at a grader count at the raw print's price. Their graded comps are on each card.")
+            // Their market figure is the raw print, not the slab. What they
+            // could come back worth is in the potential, as a range.
+            parts.append("Cards at a grader count at the raw print's price here.")
         }
+        return parts.joined(separator: " ")
+    }
+
+    private func potentialFootnote(_ s: LedgerSummary) -> String {
+        var parts = ["Where you are, plus what the cards to sell would bring, less your selling costs. Your personal collection is not counted."]
+        if s.atGraderWithCompsCount > 0 {
+            parts.append("\"Come back low\" counts each card at a grader at your lowest comp for that grader. \"Best\" counts it at your best comp.")
+        }
+        if s.atGraderWithoutCompsCount > 0 {
+            parts.append("\(s.atGraderWithoutCompsCount) \(s.atGraderWithoutCompsCount == 1 ? "card" : "cards") at a grader \(s.atGraderWithoutCompsCount == 1 ? "has" : "have") no comps and count at the raw price. Enter comps on the card to include them.")
+        }
+        parts.append("Selling costs come from your own orders. Change the rate in Settings.")
         return parts.joined(separator: " ")
     }
 

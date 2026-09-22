@@ -194,8 +194,10 @@ have (the cards to sell and the personal collection, at market), what you spent
 (purchases, grading, and expenses), what you earned (sales, net), where you are
 (earned less spent), and the potential (where you are, plus the cards to sell at
 market less selling costs). A card carries no cost, so the cards he holds count
-as nothing until they sell. Grading potential is not a section: he judges it
-from the comps on each card.
+as nothing until they sell. A slab that came back counts at his comp for its
+grade. The potential adds two figures when cards are out at a grader: every
+such card at his lowest comp for that grader, and at his best. There is no
+grade picker; he judges the grade himself.
 
 ### Selling costs
 

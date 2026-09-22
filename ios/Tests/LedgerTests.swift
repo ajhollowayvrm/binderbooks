@@ -252,6 +252,46 @@ import Testing
         #expect(s.ifSoldTodayCents(costs) == s.profitCents + costs.net(1_000))
     }
 
+    /// His call, 2026-09-22: the potential includes grading, from his own
+    /// comps. A slab that came back counts at its grade's comp. A card at a
+    /// grader gives a low and a best figure. A card at a grader with no comps
+    /// counts at the raw price in both.
+    @Test @MainActor func thePotentialCountsGradingFromHisComps() throws {
+        let container = try store()
+        let context = container.mainContext
+
+        let raw = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .manual)
+        let slab = OwnedCard(productId: 2, printing: "Normal", condition: "Near Mint", confidence: .manual)
+        slab.graderRaw = "psa"
+        slab.gradeLabel = "10"
+        slab.gradedCompCents = ["PSA 10": 20_000, "PSA 9": 8_000]
+        let away = OwnedCard(productId: 3, printing: "Normal", condition: "Near Mint", confidence: .manual)
+        away.tags = [ReservedTag.atGrader("cgc")]
+        away.gradedCompCents = ["CGC 10": 30_000, "CGC 9": 12_000, "PSA 10": 90_000]
+        let noComps = OwnedCard(productId: 4, printing: "Normal", condition: "Near Mint", confidence: .manual)
+        noComps.tags = [ReservedTag.atGrader("psa")]
+        for card in [raw, slab, away, noComps] { context.insert(card) }
+        try context.save()
+
+        let market: [Int: Int] = [1: 1_000, 2: 5_000, 3: 4_000, 4: 2_000]
+        let s = LedgerSummary.make(
+            purchases: [], grading: [], sales: [], expenses: [],
+            held: [raw, slab, away, noComps], marketCents: { market[$0.productId] }
+        )
+
+        // What he has: the slab at its PSA 10 comp, the others at raw.
+        #expect(s.heldAtMarketCents == 1_000 + 20_000 + 4_000 + 2_000)
+        #expect(s.atGraderWithCompsCount == 1)
+        #expect(s.atGraderWithoutCompsCount == 1)
+        // The card at CGC counts at its CGC comps only, 12000 to 30000.
+        #expect(s.gradedLowCents == 1_000 + 20_000 + 12_000 + 2_000)
+        #expect(s.gradedHighCents == 1_000 + 20_000 + 30_000 + 2_000)
+        let free = SellingCosts(rateBasisPoints: 0)
+        #expect(s.ifGradedLowCents(free) == 35_000)
+        #expect(s.ifGradedHighCents(free) == 53_000)
+        #expect(s.ifSoldTodayCents(free) == 27_000)
+    }
+
     /// An imported card keeps `statusRaw` at `atGrader`. "Mark graded" used to
     /// take off only the label, so the Summary still counted the card as out
     /// at a grader after he had graded it PSA 10.
