@@ -141,7 +141,7 @@ import Testing
         #expect(plan.toTagCount == 2)
         #expect(plan.toAddCount == 3)
 
-        let report = try TCGplayerListingImport.apply(plan, costCents: 301, context: context)
+        let report = try TCGplayerListingImport.apply(plan, context: context)
         #expect(report.tagged == 2)
         #expect(report.added == 3)
 
@@ -154,8 +154,7 @@ import Testing
         let all = try context.fetch(FetchDescriptor<OwnedCard>())
         let added = all.filter { $0.skuId == 5003 && $0.id != noPrinting.id } + all.filter { $0.skuId == 7001 }
         #expect(added.count == 3)
-        #expect(added.allSatisfy { CardTagIndex.has(ReservedTag.listed, on: $0) && $0.basisIsManual })
-        #expect(added.map(\.acquisitionBasisCents).sorted() == [100, 100, 101])
+        #expect(added.allSatisfy { CardTagIndex.has(ReservedTag.listed, on: $0) })
         #expect(added.first { $0.skuId == 7001 }?.productId == 7)
 
         // The listing export must not offer the imported copies again.
@@ -197,18 +196,6 @@ import Testing
         let contents = try TCGplayerPricingCSV.read(Self.export)
         #expect(contents.rows.first { $0.skuId == 5001 }?.marketplaceCents == 4_400)
         #expect(contents.rows.first { $0.skuId == 5003 }?.marketplaceCents == 30)
-    }
-
-    @Test @MainActor func noCostLeavesTheBasisEmpty() throws {
-        let store = try CollectionStore.container(inMemory: true)
-        let contents = try TCGplayerPricingCSV.read(Self.export)
-        let plan = TCGplayerListingImport.plan(contents, cards: [], products: [5001: 1])
-        try TCGplayerListingImport.apply(plan, costCents: nil, context: store.mainContext)
-
-        let cards = try store.mainContext.fetch(FetchDescriptor<OwnedCard>())
-        #expect(cards.count == 2)
-        #expect(cards.allSatisfy { $0.acquisitionBasisCents == 0 && !$0.basisIsManual })
-        #expect(cards.allSatisfy { $0.condition == "Near Mint" && $0.printing == "Holofoil" && $0.isCommitted })
     }
 }
 
@@ -253,7 +240,7 @@ import Testing
         #expect(plan.skipped.isEmpty)
         #expect(plan.alreadyListedCount + plan.toTagCount + plan.toAddCount == contents.copyCount)
 
-        try TCGplayerListingImport.apply(plan, costCents: nil, context: context)
+        try TCGplayerListingImport.apply(plan, context: context)
         let again = TCGplayerListingImport.plan(contents, cards: try context.fetch(FetchDescriptor<OwnedCard>()), products: products)
         #expect(!again.hasWork)
     }

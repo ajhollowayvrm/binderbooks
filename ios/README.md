@@ -26,7 +26,7 @@ iOS 26.0. Every simulator on the Mac and the phone run iOS 26. The data model in
 |---|---|
 | `Sources/BinderBooksApp.swift` | The entry point. Starts the catalog controller. |
 | `Sources/Catalog/` | Step 2: manifest, download, checksum, gunzip, sanity checks, atomic swap. |
-| `Sources/Model/` | The collection store: `Purchase`, `PurchaseItem`, `OwnedCard`, `ScanSession` in SwiftData, and the allocator. |
+| `Sources/Model/` | The collection store: `Purchase`, `PurchaseItem`, `OwnedCard`, `ScanSession` in SwiftData, and the rip (`Rip`). |
 | `Sources/Scan/` | Step 4: the VisionKit scanner, the frame interpreter, the matcher, the printing rules, and the session model. |
 | `Sources/Inventory/` | Step 5: the inventory model, filters, and summary. |
 | `Sources/Search/` | Step 3: the query builder, the ranker, the engine, the debounced model, and recently viewed. |
@@ -91,10 +91,9 @@ table and marks the card uncertain unless the session has a printing default.
 
 Every match persists as an `OwnedCard` on the `ScanSession` the moment it lands.
 Review defaults to the cards that need a look, supports multi-select edits of
-condition, printing, set, and bulk, and commits the session to a purchase. Commit
-creates one `PurchaseItem` per card, runs the equal-split allocator across the
-non-bulk lines, and writes each card's basis with `basisIsAllocated` set. A card is
-inventory once its session commits.
+condition, printing, set, and bulk, and commits the session. Commit ties the cards
+to no purchase and gives them no cost: purchases are money out on the ledger and
+nothing else (AJ's call, 2026-09-22). A card is inventory once its session commits.
 
 The simulator has no camera. Debug builds show a text field in the viewfinder that
 feeds the same path. See the debug launch variables below.
@@ -121,7 +120,7 @@ it is the one he scans into next and an order with no cards is the one he attach
 them to.
 
 `InventoryView` lists committed cards newest first with market value from the
-catalog, the basis, and the difference. Filters are two chips: tags and set. Tags
+catalog. Filters are two chips: tags and set. Tags
 replaced the status chips, and he narrows by label more than by anything else.
 The confidence, slab, bulk, and personal filters stay in `InventoryFilter` but
 have no chip; the row markers still show confidence and bulk.
@@ -136,37 +135,40 @@ disagree: `SellSheet` writes only the label, and an imported row carries only th
 status until `StatusTagBackfill` runs.
 
 A sold card is still reachable on its order in the Ledger, which is where it
-belongs. Its row, basis, tags and comps all stay in the store, so Unsell on the
+belongs. Its row, tags and comps all stay in the store, so Unsell on the
 order puts it straight back.
 
 **Copies of one thing are one line.** Nine Destined Rivals packs off one purchase
-are nine `OwnedCard` rows — each pack is ripped on its own and carries its own
-share of what the purchase cost — and the page drew nine identical cells. It now
+are nine `OwnedCard` rows — each pack is ripped on its own — and the page drew
+nine identical cells. It now
 draws one, with "×9" on the art, and the count in the list row. `InventoryStack`
-does the grouping: cards whose product, printing, condition, language, labels,
-kind and hand-entered price all match. A slab never stacks, because its cert, its
+does the grouping: cards whose product, printing, condition, language, kind and
+hand-entered price all match. Labels and the personal collection do not split a
+line, because they say what a copy is doing, not what it is (AJ's call,
+2026-09-22). A label only some copies carry shows as "1 of 2 listed". A slab never stacks, because its cert, its
 grade and its value are its own. A tap on a stacked line pushes `CardStackView`,
 which derives the copies again from the live rows and pushes each one's own
 detail — the lead card's detail alone would hide the other eight, and each copy
-has its own cost, its own tags, and its own pack to rip.
+has its own tags and its own pack to rip. The card screen and the copies screen
+carry a plus that adds one more copy.
 
 The grouping is display only. Nothing is written, and `InventoryModel.rows` still
 answers per card: the sort, the chips, the query, the selection and Metrics all
 read cards, and a stack sits where its first copy sorted. A stacked line keeps the
 price of one — the row must show the number the list sorted by — and carries the
-total value under it, with the cost and the gain covering every copy. Selecting a
+total value under it. Selecting a
 stacked line takes every copy on it, and Metrics counts it once under "Lines".
 
 The money sits behind the **Metrics** button, not above the cards. The sheet
 reports what the current chips and query left on the page, so its figures always
 match the cards behind it. Graded cards render as a small slab with the grader and
-cert number on the label. The detail screen shows the basis breakdown, the source
-purchase, and the edits that need no other model.
+cert number on the label. The detail screen shows the value, the graded comps, and
+the edits that need no other model.
 
 Layout is one global preference in `cardLayout`, and grid is the default. One toggle
 beside the chips rules the inventory page, the collection section, and the catalog
-section. A grid cell cannot hold the basis or the gain; read those in list layout,
-in the summary tiles, or on the card detail.
+section. A grid cell shows less than a list row; read the detail in list layout or on the
+card screen.
 
 **Tags** are free-form labels: "binder 3", "for sale", "PSA queue". `TagKey` folds
 case and inner space but never punctuation, because a label is his own text. **A long press on a card starts selection**, with that card ticked; the Tag menu in
@@ -178,23 +180,6 @@ matches in the search field. The reserved labels `sold`, `listed`, `at grader`,
 old status into its label once, and `OwnedCard.statusRaw` stays in the store and in
 the export for one release, because a dropped field cannot be read back.
 
-Every card with a cost and a market price shows the difference, including a cost
-split out of a purchase. The Metrics sheet reports how many of those costs were
-derived rather than paid for one card. See the 2026-09-10 amendment in docs/04.
-
-## Pricing at review
-
-He sets a **total** for a selection, and the Cost button splits it evenly over
-those cards. `OwnedCard.basisIsManual` then marks the basis as his:
-
-- The purchase total at commit covers everything. What he priced comes out
-  first, and the remainder splits over the cards he did not price. Typing more
-  than the total leaves the split at zero and rewrites nothing.
-- A split over several cards stays `basisIsAllocated`, which reports that the
-  cost was derived. It no longer hides the gain: every card with a cost and a
-  market price shows the difference, because that is the figure he compares a
-  sale against.
-
 ## Ledger
 
 Two halves, on one segmented control under the navigation bar.
@@ -204,47 +189,21 @@ expenses in one list, newest first, in month sections that each carry their own
 two totals. `All`, `In`, and `Out` filter it, and that control lives inside the
 list because it belongs to the list.
 
-**Summary** answers "how am I actually doing", which a list of transactions
-cannot. Five sections: the realized gain with the count of orders it covers, the
-periodic P&L (`revenue − COGS − expenses`, with `COGS = beginning + purchases −
-ending`), the grading outlook below, what he holds at cost and at market, and the
-cash totals that used to sit on top of Activity.
-
-### If everything grades 10
-
-40 cards are out at PSA and CGC with $3,233.77 in them, and the question that
-follows is whether the best case clears the hole. The section answers it from his
-own comps and his own fee rate, with a picker for 10, 9, 8, or his lowest figure.
-
-```
-profitAfter    = profitToday + net − cost
-breakEvenNet   = cost − profitToday
-```
-
-Selling a card moves its proceeds into revenue and takes its cost out of ending
-inventory, so the whole scenario is one addition rather than a second P&L.
-
-Three things it gets right that are easy to get wrong:
-
-- **"Priced at this grade" is the honesty of the section.** Coverage moves with the
-  grade — 32 of 40 carry a figure at 10, only 23 at 9 — because 14 CGC cards have a
-  `CGC 10` and 5 have a `CGC 9`. Without the count, a gap in his comps reads as a
-  collapse in value.
-- **A card with no figure at that grade counts as nothing**, never as the raw
-  print's price. A slab projection and an ungraded catalogue price are different
-  numbers and must not be added together.
-- **`GradedComps.value(at:for:in:)` matches on the parsed grade number**, so
-  "CGC Pristine 10" and "CGC 10" compete and the better one wins. No card in his
-  store carries a Pristine figure, so a lookup keyed on the head of `cgcGrades`
-  would answer nil for every CGC card.
+**Summary** answers AJ's questions of 2026-09-22, one section each: what you
+have (the cards to sell and the personal collection, at market), what you spent
+(purchases, grading, and expenses), what you earned (sales, net), where you are
+(earned less spent), and the potential (where you are, plus the cards to sell at
+market less selling costs). A card carries no cost, so the cards he holds count
+as nothing until they sell. Grading potential is not a section: he judges it
+from the comps on each card.
 
 ### Selling costs
 
-`SellingCosts` is basis points, `Int`, so the projection never picks up float drift
+`SellingCosts` is basis points, `Int`, so the potential never picks up float drift
 on the way to a cents figure. `ChannelRates.derived(from:)` reads the rate off his
 own 131 orders rather than asking him to type one — TCGplayer 10.40%, eBay 14.44%,
 and 3.22% of gross in shipping he pays. Settings shows each channel and takes one
-override for the projection; clearing the field goes back to the derived blend.
+override for the potential; clearing the field goes back to the derived blend.
 
 The blend is 17.69%, and one $1,150 local sale at 18.69% is a third of his lifetime
 gross, so it pulls the figure up. That is why the override exists and why Settings
@@ -258,27 +217,17 @@ store.
 
 Two things the arithmetic gets right and are easy to get wrong:
 
-- **A sold card keeps its row and its basis.** `LedgerSummary.isHeld` drops sold
-  and lost cards, or ending inventory, the position, and the profit would all be
-  inflated by everything he has ever sold. It shares `CardTagIndex.isSold` with
-  the inventory, so a card cannot be off the inventory page and inside the
-  ending inventory at the same time.
-- **Grading is capitalised** into `OwnedCard.gradingBasisCents`, so a submission's
-  cost counts as a purchase *and* comes back in ending inventory for every card
-  still held. Both sides, or neither. `Allocation.capitalise` runs at **send**, not
-  only at return: the P&L counts a submission in purchases from the moment it
-  exists, so a fee that is not also in ending inventory reads as a straight loss
-  for as long as the cards are away. `GradingReturnSheet` re-allocates and
-  overwrites with the real invoice.
+- **A sold card keeps its row.** `LedgerSummary.isHeld` drops sold and lost cards,
+  or what he has and the potential would both be inflated by everything he has
+  ever sold. It shares `CardTagIndex.isSold` with the inventory, so a card cannot
+  be off the inventory page and inside the Summary at the same time.
+- **Grading is one charge.** A submission's total counts in what he spent, once.
+  No card carries a share of it.
 
 `BusinessExpense` covers mailers, toploaders, postage, and the Card Ladder
 subscription — costs that hit the books and attach to no card. `category` and
 `vendor` are free text for his own bookkeeping, not dimensions. Add one from the
 `+` button, the fourth kind in the sheet.
-
-An order with any card lacking a cost reports no gain at all, rather than a gain
-of the whole price. Thirty-five imported orders are that shape, so Summary prints
-how many orders the realized figure actually covers.
 
 ## Export and import
 
@@ -300,8 +249,7 @@ The simulator cannot type or tap for a script, so debug builds read these on lau
 | `CT_OPEN_SCANNER=1` | Opens the scan session once the catalog is ready. |
 | `CT_SIMULATE_SCANS` | Feeds `Name number` entries separated by `;` through the matcher. |
 | `CT_OPEN_REVIEW=1` | Opens review after the simulated scans settle. |
-| `CT_AUTO_COMMIT="Vendor\|cents"` | Commits the session to a new purchase and closes the scanner. |
-| `CT_SET_COST=3000` | Prices the simulated session at that many cents, split evenly. |
+| `CT_AUTO_COMMIT=1` | Commits the simulated session, then closes the scanner. |
 | `CT_SEARCH_LAYOUT` | `list` or `grid`. Grid is the default, so this mostly forces `list`. |
 | `CT_OPEN_CARD=1` | Pushes the newest card's detail. |
 | `CT_OPEN_ADD_CARD=1` | Opens the plus menu's card sheet. |
@@ -311,8 +259,7 @@ The simulator cannot type or tap for a script, so debug builds read these on lau
 | `CT_SELECT_ALL=1` | Enters selection with every row ticked. |
 | `CT_SLAB_NEWEST="psa\|12345678\|10"` | Stamps that grader, cert, and grade on the newest card, so it renders as a slab. |
 | `CT_PROJECT_NEWEST="psa\|12000,4000,2500"` | Tags the newest card "at PSA" and fills its top comps in cents, so its price shows as a range. |
-| `CT_OPEN_LEDGER` | `1` for the ledger, `summary` for the Summary tab, `outlook` for Summary scrolled to the grading outlook, `in` or `out` for one side of Activity, `add` for the add sheet, `sale`, `purchase`, or `expense` for the newest of each. |
-| `CT_GRADE` | `10`, `9`, `8`, or `Low` — which segment the grading outlook opens on. |
+| `CT_OPEN_LEDGER` | `1` for the ledger, `summary` for the Summary tab, `in` or `out` for one side of Activity, `add` for the add sheet, `sale`, `purchase`, or `expense` for the newest of each. |
 | `CT_IMPORT_FILE=<path>` | Merges a collection file, so a simulator can hold his real books without the file picker. |
 | `CT_OPEN_INVENTORY=1` | Deprecated. Inventory is the landing screen, so this only clears the query and pops to the root. |
 

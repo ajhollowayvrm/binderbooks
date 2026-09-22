@@ -129,77 +129,39 @@ import Testing
         #expect(!entry.isMoneyIn)
         #expect(entry.amountCents == -3_200)
         #expect(entry.title == "Gamecraft")
-        #expect(entry.detail == "no cards yet · 6x Chaos Rising Booster Pack")
+        #expect(entry.detail == "6x Chaos Rising Booster Pack")
     }
 
-    /// A picker row says what is in the purchase: its lines, its cards, and the
-    /// sealed items still unopened.
-    @Test @MainActor func aPickerRowSaysWhatIsInThePurchase() throws {
+    /// The row says how many items the purchase lists. A line of several
+    /// copies counts each copy, and no card is involved.
+    @Test @MainActor func aPurchaseRowCountsItsItems() throws {
         let container = try store()
         let context = container.mainContext
-        let purchase = Purchase(
-            date: day("2026-09-19"), vendor: "GameCraft", itemCostCents: 16_158,
-            shippingCents: 400, taxCents: 100
-        )
+        let purchase = Purchase(date: day("2026-09-09"), vendor: "Whatnot", note: "Lot", itemCostCents: 4_000)
         context.insert(purchase)
-
-        let booster = PurchaseItem(productId: 1, quantity: 3, isSealed: true)
-        context.insert(booster)
-        booster.purchase = purchase
-        let opened = PurchaseItem(productId: 2, quantity: 1, isSealed: true)
-        opened.isRipped = true
-        context.insert(opened)
-        opened.purchase = purchase
-        for _ in 0..<2 {
-            let card = OwnedCard(productId: 9, printing: "Normal", condition: CardCondition.nearMint.rawValue, confidence: .manual)
-            context.insert(card)
-            card.sourceItem = opened
+        for quantity in [3, 1] {
+            let item = PurchaseItem(productId: 42, quantity: quantity, isSealed: true)
+            context.insert(item)
+            item.purchase = purchase
         }
         try context.save()
 
-        #expect(LedgerEntry.purchaseContents(purchase) == "2 lines · 2 cards · 3 sealed unopened")
-        #expect(LedgerEntry.purchaseExtras(purchase) == "$5.00 of the total is shipping, tax, and fees")
-
-        // A purchase with nothing off the top carries no extras line.
-        let plain = Purchase(date: day("2026-09-19"), vendor: "Walmart", itemCostCents: 2_845)
-        context.insert(plain)
-        try context.save()
-        #expect(LedgerEntry.purchaseContents(plain) == "0 lines · no cards yet")
-        #expect(LedgerEntry.purchaseExtras(plain).isEmpty)
-    }
-
-    /// The row says how many cards came out of the purchase, so money with
-    /// nothing to show for it stands out in the list.
-    @Test @MainActor func aPurchaseRowCountsItsCards() throws {
-        let container = try store()
-        let context = container.mainContext
-        let purchase = Purchase(date: day("2026-09-09"), vendor: "Whatnot", itemCostCents: 4_000)
-        context.insert(purchase)
-        let item = PurchaseItem(productId: 42)
-        context.insert(item)
-        item.purchase = purchase
-        for _ in 0..<2 {
-            let card = OwnedCard(productId: 42, printing: "Normal", condition: CardCondition.nearMint.rawValue, confidence: .manual)
-            context.insert(card)
-            card.sourceItem = item
-        }
-        try context.save()
-
+        #expect(LedgerEntry.itemSummary(purchase) == "4 items")
         let entry = try #require(LedgerEntry.entries(purchases: [purchase], grading: [], sales: []).first)
-        #expect(entry.detail == "2 cards")
-    }
+        #expect(entry.detail == "4 items · Lot")
 
-    /// An order he types has no cards, exactly like the 35 imported ones.
-    @Test @MainActor func anOrderAddedByHandReportsNoGain() throws {
-        let container = try store()
-        let sale = Sale(soldAt: day("2026-09-09"), channelRaw: "tcgplayer", grossCents: 4_300)
-        sale.marketplaceFeesCents = 681
-        sale.shippingCostCents = 597
-        container.mainContext.insert(sale)
-        try container.mainContext.save()
+        let one = Purchase(date: day("2026-09-09"), vendor: "Walmart", itemCostCents: 500)
+        context.insert(one)
+        let item = PurchaseItem(productId: 7)
+        context.insert(item)
+        item.purchase = one
+        try context.save()
+        #expect(LedgerEntry.itemSummary(one) == "1 item")
 
-        #expect(sale.netCents == 3_022)
-        #expect(sale.realizedGainCents == nil)
+        let empty = Purchase(date: day("2026-09-09"), vendor: "Walmart", itemCostCents: 500)
+        context.insert(empty)
+        try context.save()
+        #expect(LedgerEntry.itemSummary(empty) == "")
     }
 
     @Test @MainActor func anExpenseIsMoneyOut() throws {
@@ -224,29 +186,24 @@ import Testing
         #expect(month.moneyOutCents == 2_499)
     }
 
-    /// Cards he has sold keep their row and their basis. Counting them would
-    /// inflate ending inventory, the position, and the profit all at once.
-    @Test @MainActor func endingInventoryIgnoresACardThatSold() throws {
+    /// Cards he has sold keep their row. Counting them would inflate what he
+    /// holds at market.
+    @Test @MainActor func heldAtMarketIgnoresACardThatSold() throws {
         let container = try store()
         let context = container.mainContext
 
         let held = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .manual)
-        held.acquisitionBasisCents = 1_000
         context.insert(held)
 
         let sold = OwnedCard(productId: 2, printing: "Normal", condition: "Near Mint", confidence: .manual)
-        sold.acquisitionBasisCents = 5_000
         sold.status = .sold
         context.insert(sold)
 
         let lost = OwnedCard(productId: 3, printing: "Normal", condition: "Near Mint", confidence: .manual)
-        lost.acquisitionBasisCents = 700
         lost.status = .lost
         context.insert(lost)
 
         let atGrader = OwnedCard(productId: 4, printing: "Normal", condition: "Near Mint", confidence: .manual)
-        atGrader.acquisitionBasisCents = 300
-        atGrader.gradingBasisCents = 200
         atGrader.status = .atGrader
         context.insert(atGrader)
         try context.save()
@@ -255,20 +212,49 @@ import Testing
         let inventory = cards.filter(LedgerSummary.isHeld)
         #expect(inventory.count == 2)
 
+        let market: [Int: Int] = [1: 1_000, 2: 5_000, 3: 700, 4: 500]
         let s = LedgerSummary.make(
             purchases: [], grading: [], sales: [], expenses: [],
-            held: inventory, marketCents: { _ in nil }
+            held: inventory, marketCents: { market[$0.productId] }
         )
-        // 1000 held + (300 + 200) at the grader. The 5000 sold and the 700 lost
-        // are gone.
-        #expect(s.endingInventoryCents == 1_500)
+        // 1000 held + 500 at the grader. The 5000 sold and the 700 lost are gone.
+        #expect(s.heldAtMarketCents == 1_500)
         #expect(s.heldCardCount == 2)
         #expect(s.atGraderCount == 1)
     }
 
+    /// His call, 2026-09-22: a card he keeps does not count in what he could
+    /// sell today. A card of his at a grader still counts as at the grader.
+    @Test @MainActor func thePersonalCollectionIsNotInIfYouSoldToday() throws {
+        let container = try store()
+        let context = container.mainContext
+
+        let stock = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .manual)
+        context.insert(stock)
+        let kept = OwnedCard(productId: 2, printing: "Normal", condition: "Near Mint", confidence: .manual)
+        kept.isPersonalCollection = true
+        kept.tags = [ReservedTag.atGrader("psa")]
+        context.insert(kept)
+        try context.save()
+
+        let market: [Int: Int] = [1: 1_000, 2: 50_000]
+        let s = LedgerSummary.make(
+            purchases: [], grading: [], sales: [], expenses: [],
+            held: [stock, kept], marketCents: { market[$0.productId] }
+        )
+        #expect(s.heldCardCount == 1)
+        #expect(s.heldAtMarketCents == 1_000)
+        // "What you have" still shows the card he keeps, on a line of its own.
+        #expect(s.personalCardCount == 1)
+        #expect(s.personalAtMarketCents == 50_000)
+        #expect(s.atGraderCount == 1)
+        let costs = SellingCosts(rateBasisPoints: 1_000)
+        #expect(s.ifSoldTodayCents(costs) == s.profitCents + costs.net(1_000))
+    }
+
     /// An imported card keeps `statusRaw` at `atGrader`. "Mark graded" used to
-    /// take off only the label, so the outlook still counted the card and
-    /// showed "No grader on its label" on a card he had graded PSA 10.
+    /// take off only the label, so the Summary still counted the card as out
+    /// at a grader after he had graded it PSA 10.
     @Test @MainActor func aCardMarkedGradedIsNoLongerAtTheGrader() throws {
         let container = try store()
         let context = container.mainContext
@@ -302,7 +288,6 @@ import Testing
         let context = container.mainContext
 
         let card = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .manual)
-        card.acquisitionBasisCents = 4_000
         context.insert(card)
         try context.save()
 
@@ -317,7 +302,6 @@ import Testing
             purchases: [], grading: [], sales: [], expenses: [],
             held: [card].filter(LedgerSummary.isHeld), marketCents: { _ in nil }
         )
-        #expect(s.endingInventoryCents == 0)
         #expect(s.heldCardCount == 0)
     }
 
@@ -328,7 +312,6 @@ import Testing
         let context = container.mainContext
 
         let card = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .manual)
-        card.acquisitionBasisCents = 3_000
         context.insert(card)
         try context.save()
 
@@ -340,43 +323,10 @@ import Testing
             purchases: [], grading: [], sales: [], expenses: [],
             held: [card], marketCents: { _ in nil }
         )
-        #expect(s.endingInventoryCents == 3_000)
         #expect(s.atGraderCount == 1)
     }
 
-    @Test @MainActor func profitIsNotReportedForAnOrderWithNoBasis() throws {
-        let container = try store()
-        let context = container.mainContext
-
-        let card = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .manual)
-        context.insert(card)
-
-        let known = Sale(soldAt: day("2026-08-20"), channelRaw: "tcgplayer", grossCents: 5_000)
-        known.marketplaceFeesCents = 500
-        let line = SaleLine(sale: known, card: card, basisCents: 1_000)
-        known.lines = [line]
-        context.insert(known)
-        context.insert(line)
-
-        // A price and no card, like the 35 imported orders.
-        let unknown = Sale(soldAt: day("2026-08-21"), channelRaw: "ebay", grossCents: 9_900)
-        context.insert(unknown)
-        try context.save()
-
-        let s = LedgerSummary.make(
-            purchases: [], grading: [], sales: [known, unknown], expenses: [],
-            held: [], marketCents: { _ in nil }
-        )
-        // 4500 net less 1000 of basis. The eBay order contributes nothing.
-        #expect(s.realizedGainCents == 3_500)
-        #expect(s.ordersWithKnownBasis == 1)
-        #expect(s.orderCount == 2)
-        #expect(s.ordersWithUnknownBasis == 1)
-        // Revenue is not the same thing. Both orders are real money.
-        #expect(s.revenueCents == 4_500 + 9_900)
-    }
-
-    @Test @MainActor func theProfitAndLossFollowsThePeriodicFormula() throws {
+    @Test @MainActor func profitIsSalesLessEverythingSpent() throws {
         let container = try store()
         let context = container.mainContext
 
@@ -396,149 +346,39 @@ import Testing
         context.insert(expense)
 
         let held = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .manual)
-        held.acquisitionBasisCents = 6_000
         context.insert(held)
         try context.save()
 
         let s = LedgerSummary.make(
             purchases: [purchase], grading: [grading], sales: [sale], expenses: [expense],
-            held: [held], marketCents: { _ in nil }
+            held: [held], marketCents: { _ in 6_000 }
         )
 
-        #expect(s.beginningInventoryCents == 0)
-        // Landed cost plus the grading charge. Grading is capitalised into the
-        // card, so it counts on both sides.
-        #expect(s.purchasesCents == 11_000 + 2_500)
-        #expect(s.endingInventoryCents == 6_000)
         #expect(s.revenueCents == 7_000)
+        #expect(s.purchasesCents == 11_000)
+        #expect(s.gradingCents == 2_500)
         #expect(s.expensesCents == 2_499)
-
-        // COGS = 0 + 13500 − 6000
-        #expect(s.costOfGoodsSoldCents == 7_500)
-        // P&L = 7000 − 7500 − 2499
-        #expect(s.profitCents == -2_999)
-
-        // Cash is a different reading of the same rows, and it disagrees. That
-        // is the point of showing both.
+        // Spent is everything that went out, in one figure.
+        #expect(s.spentCents == 11_000 + 2_500 + 2_499)
+        // Earned less spent: 7000 − 15999
+        #expect(s.profitCents == -8_999)
+        // The profit is money in less money out.
+        #expect(s.profitCents == s.differenceCents)
         #expect(s.moneyInCents == 7_000)
         #expect(s.moneyOutCents == 11_000 + 2_500 + 2_499)
-    }
 
-    // MARK: - What the cards at a grader might come back worth
-
-    /// Builds a card out at a grader with the comps given.
-    @MainActor private func atGrader(
-        _ context: ModelContext, grader: String, basis: Int, comps: [String: Int]
-    ) -> OwnedCard {
-        let card = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .manual)
-        card.acquisitionBasisCents = basis
-        card.gradedCompCents = comps
-        card.tags = [ReservedTag.atGrader(grader)]
-        context.insert(card)
-        return card
-    }
-
-    /// "CGC Pristine 10" and "CGC 10" are both grade 10. Keying on the head of
-    /// `GradedComps.cgcGrades` would find nothing for either of his CGC cards,
-    /// because no card in his store carries a Pristine figure at all.
-    @Test @MainActor func pristineAndTenAreTheSameGradeAndTheBetterOneWins() throws {
-        let container = try store()
-        let context = container.mainContext
-
-        let both = atGrader(context, grader: "cgc", basis: 1_000, comps: ["CGC Pristine 10": 30_000, "CGC 10": 12_000])
-        let tenOnly = atGrader(context, grader: "cgc", basis: 1_000, comps: ["CGC 10": 12_000])
-        try context.save()
-
-        #expect(GradedComps.value(at: 10, for: "cgc", in: both.effectiveCompCents) == 30_000)
-        #expect(GradedComps.value(at: 10, for: "cgc", in: tenOnly.effectiveCompCents) == 12_000)
-
-        let o = LedgerSummary.outlook(
-            assumption: .ten, atGrader: [both, tenOnly],
-            profitTodayCents: 0, costs: SellingCosts(rateBasisPoints: 0)
+        // A priced card he holds does not change the profit. It shows in
+        // "If you sold today" instead.
+        let none = LedgerSummary.make(
+            purchases: [purchase], grading: [grading], sales: [sale], expenses: [expense],
+            held: [], marketCents: { _ in nil }
         )
-        #expect(o.pricedCount == 2)
-        #expect(o.grossCents == 42_000)
+        #expect(none.profitCents == s.profitCents)
+        #expect(s.heldAtMarketCents == 6_000)
+        #expect(s.ifSoldTodayCents(SellingCosts(rateBasisPoints: 0)) == -8_999 + 6_000)
     }
 
-    /// Eight of his forty have no figure at grade 10. They must count as
-    /// nothing, and the section must say how many, or a gap in his comps reads
-    /// as a collapse in value.
-    @Test @MainActor func aCardWithNoFigureAtThatGradeCountsAsNothing() throws {
-        let container = try store()
-        let context = container.mainContext
-
-        let priced = atGrader(context, grader: "psa", basis: 1_000, comps: ["PSA 10": 20_000, "PSA 9": 5_000])
-        // His real case: PSA 8 and PSA 9 entered, no PSA 10.
-        let noTen = atGrader(context, grader: "psa", basis: 20_769, comps: ["PSA 8": 5_100, "PSA 9": 4_250])
-        let noComps = atGrader(context, grader: "cgc", basis: 2_268, comps: [:])
-        try context.save()
-
-        let cards = [priced, noTen, noComps]
-        let free = SellingCosts(rateBasisPoints: 0)
-
-        let ten = LedgerSummary.outlook(assumption: .ten, atGrader: cards, profitTodayCents: 0, costs: free)
-        #expect(ten.cardCount == 3)
-        #expect(ten.pricedCount == 1)
-        #expect(ten.unpricedCount == 2)
-        #expect(ten.grossCents == 20_000)
-        // Cost counts every card, priced or not. It is money he has spent.
-        #expect(ten.costCents == 1_000 + 20_769 + 2_268)
-
-        // Coverage moves with the grade. At 9 two cards price, not one.
-        let nine = LedgerSummary.outlook(assumption: .nine, atGrader: cards, profitTodayCents: 0, costs: free)
-        #expect(nine.pricedCount == 2)
-        #expect(nine.grossCents == 5_000 + 4_250)
-
-        // Low takes his worst figure for that grader, whatever grade it hangs off.
-        let low = LedgerSummary.outlook(assumption: .low, atGrader: cards, profitTodayCents: 0, costs: free)
-        #expect(low.pricedCount == 2)
-        #expect(low.grossCents == 5_000 + 4_250)
-    }
-
-    @Test @MainActor func theOutlookMovesProfitByProceedsLessCost() throws {
-        let container = try store()
-        let context = container.mainContext
-        let card = atGrader(context, grader: "psa", basis: 3_000, comps: ["PSA 10": 50_000])
-        try context.save()
-
-        let o = LedgerSummary.outlook(
-            assumption: .ten, atGrader: [card],
-            profitTodayCents: -10_000, costs: SellingCosts(rateBasisPoints: 0)
-        )
-        #expect(o.grossCents == 50_000)
-        #expect(o.netCents == 50_000)
-        // −10000 + 50000 − 3000
-        #expect(o.profitAfterCents == 37_000)
-        #expect(o.profitAfterCents == o.profitTodayCents + o.netCents - o.costCents)
-        // What the net would have to reach to get back to zero.
-        #expect(o.breakEvenNetCents == 13_000)
-        #expect(o.breaksEven)
-    }
-
-    /// A projection that ignores fees answers the wrong question. On his real
-    /// books it is the difference between "break even" and "short $808".
-    @Test @MainActor func sellingCostsComeOffTheProjection() throws {
-        let container = try store()
-        let context = container.mainContext
-        let card = atGrader(context, grader: "psa", basis: 0, comps: ["PSA 10": 100_000])
-        try context.save()
-
-        let gross = LedgerSummary.outlook(
-            assumption: .ten, atGrader: [card], profitTodayCents: -95_000,
-            costs: SellingCosts(rateBasisPoints: 0)
-        )
-        #expect(gross.netCents == 100_000)
-        #expect(gross.breaksEven)
-
-        let net = LedgerSummary.outlook(
-            assumption: .ten, atGrader: [card], profitTodayCents: -95_000,
-            costs: SellingCosts(rateBasisPoints: 1_363)
-        )
-        #expect(net.netCents == 86_370)
-        #expect(net.feeCents == 13_630)
-        #expect(!net.breaksEven)
-        #expect(net.profitAfterCents == -8_630)
-    }
+    // MARK: - Selling costs
 
     @Test @MainActor func aDerivedRateComesFromHisOwnOrders() throws {
         let container = try store()
@@ -576,18 +416,14 @@ import Testing
         #expect(SellingCostsKey.fieldText(1_363) == "13.63")
     }
 
-    /// A fee paid when the cards go out is in purchases straight away. Unless it
-    /// is also in ending inventory, profit dips for as long as they are away and
-    /// recovers when they come home, having never been a loss at all.
-    @Test @MainActor func theGradingFeeLandsOnTheCardAtSend() throws {
+    /// A grading charge counts once, as money out, and puts nothing on a card.
+    @Test @MainActor func aGradingChargeCountsOnceAndTouchesNoCard() throws {
         let container = try store()
         let context = container.mainContext
 
         let one = OwnedCard(productId: 1, printing: "Normal", condition: "Near Mint", confidence: .manual)
-        one.acquisitionBasisCents = 5_000
         context.insert(one)
         let two = OwnedCard(productId: 2, printing: "Normal", condition: "Near Mint", confidence: .manual)
-        two.acquisitionBasisCents = 5_000
         context.insert(two)
 
         let submission = GradingSubmission(graderRaw: "psa", shippedAt: day("2026-09-01"), gradingFeesCents: 4_000)
@@ -598,28 +434,15 @@ import Testing
         }
         try context.save()
 
-        Allocation.allocate(submission)
-        Allocation.capitalise(submission)
-        try context.save()
-
-        // $50.00 over two cards, and it is on the cards, not only the submission.
-        #expect(submission.totalCostCents == 5_000)
-        #expect(one.gradingBasisCents == 2_500)
-        #expect(two.gradingBasisCents == 2_500)
-        #expect(one.totalBasisCents == 7_500)
-
-        // The invariant that matters: what the submission put into purchases,
-        // ending inventory took back. The fee costs the P&L nothing while the
-        // cards are out.
         let s = LedgerSummary.make(
             purchases: [], grading: [submission], sales: [], expenses: [],
             held: [one, two], marketCents: { _ in nil }
         )
-        #expect(s.purchasesCents == 5_000)
-        #expect(s.endingInventoryCents == 15_000)
-        #expect(s.costOfGoodsSoldCents == 5_000 - 15_000)
-        // Only the cards' own cost is unrecovered. The grading fee nets out.
-        #expect(s.profitCents == 10_000)
+        #expect(s.gradingCents == 5_000)
+        #expect(s.purchasesCents == 0)
+        #expect(s.profitCents == -5_000)
+        #expect(one.gradingBasisCents == 0)
+        #expect(two.gradingBasisCents == 0)
     }
 
     /// He sent two cards as PSA, and they went to CGC. The fix must reach the
@@ -672,48 +495,6 @@ import Testing
         #expect(back.graderRaw == "psa")
     }
 
-    /// A total he cannot take apart is a total he cannot act on. The lines show
-    /// which card did what, worst first, and they add up to the cent.
-    @Test @MainActor func theOutlookShowsEachCardAndAddsUp() throws {
-        let container = try store()
-        let context = container.mainContext
-        let hit = atGrader(context, grader: "psa", basis: 3_000, comps: ["PSA 10": 50_001, "PSA 9": 9_000])
-        let weak = atGrader(context, grader: "psa", basis: 2_000, comps: ["PSA 10": 1_999])
-        let bare = atGrader(context, grader: "cgc", basis: 1_500, comps: [:])
-
-        let o = LedgerSummary.outlook(
-            assumption: .ten, atGrader: [hit, weak, bare],
-            profitTodayCents: -10_000, costs: SellingCosts(rateBasisPoints: 1_363)
-        )
-
-        // $520.00 gross nets $449.12, so $70.88 of fees split by value.
-        #expect(o.feeCents == 7_088)
-        #expect(o.lines.map(\.cardId) == [bare.id, weak.id, hit.id])
-        #expect(o.lines.map(\.feeCents) == [0, 272, 6_816])
-        #expect(o.lines.reduce(0) { $0 + $1.feeCents } == o.feeCents)
-        #expect(o.lines.reduce(0) { $0 + ($1.netCents ?? 0) } == o.netCents)
-        #expect(o.lines.reduce(0) { $0 + $1.contributionCents } == o.profitAfterCents - o.profitTodayCents)
-
-        let unpriced = try #require(o.lines.first)
-        #expect(unpriced.compKey == nil)
-        #expect(unpriced.grossCents == nil)
-        #expect(unpriced.contributionCents == -1_500)
-        #expect(o.lines.last?.compKey == "PSA 10")
-        #expect(o.lines.last?.contributionCents == 40_185)
-
-        // Low prices a card at its worst figure, and says which one.
-        let low = LedgerSummary.outlook(assumption: .low, atGrader: [hit], profitTodayCents: 0, costs: SellingCosts(rateBasisPoints: 0))
-        #expect(low.lines.first?.compKey == "PSA 9")
-        #expect(low.lines.first?.grossCents == 9_000)
-    }
-
-    @Test func aWeightedSplitSumsBackExactly() {
-        #expect(Allocation.splitByWeight(100, weights: [1, 1, 1]) == [34, 33, 33])
-        #expect(Allocation.splitByWeight(7_088, weights: [50_001, 1_999]) == [6_816, 272])
-        #expect(Allocation.splitByWeight(10, weights: [0, 0]) == [5, 5])
-        #expect(Allocation.splitByWeight(0, weights: []) == [])
-    }
-
     /// An empty book must not report that selling is free.
     @Test func aStoreWithNoOrdersHasNoDerivedRate() {
         let rates = ChannelRates.derived(from: [])
@@ -762,91 +543,30 @@ import Testing
             sales: try context.fetch(FetchDescriptor<Sale>()),
             expenses: try context.fetch(FetchDescriptor<BusinessExpense>()),
             held: cards.filter { $0.isCommitted && LedgerSummary.isHeld($0) },
-            // No catalog in a test, so nothing is priced. The cost side is what
-            // this test is for.
+            // No catalog in a test, so nothing is priced. The money side is
+            // what this test is for.
             marketCents: { _ in nil }
         )
 
         // The same two numbers the transaction list used to print on top.
         #expect(s.moneyInCents == 292_210)
         #expect(s.moneyOutCents == 1_128_302 + 175_288)
-        // Revenue is money in, and purchases are money out, while there are no
-        // expenses on his books yet.
+        // Revenue is money in. Purchases and grading are money out, while
+        // there are no expenses on his books yet.
         #expect(s.revenueCents == s.moneyInCents)
-        #expect(s.purchasesCents == s.moneyOutCents)
+        #expect(s.revenueCents == 292_210)
+        #expect(s.purchasesCents == 1_128_302)
+        #expect(s.gradingCents == 175_288)
+        #expect(s.purchasesCents + s.gradingCents == s.moneyOutCents)
         #expect(s.expensesCents == 0)
-
-        // 131 orders, and 69 of them recorded a price and no card.
-        #expect(s.orderCount == 131)
-        #expect(s.ordersWithKnownBasis == 62)
-        #expect(s.ordersWithUnknownBasis == 69)
 
         // Cards he has sold are not inventory. If this ever equals the whole
         // card count, the held filter has stopped working.
-        #expect(s.endingInventoryCents == 546_352)
         #expect(cards.filter(LedgerSummary.isHeld).count < cards.count)
 
-        #expect(s.costOfGoodsSoldCents == 757_238)
-        #expect(s.profitCents == -465_028)
-    }
-
-    /// The question this whole section exists to answer, against his real books.
-    /// If these numbers move, the answer moved.
-    @Test @MainActor func theRealBooksAnswerTheBreakEvenQuestion() throws {
-        let data = try Data(contentsOf: SeedLedgerImportTests.file)
-        let file = try CollectionExport.decode(data)
-        let container = try store()
-        try CollectionExport.apply(file, to: container.mainContext, mode: .replace)
-        let context = container.mainContext
-
-        let cards = try context.fetch(FetchDescriptor<OwnedCard>())
-        let held = cards.filter { $0.isCommitted && LedgerSummary.isHeld($0) }
-        let out = held.filter(LedgerSummary.isAtGrader)
-        #expect(out.count == 40)
-
-        let sales = try context.fetch(FetchDescriptor<Sale>())
-        let rates = ChannelRates.derived(from: sales)
-        // His own orders: 14.47% of fees and 3.22% of shipping.
-        #expect(rates.blendedFeeBasisPoints == 1_447)
-        #expect(rates.shippingBasisPoints == 322)
-
-        let profitToday = -465_028
-        let ten = LedgerSummary.outlook(
-            assumption: .ten, atGrader: out,
-            profitTodayCents: profitToday, costs: SellingCosts(rateBasisPoints: 0)
-        )
-        #expect(ten.cardCount == 40)
-        // Eight carry no figure at grade 10.
-        #expect(ten.pricedCount == 32)
-        #expect(ten.costCents == 323_377)
-        #expect(ten.grossCents == 819_227)
-        #expect(ten.breakEvenNetCents == 788_405)
-        // Gross, he clears it by $308.22.
-        #expect(ten.profitAfterCents == 30_822)
-        #expect(ten.breaksEven)
-
-        // Net of TCGplayer fees and shipping, he does not.
-        let net = LedgerSummary.outlook(
-            assumption: .ten, atGrader: out,
-            profitTodayCents: profitToday, costs: SellingCosts(rateBasisPoints: 1_363)
-        )
-        #expect(net.netCents == 707_566)
-        #expect(!net.breaksEven)
-        #expect(net.profitAfterCents == -80_839)
-        // The card-by-card lines add up to the same totals on his real books.
-        #expect(net.lines.count == 40)
-        #expect(net.lines.filter(\.isPriced).count == 32)
-        #expect(net.lines.reduce(0) { $0 + ($1.netCents ?? 0) } == 707_566)
-        #expect(net.lines.reduce(0) { $0 + $1.contributionCents } == net.netCents - net.costCents)
-
-        // The cliff at 9 is a gap in his comps, not a collapse in value: only 23
-        // of the 40 carry a figure at that grade.
-        let nine = LedgerSummary.outlook(
-            assumption: .nine, atGrader: out,
-            profitTodayCents: profitToday, costs: SellingCosts(rateBasisPoints: 0)
-        )
-        #expect(nine.pricedCount == 23)
-        #expect(nine.grossCents == 172_351)
+        // 292210 − 1128302 − 175288
+        #expect(s.profitCents == -1_011_380)
+        #expect(s.profitCents == s.differenceCents)
     }
 
     @Test @MainActor func theExportHasInAndOutColumns() throws {
@@ -866,7 +586,7 @@ import Testing
         #expect(lines == [
             "Date,Type,Name,Detail,In,Out",
             "2026-08-20,Sale,TCGplayer,no cards recorded,15.05,",
-            "2026-08-17,Purchase,\"Game Grid, Inc\",no cards yet,,193.39",
+            "2026-08-17,Purchase,\"Game Grid, Inc\",,,193.39",
             ",Grading,PSA grading,no cards attached,,20.00",
         ])
     }

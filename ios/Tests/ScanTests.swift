@@ -441,349 +441,17 @@ import Testing
     }
 }
 
-@Suite struct AllocationTests {
+@Suite struct SplitTests {
     @Test func equalSplitSumsExactly() {
-        #expect(Allocation.splitEqually(100_000, into: 3) == [33_334, 33_333, 33_333])
-        #expect(Allocation.splitEqually(497, into: 3) == [166, 166, 165])
-        #expect(Allocation.splitEqually(0, into: 4) == [0, 0, 0, 0])
-        #expect(Allocation.splitEqually(10, into: 0) == [])
+        #expect(Split.equally(100_000, into: 3) == [33_334, 33_333, 33_333])
+        #expect(Split.equally(497, into: 3) == [166, 166, 165])
+        #expect(Split.equally(0, into: 4) == [0, 0, 0, 0])
+        #expect(Split.equally(10, into: 0) == [])
         for total in [1, 7, 99, 19_339, 1_000_001] {
             for count in 1...13 {
-                #expect(Allocation.splitEqually(total, into: count).reduce(0, +) == total)
+                #expect(Split.equally(total, into: count).reduce(0, +) == total)
             }
         }
-    }
-
-    @Test @MainActor func purchaseAllocationExcludesBulk() throws {
-        // Swift frees the container after its last use, and that resets the
-        // context under the models. Keep it alive for the whole test.
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let context = container.mainContext
-        let purchase = Purchase(vendor: "Walmart", itemCostCents: 497)
-        context.insert(purchase)
-
-        let hit1 = PurchaseItem(productId: 1)
-        let hit2 = PurchaseItem(productId: 2)
-        let hit3 = PurchaseItem(productId: 3)
-        let bulk = PurchaseItem(productId: 4)
-        for item in [hit1, hit2, hit3, bulk] {
-            item.purchase = purchase
-            context.insert(item)
-            let card = OwnedCard(productId: item.productId, printing: "Normal", condition: "Near Mint", confidence: .certain)
-            card.isBulk = item === bulk
-            card.sourceItem = item
-            context.insert(card)
-        }
-
-        Allocation.allocate(purchase)
-        Allocation.writeCardBases(purchase)
-
-        #expect([hit1, hit2, hit3].map(\.allocatedCostCents) == [166, 166, 165])
-        #expect(bulk.allocatedCostCents == 0)
-        #expect(hit1.cards.first?.acquisitionBasisCents == 166)
-        #expect(hit1.cards.first?.basisIsAllocated == true)
-        #expect(bulk.cards.first?.acquisitionBasisCents == 0)
-        #expect(purchase.items.reduce(0) { $0 + $1.allocatedCostCents } == 497)
-    }
-
-    /// The grader charged per card, so the submission's whole cost splits
-    /// evenly across its entries and sums back exactly.
-    @Test @MainActor func gradingFeesSplitAcrossEntries() throws {
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let context = container.mainContext
-        let submission = GradingSubmission(graderRaw: "psa", gradingFeesCents: 5_000)
-        submission.shipToGraderCents = 1_200
-        submission.shipReturnCents = 1_500
-        submission.insuranceCents = 301
-        context.insert(submission)
-        for _ in 0..<3 {
-            let card = OwnedCard(productId: 1, printing: "Holofoil", condition: "Near Mint", confidence: .manual)
-            context.insert(card)
-            context.insert(GradingEntry(submission: submission, card: card))
-        }
-
-        Allocation.allocate(submission)
-
-        let fees = submission.entries.map(\.allocatedFeeCents).sorted(by: >)
-        #expect(fees == [2_667, 2_667, 2_667])
-        #expect(fees.reduce(0, +) == submission.totalCostCents)
-    }
-
-    @Test @MainActor func gradingAllocationWithNoEntriesDoesNothing() throws {
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let submission = GradingSubmission(graderRaw: "cgc", gradingFeesCents: 999)
-        container.mainContext.insert(submission)
-        Allocation.allocate(submission)
-        #expect(submission.entries.isEmpty)
-    }
-
-    /// A total he set at review comes out of the purchase total first, and the
-    /// rest splits over the cards he did not price. This is the test that
-    /// catches an allocator overwriting a price he typed.
-    @Test @MainActor func aPriceHeSetSurvivesTheAllocator() throws {
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let context = container.mainContext
-        let purchase = Purchase(vendor: "LGS", itemCostCents: 3_000)
-        context.insert(purchase)
-
-        var cards: [OwnedCard] = []
-        var items: [PurchaseItem] = []
-        for index in 0..<4 {
-            let item = PurchaseItem(productId: index + 1)
-            item.purchase = purchase
-            context.insert(item)
-            items.append(item)
-            let card = OwnedCard(productId: item.productId, printing: "Normal", condition: "Near Mint", confidence: .certain)
-            card.sourceItem = item
-            context.insert(card)
-            cards.append(card)
-        }
-        // He priced the first two at $10 each.
-        for card in cards.prefix(2) {
-            card.acquisitionBasisCents = 1_000
-            card.basisIsManual = true
-        }
-
-        Allocation.allocate(purchase)
-        Allocation.writeCardBases(purchase)
-
-        #expect(cards.map(\.acquisitionBasisCents) == [1_000, 1_000, 500, 500])
-        #expect(cards.map(\.basisIsManual) == [true, true, false, false])
-        #expect(items.map(\.allocatedCostCents) == [1_000, 1_000, 500, 500])
-        #expect(purchase.items.reduce(0) { $0 + $1.allocatedCostCents } == 3_000)
-    }
-
-    /// Typing more than the total must not rewrite anything he entered.
-    @Test @MainActor func pricesAboveTheTotalLeaveTheSplitAtZero() throws {
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let context = container.mainContext
-        let purchase = Purchase(vendor: "LGS", itemCostCents: 500)
-        context.insert(purchase)
-
-        let priced = PurchaseItem(productId: 1)
-        let rest = PurchaseItem(productId: 2)
-        var cards: [OwnedCard] = []
-        for item in [priced, rest] {
-            item.purchase = purchase
-            context.insert(item)
-            let card = OwnedCard(productId: item.productId, printing: "Normal", condition: "Near Mint", confidence: .certain)
-            card.sourceItem = item
-            context.insert(card)
-            cards.append(card)
-        }
-        cards[0].acquisitionBasisCents = 2_000
-        cards[0].basisIsManual = true
-
-        Allocation.allocate(purchase)
-        Allocation.writeCardBases(purchase)
-
-        #expect(cards[0].acquisitionBasisCents == 2_000)
-        #expect(cards[1].acquisitionBasisCents == 0)
-    }
-
-    /// Three boxes bought together share one line. Ripping one must carve off
-    /// its own third of the cost and leave the shared line covering the
-    /// other two.
-    @Test @MainActor func isolateSplitsOneUnitOffASharedLine() throws {
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let context = container.mainContext
-        let purchase = Purchase(vendor: "Walmart", itemCostCents: 100)
-        context.insert(purchase)
-        let boxes = PurchaseItem(productId: 1, quantity: 3, isSealed: true)
-        boxes.purchase = purchase
-        boxes.allocatedCostCents = 100
-        context.insert(boxes)
-        let selfCard = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
-        selfCard.isSealedSelf = true
-        selfCard.sourceItem = boxes
-        context.insert(selfCard)
-
-        let unit = try #require(Allocation.isolate(selfCard, context: context))
-
-        #expect(unit !== boxes)
-        #expect(unit.quantity == 1)
-        #expect(unit.isSealed)
-        #expect(unit.allocatedCostCents == 33)
-        #expect(boxes.quantity == 2)
-        #expect(boxes.allocatedCostCents == 67)
-        #expect(selfCard.sourceItem === unit)
-
-        // A second box's self-card, already isolated once, comes back unchanged.
-        #expect(Allocation.isolate(selfCard, context: context) === unit)
-    }
-
-    @Test @MainActor func isolateLeavesASingleUnitLineAlone() throws {
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let context = container.mainContext
-        let item = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
-        item.allocatedCostCents = 4_997
-        context.insert(item)
-        let selfCard = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
-        selfCard.isSealedSelf = true
-        selfCard.sourceItem = item
-        context.insert(selfCard)
-
-        #expect(Allocation.isolate(selfCard, context: context) === item)
-        #expect(item.allocatedCostCents == 4_997)
-    }
-
-    /// A sealed card added to inventory on its own, with no purchase behind it,
-    /// still needs a line to rip against.
-    @Test @MainActor func ripTargetCreatesALineWhenTheCardStandsAlone() throws {
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let context = container.mainContext
-        let card = OwnedCard(productId: 9, printing: "", condition: "Near Mint", confidence: .manual)
-        card.isSealedSelf = true
-        card.acquisitionBasisCents = 2_500
-        context.insert(card)
-
-        let item = Allocation.ripTarget(for: card, context: context)
-
-        #expect(card.sourceItem === item)
-        #expect(item.quantity == 1)
-        #expect(item.isSealed)
-        #expect(item.allocatedCostCents == 2_500)
-    }
-}
-
-@Suite struct SealedSelfBackfillTests {
-    /// A card must count as a box's self-card, and gets it.
-    @Test @MainActor func flagsACardThatStandsForAnUnrippedBox() throws {
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let context = container.mainContext
-        let box = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
-        context.insert(box)
-        let selfCard = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
-        selfCard.sourceItem = box
-        context.insert(selfCard)
-        try context.save()
-
-        SealedSelfBackfill.run(context, defaults: UserDefaults(suiteName: "sealedbackfill-\(UUID())")!)
-
-        #expect(selfCard.isSealedSelf)
-    }
-
-    /// A card pulled from a rip, not the box itself: it came from a scan, and
-    /// even if it did not, its product differs from the line's own.
-    @Test @MainActor func leavesAPulledCardAlone() throws {
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let context = container.mainContext
-        let box = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
-        context.insert(box)
-        let session = ScanSession()
-        context.insert(session)
-        let pulled = OwnedCard(productId: 10, printing: "Normal", condition: "Near Mint", confidence: .certain)
-        pulled.sourceItem = box
-        pulled.scanSession = session
-        context.insert(pulled)
-        try context.save()
-
-        SealedSelfBackfill.run(context, defaults: UserDefaults(suiteName: "sealedbackfill-\(UUID())")!)
-
-        #expect(!pulled.isSealedSelf)
-    }
-
-    /// A line already ripped in the imported ledger never gets a self-card
-    /// written back onto it: stale data, not a box waiting to be opened.
-    @Test @MainActor func skipsALineAlreadyMarkedRipped() throws {
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let context = container.mainContext
-        let box = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
-        box.isRipped = true
-        context.insert(box)
-        let stray = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
-        stray.sourceItem = box
-        context.insert(stray)
-        try context.save()
-
-        SealedSelfBackfill.run(context, defaults: UserDefaults(suiteName: "sealedbackfill-\(UUID())")!)
-
-        #expect(!stray.isSealedSelf)
-    }
-
-    @Test @MainActor func runsOnlyOnce() throws {
-        let container = try CollectionStore.container(inMemory: true)
-        defer { withExtendedLifetime(container) {} }
-        let context = container.mainContext
-        let box = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
-        context.insert(box)
-        let selfCard = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
-        selfCard.sourceItem = box
-        context.insert(selfCard)
-        try context.save()
-        let defaults = UserDefaults(suiteName: "sealedbackfill-\(UUID())")!
-
-        SealedSelfBackfill.run(context, defaults: defaults)
-        selfCard.isSealedSelf = false
-        SealedSelfBackfill.run(context, defaults: defaults)
-
-        #expect(!selfCard.isSealedSelf)
-    }
-}
-
-@Suite @MainActor struct ReviewPricingTests {
-    private func session() throws -> (ModelContainer, ScanSessionModel, [OwnedCard]) {
-        let container = try CollectionStore.container(inMemory: true)
-        let context = container.mainContext
-        let session = ScanSession()
-        context.insert(session)
-        var cards: [OwnedCard] = []
-        for index in 0..<3 {
-            let card = OwnedCard(productId: index + 1, printing: "Normal", condition: "Near Mint", confidence: .certain)
-            card.scannedAt = Date(timeIntervalSinceReferenceDate: Double(index))
-            card.scanSession = session
-            context.insert(card)
-            cards.append(card)
-        }
-        try context.save()
-        let model = ScanSessionModel(session: session, context: context, catalog: CatalogController())
-        return (container, model, cards)
-    }
-
-    /// One total over three cards, split evenly and flagged as his.
-    @Test func aTotalSplitsEvenlyOverTheSelection() throws {
-        let (container, model, cards) = try session()
-        defer { withExtendedLifetime(container) {} }
-        model.setBasis(totalCents: 1_000, for: cards)
-        #expect(cards.map(\.acquisitionBasisCents) == [334, 333, 333])
-        #expect(cards.allSatisfy { $0.basisIsManual })
-        // A split figure is derived for any one card, so it must not render as
-        // a gain or a loss.
-        #expect(cards.allSatisfy { $0.basisIsAllocated })
-        #expect(model.manualBasisCents == 1_000)
-        #expect(model.pricedCardCount == 3)
-    }
-
-    /// A total on one card is that card's real cost, so the gain shows.
-    @Test func aTotalOnOneCardIsARealCost() throws {
-        let (container, model, cards) = try session()
-        defer { withExtendedLifetime(container) {} }
-        model.setBasis(totalCents: 2_500, for: [cards[1]])
-        #expect(cards[1].acquisitionBasisCents == 2_500)
-        #expect(cards[1].basisIsManual)
-        #expect(!cards[1].basisIsAllocated)
-    }
-
-    @Test func clearingAPriceHandsTheCardBackToTheTotal() throws {
-        let (container, model, cards) = try session()
-        defer { withExtendedLifetime(container) {} }
-        model.setBasis(totalCents: 900, for: cards)
-        model.clearBasis(for: [cards[0]])
-        #expect(cards[0].acquisitionBasisCents == 0)
-        #expect(!cards[0].basisIsManual)
-        #expect(!cards[0].basisIsAllocated)
-        #expect(model.pricedCardCount == 2)
     }
 }
 
@@ -950,9 +618,7 @@ import Testing
         unknown.scanSession = model.session
         context.insert(unknown)
 
-        let purchase = Purchase(vendor: "Whatnot", itemCostCents: 1_000)
-        context.insert(purchase)
-        model.commit(to: purchase)
+        model.commit()
 
         #expect(model.session.isCommitted)
         #expect(model.cards.count == 2)
@@ -979,7 +645,9 @@ import Testing
         #expect(model.fault == .catalogClosed)
     }
 
-    @Test @MainActor func commitCreatesLinesAllocatesAndMarksTheSession() throws {
+    /// A commit makes the cards inventory. It makes no purchase and no
+    /// purchase line, and no card points at one.
+    @Test @MainActor func commitAddsTheCardsAndNoPurchase() throws {
         let (model, context) = try makeModel()
         for id in [1, 2, 3] {
             let card = OwnedCard(productId: id, printing: "Holofoil", condition: "Near Mint", confidence: .certain)
@@ -989,70 +657,46 @@ import Testing
         model.duplicateLast()
         #expect(model.cards.count == 4)
 
-        let purchase = Purchase(vendor: "Whatnot", itemCostCents: 19_339)
-        context.insert(purchase)
-        model.commit(to: purchase)
+        model.commit()
 
         #expect(model.session.isCommitted)
-        #expect(model.session.purchase === purchase)
-        #expect(purchase.items.count == 4)
-        #expect(purchase.items.reduce(0) { $0 + $1.allocatedCostCents } == 19_339)
-        #expect(model.cards.allSatisfy { $0.isCommitted && $0.basisIsAllocated && $0.sourceItem != nil })
-        #expect(model.cards.reduce(0) { $0 + $1.acquisitionBasisCents } == 19_339)
+        #expect(model.session.purchase == nil)
+        #expect(try context.fetchCount(FetchDescriptor<Purchase>()) == 0)
+        #expect(try context.fetchCount(FetchDescriptor<PurchaseItem>()) == 0)
+        #expect(model.cards.allSatisfy { $0.isCommitted && $0.sourceItem == nil })
     }
 
-    /// Ripping a specific sealed line: its cards join that line alone, the
-    /// self-card that stood for the box is gone, and a sibling line in the
-    /// same purchase is untouched.
-    @Test @MainActor func commitOfARipRemovesTheSelfCardAndSpendsOnlyTheBoxsOwnCost() throws {
+    /// Ripping a sealed card: the commit deletes the pack, the pulls stay as
+    /// the scan made them, and the purchase that bought the pack does not change.
+    @Test @MainActor func commitOfARipDeletesThePacksAndKeepsThePulls() throws {
         let context = container.mainContext
+        let defaults = try #require(UserDefaults(suiteName: "ScanTests.\(UUID().uuidString)"))
         let purchase = Purchase(vendor: "Walmart", itemCostCents: 5_000)
         context.insert(purchase)
-
-        let box = PurchaseItem(productId: 1, quantity: 1, isSealed: true)
-        box.purchase = purchase
-        box.allocatedCostCents = 3_000
+        let box = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
+        box.isSealedSelf = true
         context.insert(box)
-        let selfCard = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
-        selfCard.isSealedSelf = true
-        selfCard.sourceItem = box
-        context.insert(selfCard)
+        let other = OwnedCard(productId: 2, printing: "Normal", condition: "Near Mint", confidence: .certain)
+        context.insert(other)
 
-        let sibling = PurchaseItem(productId: 2)
-        sibling.purchase = purchase
-        sibling.allocatedCostCents = 2_000
-        context.insert(sibling)
-        let siblingCard = OwnedCard(productId: 2, printing: "Normal", condition: "Near Mint", confidence: .certain)
-        siblingCard.sourceItem = sibling
-        siblingCard.acquisitionBasisCents = 2_000
-        siblingCard.basisIsAllocated = true
-        context.insert(siblingCard)
-
-        let session = ScanSession()
-        session.purchase = purchase
-        session.ripTarget = box
-        context.insert(session)
-        let model = ScanSessionModel(session: session, context: context, catalog: CatalogController())
-
+        let session = try #require(Rip.start([box], context: context, defaults: defaults))
+        let model = ScanSessionModel(session: session, context: context, catalog: CatalogController(), defaults: defaults)
         for id in [10, 11] {
             let pulled = OwnedCard(productId: id, printing: "Normal", condition: "Near Mint", confidence: .certain)
             pulled.scanSession = session
             context.insert(pulled)
         }
 
-        model.commit(to: purchase)
+        model.commit()
 
-        #expect(box.isRipped)
-        #expect(box.cards.count == 2)
-        #expect(box.cards.map(\.productId).sorted() == [10, 11])
-        #expect(box.cards.reduce(0) { $0 + $1.acquisitionBasisCents } == 3_000)
-        #expect(!box.cards.contains { $0.isSealedSelf })
-        #expect(try context.fetch(FetchDescriptor<OwnedCard>()).contains { $0.id == selfCard.id } == false)
-
-        // The sibling line and its card never moved.
-        #expect(sibling.allocatedCostCents == 2_000)
-        #expect(siblingCard.acquisitionBasisCents == 2_000)
-        #expect(purchase.items.count == 2)
+        let cards = try context.fetch(FetchDescriptor<OwnedCard>())
+        #expect(!cards.contains { $0.id == box.id })
+        #expect(cards.contains { $0.id == other.id })
+        #expect(model.cards.map(\.productId).sorted() == [10, 11])
+        #expect(model.cards.allSatisfy { $0.isCommitted && $0.sourceItem == nil })
+        #expect(try context.fetchCount(FetchDescriptor<PurchaseItem>()) == 0)
+        #expect(purchase.landedCostCents == 5_000)
+        #expect(!Rip.isRip(session, defaults: defaults))
     }
 
     @Test @MainActor func sessionBiasKeepsTheNewestSetsFirst() {

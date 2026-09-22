@@ -12,7 +12,6 @@ struct ReviewView: View {
     @State private var editMode: EditMode = .inactive
     @State private var correcting: OwnedCard?
     @State private var action: BulkAction?
-    @State private var showCommit = false
     @State private var showUnidentifiedWarning = false
     @State private var showDiscard = false
     @State private var showCleanUp = false
@@ -25,7 +24,7 @@ struct ReviewView: View {
     @Query(sort: \OwnedCard.acquiredAt, order: .reverse) private var allCards: [OwnedCard]
 
     private enum BulkAction: Identifiable {
-        case condition, printing, set, cost, delete
+        case condition, printing, set, delete
         var id: Self { self }
     }
 
@@ -40,10 +39,15 @@ struct ReviewView: View {
 
     private func confirmCommit() {
         if unidentified.isEmpty {
-            showCommit = true
+            commit()
         } else {
             showUnidentifiedWarning = true
         }
+    }
+
+    private func commit() {
+        model.commit()
+        onCommitted()
     }
 
     private var selectedCards: [OwnedCard] {
@@ -80,7 +84,6 @@ struct ReviewView: View {
                     bulkButton("Condition", "checkmark.seal") { action = .condition }
                     bulkButton("Printing", "sparkles") { action = .printing }
                     bulkButton("Set", "rectangle.stack") { action = .set }
-                    bulkButton("Cost", "dollarsign.circle") { action = .cost }
                     bulkButton("Tag", "tag") { tagTarget = TagSheetTarget(cards: selectedCards) }
                     Menu {
                         Button("Mark bulk") { model.setBulk(true, for: selectedCards) }
@@ -128,12 +131,6 @@ struct ReviewView: View {
         .sheet(isPresented: $showCleanUp) {
             CleanUpSheet(model: model) { selection = [] }
         }
-        .sheet(isPresented: $showCommit) {
-            CommitSheet(model: model) {
-                showCommit = false
-                onCommitted()
-            }
-        }
         .confirmationDialog("Discard this session and its \(model.cards.count) cards?", isPresented: $showDiscard, titleVisibility: .visible) {
             Button("Discard", role: .destructive) {
                 model.discard()
@@ -152,7 +149,7 @@ struct ReviewView: View {
             isPresented: $showUnidentifiedWarning,
             titleVisibility: .visible
         ) {
-            Button("Commit anyway") { showCommit = true }
+            Button("Commit anyway") { commit() }
             Button("Fix them first", role: .cancel) { showAll = false }
         } message: {
             Text("They join the collection with no card behind them. You can identify them later from the inventory.")
@@ -231,17 +228,6 @@ struct ReviewView: View {
                     reassignMissed = missed.count
                 }
             }
-        case .cost:
-            let cards = selectedCards
-            let priced = cards.filter(\.basisIsManual)
-            CostSheet(
-                cardCount: cards.count,
-                existingCents: priced.count == cards.count && !priced.isEmpty
-                    ? priced.reduce(0) { $0 + $1.acquisitionBasisCents }
-                    : nil,
-                onSet: { total in model.setBasis(totalCents: total, for: cards) },
-                onClear: { model.clearBasis(for: cards) }
-            )
         case .delete:
             ChoiceSheet(title: "Delete \(selection.count) cards?", options: ["Delete"], destructive: true) { _ in
                 model.delete(selectedCards)
@@ -287,17 +273,8 @@ private struct ReviewRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(marketCents?.asCurrency ?? "—")
-                    .font(.body.monospacedDigit())
-                // The cost he set. Without it he cannot see which cards a
-                // total has already covered.
-                if card.basisIsManual {
-                    Text("cost \(card.acquisitionBasisCents.asCurrency)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
+            Text(marketCents?.asCurrency ?? "—")
+                .font(.body.monospacedDigit())
         }
     }
 }

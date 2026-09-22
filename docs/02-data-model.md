@@ -29,6 +29,39 @@ rebuilt from scratch, nothing in his data breaks.
 export/import in Phase 1, and make export trivially reachable — one tap from settings.
 A full export of the collection store is small enough to be a single file.
 
+**Amended 2026-09-22: no link between cards and purchases, and no per-card cost.**
+AJ's decision. This amendment overrides every section below that allocates cost or
+reads a basis.
+
+- **No schema change.** No stored property is added or removed, and
+  `CollectionExport.version` stays 9. These fields are dormant: no behavior reads or
+  writes them. `CollectionExport` still exports and imports them, so an old file
+  imports and his data round-trips.
+  - `OwnedCard`: `acquisitionBasisCents`, `gradingBasisCents`, `basisIsAllocated`,
+    `basisIsManual`, `sourceItem`.
+  - `PurchaseItem`: `allocatedCostCents`, `isRipped`, `ripGroupId`, `parentItem`,
+    `childItems`, `identifiedGroupId`, and the `cards` inverse.
+  - `Purchase.allocationMethodRaw`, `ScanSession.purchase`, `ScanSession.ripTarget`.
+  - `SaleLine.basisCents`, `SaleLine.basisIncomplete`, `GradingEntry.allocatedFeeCents`.
+- **Deleting a purchase.** `PurchaseItem.cards` is still a cascade relationship, and
+  an old import can bring the links back. So the app deletes a purchase only through
+  `PurchaseEditor.delete`. It sets each linked card's `sourceItem` to nil first. No
+  card is lost.
+- **Purchases.** A purchase keeps its `PurchaseItem` lines as the record of what he
+  bought. `PurchaseIntake` still adds each copy to inventory as a card, with
+  `acquiredAt` at the purchase date, and with no link and no cost. A scan commits
+  with no purchase.
+- **Rips.** A rip remembers its packs in `UserDefaults`, one key for each scan
+  session (`Rip`). The commit deletes the packs. A discarded scan leaves them sealed.
+- **Grading.** A submission is one charge. No fee goes on a card.
+- **Sales.** A line names the card that sold. It holds no cost, and an order has no
+  gain.
+- **Summary.** `profit = revenue − purchases − grading − expenses`, which equals
+  money in less money out. "If you sold today" adds the market value of the held
+  cards, less selling costs, with the personal collection left out. The grading
+  outlook is gone: the Summary answers AJ's questions (what he has, spent, earned,
+  and the potential), and he judges grading potential from each card's comps.
+
 ---
 
 ## Money

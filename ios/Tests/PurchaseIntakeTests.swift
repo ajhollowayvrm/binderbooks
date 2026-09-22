@@ -4,7 +4,7 @@ import Testing
 @testable import BinderBooks
 
 /// A purchase recorded by hand can name what came in it, from the catalog.
-/// These cover the list, the note it writes, and the split over the copies.
+/// These cover the list, the note it writes, and the cards it adds.
 @Suite struct PurchaseIntakeTests {
     @MainActor private func store() throws -> ModelContainer {
         try CollectionStore.container(inMemory: true)
@@ -29,8 +29,9 @@ import Testing
         #expect(PurchaseIntake.note(for: lines) == "2x Chaos Rising Booster Pack, Charizard ex")
     }
 
-    /// $25.00 plus $0.78 shipping and $1.87 tax is $27.65 over three copies.
-    @Test @MainActor func theLandedTotalSplitsOverEveryCopy() throws {
+    /// The items go on the purchase. The cards go into inventory with no link
+    /// to it and no cost, and the landed total stays $27.65.
+    @Test @MainActor func aPurchaseRecordsItsItemsAndTheCardsStandAlone() throws {
         let container = try store()
         let context = container.mainContext
         let purchase = Purchase(date: bought, vendor: "Whatnot", itemCostCents: 2_500, shippingCents: 78, taxCents: 187)
@@ -45,13 +46,14 @@ import Testing
 
         #expect(cards.count == 3)
         #expect(purchase.items.count == 2)
-        #expect(cards.reduce(0) { $0 + $1.acquisitionBasisCents } == 2_765)
-        #expect(cards.allSatisfy { $0.basisIsAllocated && $0.acquiredAt == bought })
+        #expect(purchase.items.reduce(0) { $0 + $1.quantity } == 3)
+        #expect(purchase.landedCostCents == 2_765)
+        #expect(cards.allSatisfy { $0.sourceItem == nil && $0.acquisitionBasisCents == 0 && $0.acquiredAt == bought })
+        #expect(purchase.items.allSatisfy { $0.cards.isEmpty && $0.allocatedCostCents == 0 })
 
         let packs = cards.filter { $0.productId == 10 }
         #expect(packs.count == 2)
         #expect(packs.filter { $0.isSealedSelf }.count == 2)
-        #expect(packs.first?.sourceItem?.quantity == 2)
 
         let single = try #require(cards.first { $0.productId == 20 })
         #expect(!single.isSealedSelf)

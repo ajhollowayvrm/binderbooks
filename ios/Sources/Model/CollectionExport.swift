@@ -8,6 +8,11 @@ import SwiftData
 /// own output exactly. Relationships travel as UUIDs. Dates travel as seconds
 /// since the reference date, which JSON doubles reproduce exactly. Arrays are
 /// sorted by id so two exports of the same store are byte-identical.
+///
+/// Since 2026-09-22 a card has no link to a purchase and no cost. The fields
+/// that held them are dormant (see `Models.swift`). Export and import are the
+/// only code that reads and writes them. They keep doing so without change, so
+/// an old file imports and his data round-trips exactly.
 enum CollectionExport {
     static let format = "cardtracker-collection"
     /// Version 2 added `OwnedCardDTO.tags` and `basisIsManual`. Version 3 added

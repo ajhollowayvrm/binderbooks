@@ -9,9 +9,8 @@ import Testing
         try CollectionStore.container(inMemory: true)
     }
 
-    @MainActor private func card(_ context: ModelContext, basis: Int) -> OwnedCard {
+    @MainActor private func card(_ context: ModelContext) -> OwnedCard {
         let card = OwnedCard(productId: 42, printing: "Normal", condition: CardCondition.nearMint.rawValue, confidence: .manual)
-        card.acquisitionBasisCents = basis
         context.insert(card)
         return card
     }
@@ -26,14 +25,14 @@ import Testing
     }
 
     @MainActor private func attachment(_ card: OwnedCard) -> SaleEditor.Attachment {
-        SaleEditor.Attachment(card: card, describedAs: "Charizard", basisCents: SaleEditor.knownBasis(card))
+        SaleEditor.Attachment(card: card, describedAs: "Charizard")
     }
 
-    @Test @MainActor func attachingACardSellsItAndGivesTheOrderAGain() throws {
+    @Test @MainActor func attachingACardSellsItOnOneLine() throws {
         let container = try store()
         let context = container.mainContext
         let sale = order(context)
-        let charizard = card(context, basis: 1_000)
+        let charizard = card(context)
         try context.save()
 
         let attached = try SaleEditor.attach([attachment(charizard)], to: sale, context: context)
@@ -43,20 +42,7 @@ import Testing
         #expect(sale.lines.first?.card?.id == charizard.id)
         #expect(sale.lines.first?.describedAs == "Charizard")
         #expect(CardTagIndex.isSold(charizard))
-        #expect(sale.realizedGainCents == 1_967 - 1_000)
-    }
-
-    @Test @MainActor func aCardWithNoCostLeavesTheGainUnknown() throws {
-        let container = try store()
-        let context = container.mainContext
-        let sale = order(context)
-        let free = card(context, basis: 0)
-        try context.save()
-
-        try SaleEditor.attach([attachment(free)], to: sale, context: context)
-
-        #expect(sale.lines.first?.basisIncomplete == true)
-        #expect(sale.realizedGainCents == nil)
+        #expect(sale.netCents == 1_967)
     }
 
     @Test @MainActor func aSoldCardDoesNotJoinASecondOrder() throws {
@@ -64,7 +50,7 @@ import Testing
         let context = container.mainContext
         let first = order(context)
         let second = order(context)
-        let charizard = card(context, basis: 1_000)
+        let charizard = card(context)
         try context.save()
 
         try SaleEditor.attach([attachment(charizard), attachment(charizard)], to: first, context: context)
@@ -81,10 +67,10 @@ import Testing
         let container = try store()
         let context = container.mainContext
         let sale = order(context)
-        let recorded = SaleLine(sale: sale, basisIncomplete: true)
+        let recorded = SaleLine(sale: sale)
         recorded.describedAs = "Froakie 088/086"
         context.insert(recorded)
-        let froakie = card(context, basis: 250)
+        let froakie = card(context)
         try context.save()
 
         let linked = try SaleEditor.link(recorded, to: attachment(froakie), context: context)
@@ -94,7 +80,6 @@ import Testing
         #expect(recorded.card?.id == froakie.id)
         #expect(recorded.describedAs == "Froakie 088/086")
         #expect(CardTagIndex.isSold(froakie))
-        #expect(sale.realizedGainCents == 1_967 - 250)
     }
 
     @Test @MainActor func editingTheGrossKeepsTheEstimateAndEditingTheFeesEndsIt() throws {
@@ -119,27 +104,5 @@ import Testing
 
         #expect(sale.marketplaceFeesCents == 510)
         #expect(!sale.costsEstimated)
-    }
-
-    @Test @MainActor func aCostTypedOnALineGivesTheOrderAGainAndABlankTakesItAway() throws {
-        let container = try store()
-        let context = container.mainContext
-        let sale = order(context)
-        let free = card(context, basis: 0)
-        try context.save()
-        try SaleEditor.attach([attachment(free)], to: sale, context: context)
-        let line = try #require(sale.lines.first)
-
-        try SaleEditor.setCost(700, on: line, context: context)
-
-        #expect(!line.basisIncomplete)
-        #expect(sale.realizedGainCents == 1_967 - 700)
-        #expect(free.acquisitionBasisCents == 0)
-
-        try SaleEditor.setCost(nil, on: line, context: context)
-
-        #expect(line.basisIncomplete)
-        #expect(line.basisCents == 0)
-        #expect(sale.realizedGainCents == nil)
     }
 }

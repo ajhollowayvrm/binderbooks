@@ -1,9 +1,9 @@
 import SwiftData
 import SwiftUI
 
-/// Send raw cards to a grader. One submission, one entry per card, the fees
-/// split evenly across them. The cards are tagged "at grader" and stay in
-/// inventory, because they are still his.
+/// Send raw cards to a grader. One submission, one entry per card. The fees
+/// are one grading charge on the books, and no card carries them. The cards
+/// are tagged "at grader" and stay in inventory, because they are still his.
 struct SendToGraderSheet: View {
     var cards: [OwnedCard]
     var onSent: () -> Void
@@ -28,8 +28,6 @@ struct SendToGraderSheet: View {
             + (Money.cents(from: shipBackText) ?? 0) + (Money.cents(from: insuranceText) ?? 0)
     }
 
-    private var shares: [Int] { Allocation.splitEqually(totalCents, into: cards.count) }
-
     var body: some View {
         NavigationStack {
             Form {
@@ -52,7 +50,7 @@ struct SendToGraderSheet: View {
                 } header: {
                     Text("Cost")
                 } footer: {
-                    Text(splitDescription)
+                    Text(costDescription)
                 }
             }
             .navigationTitle(cards.count == 1 ? "Send 1 card" : "Send \(cards.count) cards")
@@ -66,13 +64,9 @@ struct SendToGraderSheet: View {
         }
     }
 
-    private var splitDescription: String {
+    private var costDescription: String {
         guard totalCents > 0 else { return "Fees can be filled in when the cards come back." }
-        let low = shares.min() ?? 0
-        let high = shares.max() ?? 0
-        if cards.count == 1 { return "\(totalCents.asCurrency) on this card." }
-        if low == high { return "\(totalCents.asCurrency) over \(cards.count) cards is \(low.asCurrency) each." }
-        return "\(totalCents.asCurrency) over \(cards.count) cards is \(low.asCurrency) each, and \(high.asCurrency) on the first \(shares.filter { $0 == high }.count)."
+        return "\(totalCents.asCurrency) goes on the books as one grading charge."
     }
 
     private func save() {
@@ -87,10 +81,6 @@ struct SendToGraderSheet: View {
         for card in cards {
             modelContext.insert(GradingEntry(submission: submission, card: card))
         }
-        Allocation.allocate(submission)
-        // The fee lands on the cards now, not when they come back. The return
-        // sheet re-allocates and overwrites these with the real invoice.
-        Allocation.capitalise(submission)
         CardTagEditor(context: modelContext).add(ReservedTag.atGrader(grader), to: cards)
         try? modelContext.save()
         onSent()

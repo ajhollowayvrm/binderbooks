@@ -34,8 +34,6 @@ struct EditPurchaseSheet: View {
         cents == 0 ? "" : Money.fieldText(cents)
     }
 
-    private var cards: [OwnedCard] { purchase.items.flatMap(\.cards) }
-
     /// Nil while the item cost does not read as money.
     private var details: PurchaseEditor.Details? {
         guard let item = Money.cents(from: itemText) else { return nil }
@@ -58,10 +56,6 @@ struct EditPurchaseSheet: View {
                     TextField("Vendor, e.g. Gamecraft", text: $vendor)
                         .textInputAutocapitalization(.words)
                     TextField("What it was", text: $note, axis: .vertical)
-                } footer: {
-                    if !cards.isEmpty {
-                        Text("A card that took this purchase's date moves with a new date.")
-                    }
                 }
 
                 Section {
@@ -95,11 +89,7 @@ struct EditPurchaseSheet: View {
     }
 
     private var moneyFooter: String {
-        if cards.isEmpty { return "No cards have come out of this purchase yet." }
-        if PurchaseEditor.canResplit(purchase) {
-            return "A new total splits again over the cards you did not price yourself."
-        }
-        return "Some cards from this purchase carry a cost from the import, so a new total does not change what any card cost."
+        "The total counts in your profit and loss. No card changes."
     }
 
     private func save() {

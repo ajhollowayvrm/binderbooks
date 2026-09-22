@@ -36,3 +36,16 @@ enum Money {
         return NSDecimalNumber(decimal: value * 100).rounding(accordingToBehavior: nil).intValue
     }
 }
+
+/// Splits a sum of cents into shares. Pure integer arithmetic. Every split
+/// sums back exactly.
+enum Split {
+    /// Splits `totalCents` into `count` shares that sum to exactly `totalCents`.
+    /// `equally(100000, into: 3)` is `[33334, 33333, 33333]`.
+    static func equally(_ totalCents: Int, into count: Int) -> [Int] {
+        guard count > 0 else { return [] }
+        let base = totalCents / count
+        let remainder = totalCents % count
+        return (0..<count).map { $0 < remainder ? base + 1 : base }
+    }
+}

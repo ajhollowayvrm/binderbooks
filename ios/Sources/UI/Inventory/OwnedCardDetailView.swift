@@ -3,8 +3,8 @@ import SwiftData
 import SwiftUI
 import UIKit
 
-/// One owned card: catalog data, the basis breakdown, the source purchase, and
-/// the edits that need no other model.
+/// One owned card: catalog data, its value, its scan, and the edits that need
+/// no other model. A card has no purchase and no cost.
 struct OwnedCardDetailView: View {
     @Query private var cards: [OwnedCard]
 
@@ -44,9 +44,7 @@ private struct OwnedCardDetailBody: View {
     @State private var tagTarget: TagSheetTarget?
     @State private var markingGraded = false
     @State private var confirmNoHits = false
-    @State private var editingCost = false
     @State private var pickingProduct = false
-    @State private var choosingPurchase = false
     @State private var ripTarget: TagSheetTarget?
     @State private var confirmMarkSChinese = false
     /// Copies the plus added while this screen is open.
@@ -67,7 +65,7 @@ private struct OwnedCardDetailBody: View {
             identity
             sealed
             tags
-            basis
+            value
             GradedCompsSection(card: card, categoryId: hit?.categoryId)
             source
             // A card with no catalog product: one he entered by hand, or an
@@ -97,7 +95,7 @@ private struct OwnedCardDetailBody: View {
         .confirmationDialog("No hits from this box?", isPresented: $confirmNoHits, titleVisibility: .visible) {
             Button("No hits", role: .destructive) { markNoHits() }
         } message: {
-            Text("This removes the box from inventory with nothing pulled from it. Its cost stays on the books as a loss.")
+            Text("This removes the box from inventory with nothing pulled from it. The purchase stays on the books.")
         }
         .confirmationDialog("Delete this card from inventory?", isPresented: $showDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive, action: onDelete)
@@ -117,26 +115,14 @@ private struct OwnedCardDetailBody: View {
                 model.invalidateHaystacks()
             }
         }
-        .sheet(isPresented: $editingCost) {
-            EditCardCostSheet(card: card) { model.invalidateHaystacks() }
-        }
         .sheet(isPresented: $pickingProduct) {
             CatalogPickSheet(currentProductId: card.productId, seed: card.displayName(hit) ?? card.ocrNumber ?? "") { picked in
                 assign(picked)
             }
         }
-        .sheet(isPresented: $choosingPurchase) {
-            ChoosePurchaseSheet(cards: [card]) { model.invalidateHaystacks() }
-        }
         .task(id: card.productId) {
             await model.load(for: [card])
         }
-        #if DEBUG
-        // `CT_CHOOSE_PURCHASE=1` opens the sheet, because simctl cannot tap.
-        .onAppear {
-            if ProcessInfo.processInfo.environment["CT_CHOOSE_PURCHASE"] == "1" { choosingPurchase = true }
-        }
-        #endif
     }
 
     private var identity: some View {
@@ -199,12 +185,12 @@ private struct OwnedCardDetailBody: View {
             } header: {
                 Text("Sealed")
             } footer: {
-                Text("Scan what comes out. The cards take this box's cost. A dud with nothing in it still leaves inventory — mark it No hits instead of ripping.")
+                Text("Scan what comes out. A dud with nothing in it still leaves inventory. Mark it No hits instead of ripping.")
             }
         }
     }
 
-    private var basis: some View {
+    private var value: some View {
         Section("Value") {
             LabeledContent(card.isHandEntered ? "Your value" : "Value", value: model.marketCents(for: card)?.asCurrency ?? "—")
             // What it might come back worth, per grader, from the comps he
@@ -219,74 +205,17 @@ private struct OwnedCardDetailBody: View {
                     }
                 }
             }
-            LabeledContent("Acquired", value: card.acquiredAt.formatted(date: .abbreviated, time: .omitted))
-            LabeledContent("Acquisition basis") {
-                HStack(spacing: 4) {
-                    Text(card.acquisitionBasisCents.asCurrency).monospacedDigit()
-                    if card.basisIsAllocated {
-                        Text("allocated").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            if card.gradingBasisCents > 0 {
-                LabeledContent("Grading basis", value: card.gradingBasisCents.asCurrency)
-            }
-            LabeledContent("Total basis", value: card.totalBasisCents.asCurrency)
-            if let diff = InventoryRow(card: card, hit: hit, marketCents: model.marketCents(for: card)).unrealizedCents {
-                LabeledContent("Unrealized") {
-                    Text((diff >= 0 ? "+" : "−") + abs(diff).asCurrency)
-                        .monospacedDigit()
-                        .foregroundStyle(diff >= 0 ? .green : .red)
-                }
-                if card.basisIsAllocated {
-                    Text("This cost was split out of the purchase. The pack result is still the truer read, but this is the figure to compare a sale against.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else if card.totalBasisCents == 0 {
-                Text("No cost on this card yet. Tap Edit cost to set one.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Button {
-                editingCost = true
-            } label: {
-                Label("Edit cost…", systemImage: "dollarsign.circle")
-            }
+            DatePicker(
+                "Acquired",
+                selection: Binding(get: { card.acquiredAt }, set: { card.acquiredAt = $0; save() }),
+                displayedComponents: .date
+            )
         }
     }
 
-    /// Always shown. A card with no purchase has no cost to split, and he can
-    /// only fix a gap he can see.
+    /// The scan the card came from, when it came from one.
     @ViewBuilder
     private var source: some View {
-        let purchase = card.sourceItem?.purchase
-        Section {
-            if let purchase {
-                NavigationLink(value: LedgerEntry.Kind.purchase(purchase.id)) {
-                    LabeledContent("Vendor", value: purchase.vendor.isEmpty ? "—" : purchase.vendor)
-                }
-                LabeledContent("Date", value: purchase.date.formatted(date: .abbreviated, time: .omitted))
-                LabeledContent("Landed cost", value: purchase.landedCostCents.asCurrency)
-                LabeledContent("Lines", value: "\(purchase.items.count)")
-                if !purchase.note.isEmpty {
-                    Text(purchase.note).font(.footnote).foregroundStyle(.secondary)
-                }
-            } else {
-                LabeledContent("Purchase", value: "None")
-            }
-            Button {
-                choosingPurchase = true
-            } label: {
-                Label(purchase == nil ? "Choose a purchase…" : "Change purchase…", systemImage: "cart")
-            }
-        } header: {
-            Text("Source")
-        } footer: {
-            if purchase == nil {
-                Text("With no purchase, this card has only a cost you typed. Choose where it came from, and it takes its share of that purchase.")
-            }
-        }
         if let session = card.scanSession {
             Section("Scan") {
                 LabeledContent("Scanned", value: card.scannedAt.formatted(date: .abbreviated, time: .shortened))
@@ -359,7 +288,7 @@ private struct OwnedCardDetailBody: View {
                     .foregroundStyle(.secondary)
             }
             Toggle("Personal collection (not inventory)", isOn: Binding(get: { card.isPersonalCollection }, set: { card.isPersonalCollection = $0; save() }))
-            Toggle("Bulk (identity only, no basis)", isOn: Binding(get: { card.isBulk }, set: { card.isBulk = $0; save() }))
+            Toggle("Bulk (identity only)", isOn: Binding(get: { card.isBulk }, set: { card.isBulk = $0; save() }))
             if card.isBulk {
                 Stepper("Quantity: \(card.quantity)", value: Binding(get: { max(1, card.quantity) }, set: { card.quantity = $0; save() }), in: 1...9_999)
             }
@@ -397,7 +326,7 @@ private struct OwnedCardDetailBody: View {
                     .foregroundStyle(.green)
             }
         } footer: {
-            Text("A new copy has no labels, no purchase, and no cost. Tap the stack on the inventory page to see each copy.")
+            Text("A new copy has no labels. Tap the stack on the inventory page to see each copy.")
         }
     }
 
@@ -447,12 +376,9 @@ private struct OwnedCardDetailBody: View {
         model.invalidateHaystacks()
     }
 
-    /// A box that produced nothing. Its line stays, ripped, at cost — the
-    /// dud's loss the purchase-level rip performance already expects — and
-    /// only the self-card that stood for it leaves.
+    /// A box that produced nothing. The self-card that stood for it leaves
+    /// inventory. The purchase stays on the books as it is.
     private func markNoHits() {
-        let item = Allocation.ripTarget(for: card, context: modelContext)
-        item.isRipped = true
         onDelete()
     }
 }

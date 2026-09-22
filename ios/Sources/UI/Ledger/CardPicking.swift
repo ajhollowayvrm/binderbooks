@@ -4,7 +4,7 @@ import SwiftUI
 /// The inventory list to tick the sold cards on. The attach sheet and the add
 /// sheet both use it. Put it inside a `NavigationStack`, for the search field.
 struct InventoryCardPicker: View {
-    /// In the order of the taps, so the cost fields list the cards that way.
+    /// In the order of the taps.
     @Binding var selection: [UUID]
     /// True when only one card can be ticked.
     var single = false
@@ -94,67 +94,6 @@ struct PickCardsSheet: View {
                         }
                     }
                 }
-        }
-    }
-}
-
-/// One cost field for each card, and a split for a lot. Put it in a `Section`.
-struct CardCostRows: View {
-    var cards: [OwnedCard]
-    @Binding var basisTexts: [UUID: String]
-    var name: (OwnedCard) -> String
-
-    @State private var splitTotalText = ""
-
-    var body: some View {
-        ForEach(cards) { card in
-            MoneyField(label: name(card), text: Binding(
-                get: { basisTexts[card.id] ?? "" },
-                set: { basisTexts[card.id] = $0 }
-            ))
-        }
-        if cards.count > 1 {
-            HStack {
-                MoneyField(label: "Split a total", text: $splitTotalText)
-                Button("Split") { split() }
-                    .disabled(Money.cents(from: splitTotalText) == nil)
-            }
-        }
-    }
-
-    private func split() {
-        guard let total = Money.cents(from: splitTotalText) else { return }
-        for (card, share) in zip(cards, Allocation.splitEqually(total, into: cards.count)) {
-            basisTexts[card.id] = Money.fieldText(share)
-        }
-    }
-
-    /// Fills each card's cost from its record once. A typed figure stays.
-    static func seeded(_ cards: [OwnedCard], _ texts: [UUID: String]) -> [UUID: String] {
-        var out = texts
-        for card in cards where out[card.id] == nil {
-            out[card.id] = SaleEditor.knownBasis(card).map(Money.fieldText) ?? ""
-        }
-        return out
-    }
-
-    /// The typed cost of each card, in the order of `cards`. Nil is no cost.
-    static func typedCents(_ cards: [OwnedCard], _ texts: [UUID: String]) -> [Int?] {
-        cards.map { Money.cents(from: texts[$0.id] ?? "") }
-    }
-}
-
-/// A gain in green, a loss in red, or "not known".
-struct GainText: View {
-    var cents: Int?
-
-    var body: some View {
-        if let cents {
-            Text((cents >= 0 ? "" : "−") + abs(cents).asCurrency)
-                .monospacedDigit()
-                .foregroundStyle(cents >= 0 ? Color.green : Color.red)
-        } else {
-            Text("not known").foregroundStyle(.secondary)
         }
     }
 }

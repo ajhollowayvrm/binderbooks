@@ -34,12 +34,8 @@ enum GradingEditor {
         }
     }
 
-    /// A new total splits again over the cards, and each card takes its share
-    /// at once, as a send does. The split runs only when the total changes,
-    /// so a new submission number does not overwrite a grading cost typed on
-    /// a card.
+    /// A new total changes the charge. No card changes.
     static func apply(_ details: Details, to submission: GradingSubmission, context: ModelContext) throws {
-        let totalChanged = details.totalCostCents != submission.totalCostCents
         submission.submissionNumber = details.submissionNumber.trimmingCharacters(in: .whitespaces)
         submission.serviceLevel = details.serviceLevel.trimmingCharacters(in: .whitespaces)
         submission.declaredValueCents = details.declaredValueCents
@@ -49,10 +45,6 @@ enum GradingEditor {
         submission.shipToGraderCents = details.shipToGraderCents
         submission.shipReturnCents = details.shipReturnCents
         submission.insuranceCents = details.insuranceCents
-        if totalChanged, !submission.entries.isEmpty {
-            Allocation.allocate(submission)
-            Allocation.capitalise(submission)
-        }
         try context.save()
     }
 }

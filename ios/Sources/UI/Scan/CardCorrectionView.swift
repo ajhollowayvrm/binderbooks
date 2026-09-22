@@ -126,7 +126,7 @@ struct CardCorrectionView: View {
                             }
                         }
                     }
-                    Toggle("Bulk (identity only, no basis)", isOn: Binding(
+                    Toggle("Bulk (identity only)", isOn: Binding(
                         get: { card.isBulk },
                         set: { model.setBulk($0, for: [card]) }
                     ))

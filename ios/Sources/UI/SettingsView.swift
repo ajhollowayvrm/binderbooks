@@ -162,7 +162,7 @@ struct SettingsView: View {
         }
     }
 
-    /// What selling a card costs him, for the grading projection on the ledger's
+    /// What selling a card costs him, for the potential on the ledger's
     /// Summary tab.
     ///
     /// The rates come from his own orders, so there is nothing to type and they
@@ -191,7 +191,7 @@ struct SettingsView: View {
             }
 
             HStack {
-                Text("Rate for projections")
+                Text("Rate for the potential")
                 Spacer()
                 TextField(SellingCostsKey.fieldText(rates.totalBasisPoints), text: $costOverride)
                     .keyboardType(.decimalPad)
@@ -203,7 +203,7 @@ struct SettingsView: View {
         } header: {
             Text("Fees")
         } footer: {
-            Text("Read from your own orders. Fees and shipping together come to \(SellingCostsKey.fieldText(rates.totalBasisPoints))%, which the grading projection uses. Type a rate to override it; clear the field to go back.")
+            Text("Read from your own orders. Fees and shipping together come to \(SellingCostsKey.fieldText(rates.totalBasisPoints))%, which the potential on the Summary uses. Type a rate to override it; clear the field to go back.")
         }
     }
 

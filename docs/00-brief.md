@@ -9,6 +9,18 @@ recorded here.
 arbitrary regardless of allocation method. Where the two documents disagree about
 rip basis, `04` wins.
 
+**Amended 2026-09-22: a card has no cost.** AJ removed the link between cards and
+purchases. A purchase is money on the books and a record of what he bought. It does
+not put a cost on a card, and a card does not point at a purchase. A rip deletes the
+sealed card and scans the pulls. It moves no cost. A grading charge stays one charge
+and puts nothing on a card. A sale line names a card and holds no cost. The Summary
+P&L is `revenue − purchases − grading − expenses`, which equals money in less money
+out. A second figure, "If you sold today", adds the market value of the cards he
+holds, less selling costs, and leaves out the personal collection. Every rule in this
+brief and in `02`, `03`, and `04` about per-card basis, allocation, cost of goods
+sold, or realized gain no longer applies. The stored fields stay, dormant, so old
+stores open and old exports import. See the amendment at the top of `02`.
+
 ---
 
 ## Who this is for
@@ -209,6 +221,9 @@ reason attached.
     The outlook also reads a fee rate off his own orders, which is the settings
     surface `02` asks for. Keep it to that one rate; the bulk-listing floor and the
     grade-or-not calculator are still not built and still need his sign-off first.
+    **Amended 2026-09-22:** the grading outlook is removed. He judges grading
+    potential himself, from the comps on each card. The Summary answers his four
+    other questions: what he has, what he spent, what he earned, and the potential.
 
 ---
 

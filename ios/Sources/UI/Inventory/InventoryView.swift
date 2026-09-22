@@ -1,8 +1,8 @@
 import SwiftData
 import SwiftUI
 
-/// The app's landing screen. Owned cards with market value, basis, and the
-/// difference where the basis is real. Filters are chips. Graded cards render
+/// The app's landing screen. Owned cards with their market value. Filters are
+/// chips. Graded cards render
 /// as slabs. The persistent search field sits above this view and passes its
 /// text down as `query`.
 struct InventoryView: View {
@@ -115,8 +115,6 @@ struct InventoryView: View {
             // the button.
             let env = ProcessInfo.processInfo.environment
             if env["CT_OPEN_METRICS"] == "1" { showMetrics = true }
-            // `CT_NO_PURCHASE=1` turns on the No purchase chip.
-            if env["CT_NO_PURCHASE"] == "1" { model.filter.noPurchaseOnly = true }
             // `CT_MASTER_SET=24722` opens that set as a master set checklist.
             if let groupId = env["CT_MASTER_SET"].flatMap(Int.init) {
                 model.filter.groupId = groupId
@@ -312,11 +310,6 @@ struct InventoryView: View {
                     Chip(title: "Master set", systemImage: "checklist", isSelected: showMasterSet) { showMasterSet.toggle() }
                 } else {
                     Chip(title: "Set", systemImage: "square.stack", isSelected: false) { showSetPicker = true }
-                }
-                // The cards with no cost to split. Choose a purchase clears them
-                // one at a time or as a selection.
-                Chip(title: "No purchase", systemImage: "cart.badge.questionmark", isSelected: model.filter.noPurchaseOnly) {
-                    model.filter.noPurchaseOnly.toggle()
                 }
                 // No Sold chip. A card he sold is not inventory, and the ledger
                 // holds it on its order.

@@ -6,8 +6,8 @@ import SwiftUI
 /// One cell per stack, not per card: nine identical packs are one cell with
 /// "×9" on the art. A tap on a stacked cell opens its copies.
 ///
-/// A cell cannot hold the basis or the gain. Those stay in the list layout, in
-/// the summary tiles, and on the card detail screen.
+/// A cell cannot hold the stack total or the grader line. Those stay in the
+/// list layout and on the card detail screen.
 struct OwnedCardGrid: View {
     var stacks: [InventoryStack]
     var columns = 3

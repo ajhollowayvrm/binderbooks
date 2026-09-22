@@ -139,7 +139,6 @@ private struct InventorySelectionChrome: ViewModifier {
     @State private var sellTarget: TagSheetTarget?
     @State private var compsTarget: TagSheetTarget?
     @State private var listTarget: TagSheetTarget?
-    @State private var purchaseTarget: TagSheetTarget?
     @State private var ripTarget: TagSheetTarget?
     @State private var deleteTarget: TagSheetTarget?
     @State private var fetcher = CompsFetcher()
@@ -214,12 +213,6 @@ private struct InventorySelectionChrome: ViewModifier {
             .sheet(item: $listTarget) { target in
                 TCGplayerExportSheet(preselected: Set(target.cards.map(\.id)))
             }
-            .sheet(item: $purchaseTarget) { target in
-                ChoosePurchaseSheet(cards: target.cards) {
-                    model.invalidateHaystacks()
-                    selection.end()
-                }
-            }
             .ripSheet($ripTarget) {
                 model.invalidateHaystacks()
                 selection.end()
@@ -233,7 +226,7 @@ private struct InventorySelectionChrome: ViewModifier {
                     if let target = deleteTarget { delete(target.cards) }
                 }
             } message: {
-                Text("This cannot be undone. A purchase keeps its cost.")
+                Text("This cannot be undone. Purchases on the books do not change.")
             }
             // The count and the cost show before anything is spent. A run over
             // three hundred cards is most of a day's credits.
@@ -316,13 +309,7 @@ private struct InventorySelectionChrome: ViewModifier {
             } label: {
                 Label("List on TCGplayer…", systemImage: "tablecells")
             }
-            Button {
-                purchaseTarget = TagSheetTarget(cards: selected)
-            } label: {
-                Label("Choose a purchase…", systemImage: "cart")
-            }
-            // Only sealed packs rip. Packs from several purchases rip as one:
-            // the pulls share their cost.
+            // Only sealed packs rip. Packs from several purchases rip as one.
             Button {
                 ripTarget = TagSheetTarget(cards: selected)
             } label: {

@@ -296,17 +296,16 @@ import Testing
         let sale = Sale(soldAt: day(iso), channelRaw: channel, grossCents: gross)
         context.insert(sale)
         for (name, card) in lines {
-            let line = SaleLine(sale: sale, card: card, basisCents: 0, basisIncomplete: true)
+            let line = SaleLine(sale: sale, card: card)
             line.describedAs = name
             context.insert(line)
         }
         return sale
     }
 
-    @MainActor private func card(_ context: ModelContext, _ productId: Int, printing: String, condition: String = "Near Mint", acquired: String, basis: Int = 0, tags: [String] = []) -> OwnedCard {
+    @MainActor private func card(_ context: ModelContext, _ productId: Int, printing: String, condition: String = "Near Mint", acquired: String, tags: [String] = []) -> OwnedCard {
         let card = OwnedCard(productId: productId, printing: printing, condition: condition, confidence: .manual)
         card.acquiredAt = day(acquired)
-        card.acquisitionBasisCents = basis
         card.tags = tags
         context.insert(card)
         return card
@@ -324,15 +323,15 @@ import Testing
         let s3 = sale(context, "2026-07-05", gross: 1_159, lines: [("Pidgeot ex", pidgeot)])
         let s4 = sale(context, "2026-09-05", gross: 4_300, lines: [("Umbreon", nil)])
 
-        let oldest = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-06-01", basis: 40)
-        _ = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-05-01", basis: 25, tags: ["sold"])
+        let oldest = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-06-01")
+        _ = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-05-01", tags: ["sold"])
         let noCost = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-07-01")
         _ = card(context, 3, printing: "Reverse Holofoil", condition: "Lightly Played", acquired: "2026-04-01")
         let newest = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-08-01")
         let charizardSlab = card(context, 1, printing: "Holofoil", acquired: "2026-05-01")
         charizardSlab.graderRaw = "cgc"
         charizardSlab.gradeLabel = "10"
-        let umbreonSlab = card(context, 7, printing: "Normal", acquired: "2026-08-01", basis: 900)
+        let umbreonSlab = card(context, 7, printing: "Normal", acquired: "2026-08-01")
         umbreonSlab.graderRaw = "cgc"
         umbreonSlab.gradeLabel = "Pristine 10"
         let umbreonOut = card(context, 7, printing: "Normal", acquired: "2026-07-01", tags: ["at CGC"])
@@ -362,7 +361,6 @@ import Testing
 
         let t400 = try #require(plan.newSales.first { $0.order.orderId == "T-400" })
         #expect(t400.lines.map(\.cardId) == [oldest.id, noCost.id, nil])
-        #expect(t400.lines.map(\.basisCents) == [40, nil, nil])
         #expect(t400.feeCents == 118)
         #expect(t400.postageCents == 78)
         // A slab takes the eBay sale over an older copy still marked at CGC.
@@ -395,7 +393,6 @@ import Testing
         #expect(created.shippingChargedCents == 78)
         #expect(created.marketplaceFeesCents == 118)
         #expect(created.lines.count == 3)
-        #expect(created.realizedGainCents == nil)
         #expect(!after.contains { $0.id == s2.id || $0.id == s3.id })
 
         // A second run of the same file changes nothing.
@@ -417,11 +414,11 @@ import Testing
         let store = try CollectionStore.container(inMemory: true)
         let context = store.mainContext
         history(context)
-        let charmander = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-06-01", basis: 40)
-        let newer = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-07-01", basis: 25)
+        let charmander = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-06-01")
+        let newer = card(context, 3, printing: "Reverse Holofoil", acquired: "2026-07-01")
         // Two Charizards: T-100 wants one and T-400 the other, oldest first.
-        let charizard = card(context, 1, printing: "Holofoil", acquired: "2026-05-01", basis: 300)
-        let charizardB = card(context, 1, printing: "Holofoil", acquired: "2026-08-01", basis: 320)
+        let charizard = card(context, 1, printing: "Holofoil", acquired: "2026-05-01")
+        let charizardB = card(context, 1, printing: "Holofoil", acquired: "2026-08-01")
         try context.save()
 
         // The order list on its own.
@@ -459,7 +456,6 @@ import Testing
 
         let fill = try #require(secondPlan.cardsToAdd.first { $0.id == "T-400" })
         #expect(fill.lines.map(\.cardId) == [charmander.id, newer.id, charizardB.id])
-        #expect(fill.lines.map(\.basisCents) == [40, 25, 320])
 
         let report = try SalesOrderImport.apply(secondPlan, removing: [], context: context)
         #expect(report.created == 0)
@@ -491,7 +487,7 @@ import Testing
         history(context)
         // One Charizard, wanted by T-100 (already on the books, cardless) and
         // by T-400 (new).
-        let only = card(context, 1, printing: "Holofoil", acquired: "2026-05-01", basis: 300)
+        let only = card(context, 1, printing: "Holofoil", acquired: "2026-05-01")
         let onBooks = sale(context, "2026-07-03", gross: 1_146)
         onBooks.externalOrderId = "T-100"
         try context.save()
@@ -701,6 +697,28 @@ import Testing
     @Test func ebaysDateFormatReads() {
         #expect(SalesOrderCSV.day("Sep-18-26") == SalesOrderCSV.day("2026-09-18"))
         #expect(SalesOrderCSV.day("Aug-25-26") == SalesOrderCSV.day("2026-08-25"))
+    }
+
+    /// The eBay import filed his orders in the year 26 from 2026-09-12 to
+    /// 2026-09-22. The launch repair moves them to 2026, and a second run
+    /// changes nothing.
+    @Test @MainActor func aSaleFiledInTheYear26MovesTo2026() throws {
+        let store = try CollectionStore.container(inMemory: true)
+        let context = store.mainContext
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let wrong = Sale(soldAt: utc.date(from: DateComponents(year: 26, month: 9, day: 18, hour: 12))!, channelRaw: "ebay", grossCents: 1900)
+        let right = Sale(soldAt: try #require(SalesOrderCSV.day("2026-09-19")), channelRaw: "ebay", grossCents: 500)
+        context.insert(wrong)
+        context.insert(right)
+        try context.save()
+
+        SalesOrderCSV.repairCenturyDates(context)
+        #expect(wrong.soldAt == SalesOrderCSV.day("2026-09-18"))
+        #expect(right.soldAt == SalesOrderCSV.day("2026-09-19"))
+
+        SalesOrderCSV.repairCenturyDates(context)
+        #expect(wrong.soldAt == SalesOrderCSV.day("2026-09-18"))
     }
 
     /// A title is full of numbers, so the grader word anchors the grade.

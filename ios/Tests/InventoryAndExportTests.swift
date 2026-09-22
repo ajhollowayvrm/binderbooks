@@ -81,13 +81,15 @@ private func seed(_ context: ModelContext) throws {
     sale.sourceRef = "z9kftlmj"
     context.insert(sale)
 
-    let soldLine = SaleLine(sale: sale, card: pull, basisCents: 1_600)
+    let soldLine = SaleLine(sale: sale, card: pull)
+    soldLine.basisCents = 1_600
     soldLine.id = UUID(uuidString: "00000000-0000-0000-0000-00000000000c")!
     soldLine.describedAs = "Charizard"
     context.insert(soldLine)
 
     // The older orders record a price and no card. Revenue is real; cost is not there.
-    let unknownLine = SaleLine(sale: sale, card: nil, basisCents: 0, basisIncomplete: true)
+    let unknownLine = SaleLine(sale: sale, card: nil)
+    unknownLine.basisIncomplete = true
     unknownLine.id = UUID(uuidString: "00000000-0000-0000-0000-00000000000d")!
     unknownLine.describedAs = "Poke Pad"
     context.insert(unknownLine)
@@ -142,9 +144,9 @@ private func seed(_ context: ModelContext) throws {
         let sale = try #require(try target.mainContext.fetch(FetchDescriptor<Sale>()).first)
         #expect(sale.lines.count == 2)
         #expect(sale.netCents == 1_283)
-        // One line has no known cost, so the sale reports no gain rather than
-        // a gain of the whole price.
-        #expect(sale.realizedGainCents == nil)
+        // The dormant cost fields on the lines survive the round trip.
+        #expect(sale.lines.contains { $0.basisCents == 1_600 })
+        #expect(sale.lines.contains { $0.basisIncomplete })
         #expect(sale.lines.contains { $0.card?.productId == 2 })
 
         let submission = try #require(try target.mainContext.fetch(FetchDescriptor<GradingSubmission>()).first)
@@ -380,8 +382,8 @@ private func seed(_ context: ModelContext) throws {
         #expect(sales.reduce(0) { $0 + $1.netCents } == 292_210)
 
         // docs/04 records this as byMarketValue, because that is what happened.
-        // Re-allocating would change the basis on cards that have already sold.
-        #expect(purchases.allSatisfy { $0.allocationMethod == .byMarketValue })
+        // The field is dormant, and the import still keeps it.
+        #expect(purchases.allSatisfy { $0.allocationMethodRaw == AllocationMethod.byMarketValue.rawValue })
     }
 
     @Test @MainActor func importingTheLedgerTwiceChangesNothing() throws {
@@ -398,7 +400,7 @@ private func seed(_ context: ModelContext) throws {
         #expect(try store.mainContext.fetch(FetchDescriptor<Sale>()).count == 131)
     }
 
-    @Test @MainActor func aCardHeIsGradingKeepsItsCostAndItsComps() throws {
+    @Test @MainActor func aCardHeIsGradingKeepsItsComps() throws {
         let file = try load()
         let store = try CollectionStore.container(inMemory: true)
         try CollectionExport.apply(file, to: store.mainContext, mode: .replace)
@@ -410,12 +412,8 @@ private func seed(_ context: ModelContext) throws {
         let atGrader = cards.filter { $0.tags.contains("at PSA") || $0.tags.contains("at CGC") || $0.tags.contains("at grader") }
         #expect(atGrader.count == 40)
         #expect(atGrader.allSatisfy { $0.graderRaw != nil })
-        // Nine carry no per-card fee: the outstanding May 2026 PSA submission
-        // that docs/00 names. Its two charges sit in `buys` and were never
-        // spread over the cards, so the cost is on the submission, not here.
-        #expect(atGrader.filter { $0.gradingBasisCents > 0 }.count == 31)
         // docs/04: the 8 charges name a card count and no cards, so nothing
-        // joins them. Each card carries its own grading cost instead.
+        // joins them.
         #expect(try store.mainContext.fetch(FetchDescriptor<GradingEntry>()).isEmpty)
 
         let withComps = cards.filter { !$0.gradedCompCents.isEmpty }
@@ -443,41 +441,6 @@ private func seed(_ context: ModelContext) throws {
         #expect(cards.contains { $0.tags.contains("sold") })
         #expect(cards.allSatisfy { !$0.tags.contains("kept") })
     }
-
-    @Test @MainActor func aRipPullSaysItsCostWasDerived() throws {
-        let file = try load()
-        let store = try CollectionStore.container(inMemory: true)
-        try CollectionExport.apply(file, to: store.mainContext, mode: .replace)
-        let cards = try store.mainContext.fetch(FetchDescriptor<OwnedCard>())
-
-        // The sealed line is the pack. There is no rip row to point at.
-        let pulls = cards.filter { $0.sourceItem?.isSealed == true }
-        #expect(pulls.count > 200)
-        #expect(pulls.allSatisfy { $0.sourceItem?.isRipped == true })
-        #expect(pulls.allSatisfy { $0.sourceItem?.purchase != nil })
-
-        // docs/04: the $193 box that produced three near-worthless hits. The
-        // basis is allocated, and the card says so.
-        let allocated = cards.filter(\.basisIsAllocated)
-        #expect(allocated.allSatisfy { !$0.basisIsManual })
-        // The Whatnot slabs he priced himself are the other case.
-        let typed = cards.filter(\.basisIsManual)
-        #expect(!typed.isEmpty)
-        #expect(typed.allSatisfy { !$0.basisIsAllocated })
-    }
-
-    @Test @MainActor func aSaleWithNoKnownCostReportsNoGain() throws {
-        let file = try load()
-        let store = try CollectionStore.container(inMemory: true)
-        try CollectionExport.apply(file, to: store.mainContext, mode: .replace)
-        let sales = try store.mainContext.fetch(FetchDescriptor<Sale>())
-
-        // 35 orders carry a price and no line at all, and many lines carry no
-        // basis. Revenue is real either way; a 100% margin would not be.
-        let unknown = sales.filter { $0.realizedGainCents == nil }
-        #expect(unknown.count >= 35)
-        #expect(sales.allSatisfy { $0.externalOrderId.isEmpty })
-    }
 }
 
 @Suite struct InventoryModelTests {
@@ -491,10 +454,9 @@ private func seed(_ context: ModelContext) throws {
         SearchHit(productId: id, groupId: group, categoryId: 3, name: "P\(id)", cleanName: "p\(id)", setName: "Set \(group)", isSealed: false, printingCount: 1)
     }
 
-    /// A cost split out of a purchase is still the figure he sells against, so
-    /// it counts towards unrealized. `allocatedCount` reports how many were
-    /// split; it no longer removes them (his call, 2026-09-10).
-    @Test @MainActor func unrealizedCoversEveryCardWithACostAndAPrice() throws {
+    /// Metrics adds up the cards and their market value. A bulk line counts
+    /// every copy.
+    @Test @MainActor func theSummaryAddsUpTheCardsAndTheirValue() throws {
         try seed(container.mainContext)
         let model = InventoryModel()
         model.setTestRows(
@@ -512,21 +474,6 @@ private func seed(_ context: ModelContext) throws {
         let summary = model.summary(of: rows)
         #expect(summary.cardCount == 6)
         #expect(summary.marketCents == 8_103 + 197 + 5 * 4)
-        #expect(summary.basisCents == 4_100 + 1_600)
-        // The slab cost $41 and the pull's split cost was $16. Both count.
-        #expect(summary.pricedBasisCents == 4_100 + 1_600)
-        #expect(summary.pricedMarketCents == 8_103 + 197)
-        #expect(summary.unrealizedCents == 8_103 + 197 - 4_100 - 1_600)
-        // Still reported, so he can see which costs were derived.
-        #expect(summary.allocatedCount == 1)
-
-        let pull = try #require(rows.first { $0.card.productId == 2 })
-        #expect(pull.unrealizedCents == 197 - 1_600)
-        let slab = try #require(rows.first { $0.card.productId == 1 })
-        #expect(slab.unrealizedCents == 4_003)
-        // A bulk card carries no cost of its own, so it has no gain to read.
-        let bulk = try #require(rows.first { $0.card.productId == 3 })
-        #expect(bulk.unrealizedCents == nil)
     }
 
     /// A hand-entered card has no catalog row. His value, name, set, number,
@@ -537,7 +484,6 @@ private func seed(_ context: ModelContext) throws {
         card.manualSetName = "Scarlatto e Violetto"
         card.manualNumber = "025/165"
         card.manualMarketCents = 900
-        card.acquisitionBasisCents = 400
         card.language = "it"
         container.mainContext.insert(card)
         try container.mainContext.save()
@@ -550,8 +496,7 @@ private func seed(_ context: ModelContext) throws {
         #expect(row.setName == "Scarlatto e Violetto")
         #expect(row.number == "025/165")
         #expect(row.marketCents == 900)
-        #expect(row.unrealizedCents == 500)
-        #expect(model.summary(of: [row]).pricedMarketCents == 900)
+        #expect(model.summary(of: [row]).marketCents == 900)
         #expect(row.card.hasIdentity)
         #expect(CardLanguage.badge(row.card.language) == "IT")
         for query in ["pikachu", "scarlatto", "italian", "25/165"] {
@@ -566,21 +511,20 @@ private func seed(_ context: ModelContext) throws {
     /// from 40 days ago but he added it last, so it is still the newest.
     @Test @MainActor func sortOrdersThePageAndPutsMissingFiguresLast() throws {
         let context = container.mainContext
-        func card(_ name: String, market: Int?, basis: Int, daysAgo: Double, acquiredDaysAgo: Double? = nil, set: String?, number: String) {
+        func card(_ name: String, market: Int?, daysAgo: Double, acquiredDaysAgo: Double? = nil, set: String?, number: String) {
             let card = OwnedCard(productId: 0, printing: "", condition: "Near Mint", confidence: .manual)
             card.manualName = name
             card.manualSetName = set ?? ""
             card.manualNumber = number
             card.manualMarketCents = market
-            card.acquisitionBasisCents = basis
             card.acquiredAt = Date(timeIntervalSinceNow: -(acquiredDaysAgo ?? daysAgo) * 86_400)
             card.scannedAt = Date(timeIntervalSinceNow: -daysAgo * 86_400)
             context.insert(card)
         }
-        card("Umbreon", market: 10_000, basis: 2_000, daysAgo: 3, set: "Evolving Skies", number: "215/203")
-        card("Venusaur", market: 900, basis: 400, daysAgo: 1, set: "Base Set", number: "15/102")
-        card("Charizard", market: nil, basis: 1_000, daysAgo: 2, set: "Base Set", number: "4/102")
-        card("Mew", market: 900, basis: 2_000, daysAgo: 0, acquiredDaysAgo: 40, set: nil, number: "151")
+        card("Umbreon", market: 10_000, daysAgo: 3, set: "Evolving Skies", number: "215/203")
+        card("Venusaur", market: 900, daysAgo: 1, set: "Base Set", number: "15/102")
+        card("Charizard", market: nil, daysAgo: 2, set: "Base Set", number: "4/102")
+        card("Mew", market: 900, daysAgo: 0, acquiredDaysAgo: 40, set: nil, number: "151")
         try context.save()
 
         let model = InventoryModel()
@@ -592,8 +536,6 @@ private func seed(_ context: ModelContext) throws {
             // Mew and Venusaur tie at $9, so the newer Mew leads both ways.
             .valueHigh: ["Umbreon", "Mew", "Venusaur", "Charizard"],
             .valueLow: ["Mew", "Venusaur", "Umbreon", "Charizard"],
-            .gainHigh: ["Umbreon", "Venusaur", "Mew", "Charizard"],
-            .gainLow: ["Mew", "Venusaur", "Umbreon", "Charizard"],
             .name: ["Charizard", "Mew", "Umbreon", "Venusaur"],
             // 4/102 before 15/102, and the card with no set goes last.
             .setNumber: ["Charizard", "Venusaur", "Umbreon", "Mew"],
@@ -649,9 +591,9 @@ private func seed(_ context: ModelContext) throws {
         #expect(!model.rows(from: cards).contains { $0.card.productId == 2 })
         // The collection half of a search, which does not apply the chips.
         #expect(!model.rows(from: cards, applyFilter: false).contains { $0.card.productId == 2 })
-        // Metrics reports what the page left, so the pull's $16.00 goes with
-        // it and only the slab's $41.00 remains.
-        #expect(model.summary(of: model.rows(from: cards)).basisCents == 4_100)
+        // Metrics reports what the page left, so the pull goes with it. The
+        // slab and the bulk line of four remain.
+        #expect(model.summary(of: model.rows(from: cards)).cardCount == 5)
 
         // An imported row carries the status and no label until the backfill
         // runs. It must be gone too.
@@ -680,8 +622,8 @@ private func seed(_ context: ModelContext) throws {
         try container.mainContext.save()
 
         #expect(model.rows(from: cards).contains { $0.card.productId == 2 })
-        // Its cost came back with it, so the totals reconcile again.
-        #expect(model.summary(of: model.rows(from: cards)).basisCents == 5_700)
+        // It counts again, so the totals reconcile again.
+        #expect(model.summary(of: model.rows(from: cards)).cardCount == 6)
         // And the card kept the comps he typed in by hand.
         #expect(card.gradedCompCents == ["10": 12_000, "9.5": 5_100])
     }

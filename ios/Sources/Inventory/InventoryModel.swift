@@ -13,23 +13,6 @@ struct InventoryRow: Identifiable {
     var setName: String? { card.setName(hit) }
     var number: String? { card.number(hit) }
 
-    /// Market minus what the card cost. A basis split out of a pack or a lot
-    /// counts: he prices a card from what the item cost, and reads the
-    /// difference when he sells it. `basisIsAllocated` still says the figure
-    /// was derived, but it no longer hides it (his call, 2026-09-10; it
-    /// overrides the `docs/04` rule).
-    ///
-    /// Nil when there is no market price or no cost, because market minus
-    /// nothing is not a gain.
-    ///
-    /// A graded card counts against what the slab is worth, not the raw
-    /// price: he paid the acquisition and the grading fee, and a PSA 10 is
-    /// not the card the catalog prices.
-    var unrealizedCents: Int? {
-        guard !card.isBulk, card.totalBasisCents > 0, let value = gradedValueCents ?? marketCents else { return nil }
-        return value - card.totalBasisCents
-    }
-
     /// What the slab is worth at the grade it came back at. Nil while the
     /// grade is unknown, or when he has entered no figure for that grade.
     var gradedValueCents: Int? {
@@ -62,12 +45,6 @@ struct InventoryRow: Identifiable {
     var sortValueCents: Int? {
         gradedValueCents ?? projectedRange?.lowerBound ?? marketCents
     }
-
-    /// The figure a gain sort reads. Nil under a projection, because the row
-    /// shows no gain there.
-    var sortGainCents: Int? {
-        projectedRange == nil ? unrealizedCents : nil
-    }
 }
 
 /// The order of the inventory page. The row must show the number the list
@@ -77,8 +54,6 @@ enum InventorySort: String, CaseIterable, Identifiable, Sendable {
     case oldest
     case valueHigh
     case valueLow
-    case gainHigh
-    case gainLow
     case name
     case setNumber
 
@@ -98,8 +73,6 @@ enum InventorySort: String, CaseIterable, Identifiable, Sendable {
         case .oldest: return "Oldest first"
         case .valueHigh: return "Value: high to low"
         case .valueLow: return "Value: low to high"
-        case .gainHigh: return "Gain: high to low"
-        case .gainLow: return "Gain: low to high"
         case .name: return "Name"
         case .setNumber: return "Set and number"
         }
@@ -116,10 +89,6 @@ enum InventorySort: String, CaseIterable, Identifiable, Sendable {
             return Self.byFigure(rows, descending: true, \.sortValueCents)
         case .valueLow:
             return Self.byFigure(rows, descending: false, \.sortValueCents)
-        case .gainHigh:
-            return Self.byFigure(rows, descending: true, \.sortGainCents)
-        case .gainLow:
-            return Self.byFigure(rows, descending: false, \.sortGainCents)
         case .name:
             return rows.map { ($0, $0.name) }
                 .sorted { a, b in
@@ -186,31 +155,19 @@ struct InventoryFilter: Equatable {
     /// `TagKey` values, not display forms. A card matches when it holds any of
     /// them, which is what "binder 3" plus "for sale" means to him.
     var tagKeys: Set<String> = []
-    /// Only the cards with no purchase behind them, which have no cost to split.
-    var noPurchaseOnly = false
     /// Singles or sealed. The same choice as the search page's chips.
     var kind: SearchFilter.Kind = .all
 
     /// True when a chip is on. The typed query is not part of this, because the
     /// search header owns the query and the Clear button must not wipe it.
     var isActive: Bool {
-        !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly || !tagKeys.isEmpty || noPurchaseOnly || kind != .all
+        !confidences.isEmpty || groupId != nil || slabsOnly || hideBulk || personalOnly || !tagKeys.isEmpty || kind != .all
     }
 }
 
 struct InventorySummary: Equatable {
     var cardCount = 0
     var marketCents = 0
-    var basisCents = 0
-    /// Market and basis over the cards that carry both, so the difference is a
-    /// comparison of like with like.
-    var pricedMarketCents = 0
-    var pricedBasisCents = 0
-    /// How many of those costs were split out of a purchase rather than paid
-    /// for one card. Reported, not deducted.
-    var allocatedCount = 0
-
-    var unrealizedCents: Int { pricedMarketCents - pricedBasisCents }
 }
 
 /// Joins committed cards to the catalog and serves the filtered list.
@@ -277,12 +234,6 @@ final class InventoryModel {
             s.cardCount += max(1, row.card.quantity)
             let market = (row.marketCents ?? 0) * max(1, row.card.quantity)
             s.marketCents += market
-            s.basisCents += row.card.totalBasisCents
-            if row.card.basisIsAllocated { s.allocatedCount += 1 }
-            if !row.card.isBulk, row.marketCents != nil, row.card.totalBasisCents > 0 {
-                s.pricedMarketCents += market
-                s.pricedBasisCents += row.card.totalBasisCents
-            }
         }
         return s
     }
@@ -303,8 +254,14 @@ final class InventoryModel {
     }
 
     func load(for cards: [OwnedCard]) async {
+        await load(productIds: cards.map(\.productId))
+    }
+
+    /// Loads the catalog rows and prices for these products. A product that
+    /// is already loaded is not asked for again.
+    func load(productIds: [Int]) async {
         guard let db = database() else { return }
-        let ids = Array(Set(cards.map(\.productId).filter { $0 > 0 }))
+        let ids = Array(Set(productIds.filter { $0 > 0 }))
         let missingHits = ids.filter { hits[$0] == nil }
         let missingPrices = ids.filter { prices[$0] == nil }
         guard !missingHits.isEmpty || !missingPrices.isEmpty else { return }
@@ -370,7 +327,6 @@ final class InventoryModel {
         if filter.slabsOnly, !card.isSlabbed { return false }
         if filter.hideBulk, card.isBulk { return false }
         if filter.personalOnly, !card.isPersonalCollection { return false }
-        if filter.noPurchaseOnly, card.sourceItem?.purchase != nil { return false }
         if filter.kind != .all, (filter.kind == .sealed) != Self.isSealed(card, hit: hits[card.productId]) { return false }
         return true
     }

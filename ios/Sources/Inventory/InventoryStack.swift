@@ -3,9 +3,9 @@ import Foundation
 /// Copies of one thing, shown as one line with a count.
 ///
 /// Nine packs off one purchase are nine `OwnedCard` rows, because each pack is
-/// ripped on its own and carries its own share of what the purchase cost. The
-/// page must not read as nine identical cells, so cards that would draw the
-/// same cell collapse into one of these and the count goes on the art.
+/// ripped on its own. The page must not read as nine identical cells, so cards
+/// that would draw the same cell collapse into one of these and the count goes
+/// on the art.
 ///
 /// This is a display grouping only. Nothing is written, the store keeps every
 /// copy, and `InventoryModel.rows` still answers per card — the sort, the
@@ -41,17 +41,6 @@ struct InventoryStack: Identifiable {
         return priced.isEmpty ? nil : priced.reduce(0, +)
     }
 
-    /// What every copy cost, added up. Shares split out of a purchase count,
-    /// the same as on one row.
-    var totalBasisCents: Int { rows.reduce(0) { $0 + $1.card.totalBasisCents } }
-
-    /// The gain over the whole stack. Only the copies that have both a cost
-    /// and a price count, so it is nil exactly when no copy shows a gain.
-    var unrealizedCents: Int? {
-        let gains = rows.compactMap(\.unrealizedCents)
-        return gains.isEmpty ? nil : gains.reduce(0, +)
-    }
-
     /// The labels every copy carries, in the lead copy's order. The line draws
     /// these the way it draws one card's.
     var sharedTags: [String] {
@@ -75,7 +64,9 @@ struct InventoryStack: Identifiable {
         var counts: [String: Int] = [:]
         for row in rows {
             let labels = row.card.tags + (row.card.isPersonalCollection ? ["PC"] : [])
-            for label in Set(labels.map(TagKey.of)) {
+            // In the card's own order, so the badges read the same every time.
+            var seen: Set<String> = []
+            for label in labels.map(TagKey.of) where seen.insert(label).inserted {
                 if display[label] == nil {
                     order.append(label)
                     display[label] = labels.first { TagKey.of($0) == label }
@@ -97,7 +88,7 @@ struct InventoryStack: Identifiable {
 
     /// Where a tap goes. One card opens that card. A stack opens the copies,
     /// because the lead card's detail would hide the other eight — and each
-    /// one has its own cost, its own tags, and its own pack to rip.
+    /// one has its own tags and its own pack to rip.
     var route: AppRoute {
         isStacked ? .cardStack(lead.card.id) : .ownedCard(lead.card.id)
     }

@@ -1,12 +1,18 @@
 import Foundation
 import SwiftData
 
-// The collection store. His data, irreplaceable. Shapes follow docs/02-data-model.md,
-// with the `basisIsAllocated` flag from docs/04. The store references the catalog
-// by integer productId only and never embeds a name or a price.
+// The collection store. His data, irreplaceable. Shapes follow docs/02-data-model.md.
+// The store references the catalog by integer productId only and never embeds a
+// name or a price.
 //
 // All money is Int cents.
+//
+// Since 2026-09-22 a card has no link to a purchase and no cost. The fields
+// that held the link and the cost stay, marked dormant, so old stores open and
+// old exports import. Only `CollectionExport` reads and writes them.
 
+/// Kept only because the default value of the dormant
+/// `Purchase.allocationMethodRaw` uses it.
 enum AllocationMethod: String, Codable, CaseIterable {
     case equal
     case byMarketValue
@@ -100,6 +106,7 @@ final class Purchase {
     var taxCents: Int = 0
     var feesCents: Int = 0
 
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var allocationMethodRaw: String = AllocationMethod.equal.rawValue
 
     /// The row's id in the BinderBooks ledger it was imported from. Empty for
@@ -121,14 +128,10 @@ final class Purchase {
     }
 
     var landedCostCents: Int { itemCostCents + shippingCents + taxCents + feesCents }
-
-    var allocationMethod: AllocationMethod {
-        get { AllocationMethod(rawValue: allocationMethodRaw) ?? .equal }
-        set { allocationMethodRaw = newValue.rawValue }
-    }
 }
 
-/// One line of a purchase: a sealed product, or cards. Sealed items nest.
+/// One line of a purchase: a sealed product, or cards. The record of what he
+/// bought. It has no link to the cards in inventory.
 @Model
 final class PurchaseItem {
     #Unique<PurchaseItem>([\.id])
@@ -137,27 +140,30 @@ final class PurchaseItem {
     var productId: Int = 0
     var quantity: Int = 1
     var isSealed: Bool = false
-    /// Written by the allocator, not by hand.
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var allocatedCostCents: Int = 0
 
     var purchase: Purchase?
 
-    /// Set when this item came out of ripping a larger sealed item.
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var parentItem: PurchaseItem?
 
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     @Relationship(deleteRule: .cascade, inverse: \PurchaseItem.parentItem)
     var childItems: [PurchaseItem] = []
 
+    /// Dormant since 2026-09-22. Kept for old stores and exports. The delete
+    /// rule is cascade, so delete a purchase only with `PurchaseEditor.delete`.
     @Relationship(deleteRule: .cascade, inverse: \OwnedCard.sourceItem)
     var cards: [OwnedCard] = []
 
-    /// Set on a pack once its wrapper has been read. Nil until then.
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var identifiedGroupId: Int?
 
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var isRipped: Bool = false
 
-    /// Lines ripped together share one value. Their pulls share their combined
-    /// cost, even across purchases. Nil for a line ripped alone. See `RipPool`.
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var ripGroupId: UUID?
 
     init(productId: Int, quantity: Int = 1, isSealed: Bool = false) {
@@ -165,17 +171,6 @@ final class PurchaseItem {
         self.productId = productId
         self.quantity = quantity
         self.isSealed = isSealed
-    }
-
-    /// True when every card on this line is bulk. Excluded from allocation.
-    var isBulkOnly: Bool {
-        !cards.isEmpty && cards.allSatisfy(\.isBulk)
-    }
-
-    /// True when he priced every card on this line himself. The line then takes
-    /// its own money out of the purchase total instead of a share of it.
-    var isManualOnly: Bool {
-        !cards.isEmpty && cards.allSatisfy(\.basisIsManual)
     }
 }
 
@@ -198,28 +193,29 @@ final class OwnedCard {
     var acquiredAt: Date = Date()
     var statusRaw: String = CardStatus.owned.rawValue
 
-    /// Allocated at intake.
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var acquisitionBasisCents: Int = 0
-    /// Added when a grading submission returns. Zero for raw cards.
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var gradingBasisCents: Int = 0
-    /// True when the allocator wrote the basis. A rip pull's per-card basis is
-    /// an artifact. Never show it next to a market value as a gain or loss.
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var basisIsAllocated: Bool = false
-    /// True when he priced the card himself, at review. A purchase total never
-    /// overwrites it, and it comes out of the total before the split.
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var basisIsManual: Bool = false
 
-    /// Not individually accounted. Excluded from allocation denominators.
+    /// Not individually accounted: one card with a count.
     var isBulk: Bool = false
-    /// Cards he is keeping. Not inventory; excluded from COGS.
+    /// Cards he is keeping. Not inventory, and not counted in what he could
+    /// sell today.
     var isPersonalCollection: Bool = false
 
     /// True while this card stands for an unopened sealed item itself, not a
-    /// card pulled from one. Set only on the card `AddToInventorySheet` writes
-    /// for a sealed product. Ripping the item deletes this card, so it never
-    /// coexists with `sourceItem?.isRipped == true`.
+    /// card pulled from one. Set on the cards `AddToInventorySheet` and
+    /// `PurchaseIntake` write for a sealed product. Ripping the item deletes
+    /// this card.
     var isSealedSelf: Bool = false
 
+    /// Dormant since 2026-09-22. Kept for old stores and exports. Only
+    /// `PurchaseEditor.delete` writes it: it clears the link before a purchase goes.
     var sourceItem: PurchaseItem?
     var scanSession: ScanSession?
 
@@ -316,8 +312,6 @@ final class OwnedCard {
         self.scannedAt = Date()
     }
 
-    var totalBasisCents: Int { acquisitionBasisCents + gradingBasisCents }
-
     var status: CardStatus {
         get { CardStatus(rawValue: statusRaw) ?? .owned }
         set { statusRaw = newValue.rawValue }
@@ -355,10 +349,10 @@ final class ScanSession {
     /// reads kana out of an English card's foil, and one invented kana used to
     /// send the whole match into the Japanese catalogue.
     var language: String = ScanLanguage.english.rawValue
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var purchase: Purchase?
-    /// The sealed item this session is ripping, when it is one. Its cards join
-    /// this item directly on commit, instead of each starting a new line, so
-    /// the box's own share of the purchase is what splits over them.
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old
+    /// stores and exports. A rip keeps its packs in `UserDefaults`. See `Rip`.
     var ripTarget: PurchaseItem?
 
     @Relationship(deleteRule: .cascade, inverse: \OwnedCard.scanSession)
@@ -417,10 +411,8 @@ final class ScanSession {
 // and there is no rip. See `SaleLine`, and `docs/04-seed-import.md`.
 //
 // **There is no `RipEvent`.** Opening a pack is an intake path, not a record:
-// he rips from the purchase, the cards land in inventory with their share of
-// what the purchase cost, and nothing writes a row for the opening itself. The
-// sealed `PurchaseItem` is the pack, and it already carries both the cost and
-// the cards.
+// the sealed card leaves inventory, the pulls come in through a scan, and
+// nothing writes a row for the opening itself. See `Rip`.
 
 @Model
 final class GradingSubmission {
@@ -458,8 +450,8 @@ final class GradingSubmission {
     }
 }
 
-/// One card inside a submission. The fee splits equally across entries, which
-/// is correct here because the grader charged per card.
+/// One card inside a submission. The fees stay on the submission as one
+/// grading charge.
 @Model
 final class GradingEntry {
     #Unique<GradingEntry>([\.id])
@@ -471,6 +463,7 @@ final class GradingEntry {
     /// 10, 9.5. Nil until the submission returns.
     var grade: Double?
     var certNumber: String = ""
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var allocatedFeeCents: Int = 0
     /// N0, altered, or rejected. A card can come back ungraded.
     var noGrade: Bool = false
@@ -532,13 +525,6 @@ final class Sale {
         grossCents + shippingChargedCents
             - marketplaceFeesCents - salesTaxCents - shippingCostCents - otherFeesCents
     }
-
-    /// Nil when any line has no basis. A sale with an unknown cost must not
-    /// report a gain, because the gain would be the whole price.
-    var realizedGainCents: Int? {
-        guard !lines.isEmpty, lines.allSatisfy({ !$0.basisIncomplete }) else { return nil }
-        return netCents - lines.reduce(0) { $0 + $1.basisCents }
-    }
 }
 
 /// One card, or one sealed item, inside an order. A premium collection is worth
@@ -552,9 +538,9 @@ final class SaleLine {
     var card: OwnedCard?
     var sealedItem: PurchaseItem?
 
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var basisCents: Int = 0
-    /// True when the cost of what sold is unknown. His older orders record a
-    /// price and no card, so the revenue is real and the cost is not there.
+    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var basisIncomplete: Bool = false
 
     /// The card's name as the order recorded it. The store holds no card name,
@@ -563,12 +549,10 @@ final class SaleLine {
 
     var sourceRef: String = ""
 
-    init(sale: Sale? = nil, card: OwnedCard? = nil, basisCents: Int = 0, basisIncomplete: Bool = false) {
+    init(sale: Sale? = nil, card: OwnedCard? = nil) {
         self.id = UUID()
         self.sale = sale
         self.card = card
-        self.basisCents = basisCents
-        self.basisIncomplete = basisIncomplete
     }
 }
 

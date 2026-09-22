@@ -59,16 +59,8 @@ struct CardStackView: View {
                 if let total = stack.totalValueCents {
                     LabeledContent("Value", value: total.asCurrency)
                 }
-                LabeledContent("Cost", value: stack.totalBasisCents.asCurrency)
-                if let gain = stack.unrealizedCents {
-                    LabeledContent("Unrealized") {
-                        Text((gain >= 0 ? "+" : "−") + abs(gain).asCurrency)
-                            .font(.body.monospacedDigit())
-                            .foregroundStyle(gain >= 0 ? .green : .red)
-                    }
-                }
             } footer: {
-                Text("Every copy, added up. Cost counts the share each one carries of what its purchase cost.")
+                Text("Every copy, added up.")
             }
 
             if !stack.mixedLabels.isEmpty {

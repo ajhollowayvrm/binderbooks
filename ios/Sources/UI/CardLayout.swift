@@ -8,7 +8,7 @@ let cardLayoutKey = "cardLayout"
 /// persists, because AJ picks one and keeps it.
 enum CardLayout: String, CaseIterable, Sendable {
     /// The dense row: thumbnail, name, set, number, price. An owned row also
-    /// carries the basis and the gain, which a grid cell cannot hold.
+    /// carries the stack total and the grader line, which a grid cell cannot hold.
     case list
     /// Three large arts per row, with the market price under each.
     case grid

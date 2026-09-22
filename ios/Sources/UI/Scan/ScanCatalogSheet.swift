@@ -4,8 +4,8 @@ import SwiftUI
 /// the camera will not read, or a stack he would rather type.
 ///
 /// Each tap adds one copy, the way a scan logs one card, so a second tap on the
-/// same row is a second copy. The cards join the session: a purchase's scan
-/// puts them on the purchase, and a rip's scan makes them pulls of the rip.
+/// same row is a second copy. The cards join the session. A rip's scan makes
+/// them pulls of the rip.
 /// Singles only. A sealed product goes in through the plus menu or a purchase.
 struct ScanCatalogSheet: View {
     let model: ScanSessionModel

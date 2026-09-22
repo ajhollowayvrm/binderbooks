@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// One inventory line. Dense: slab or thumbnail, identity, market, basis.
+/// One inventory line. Dense: slab or thumbnail, identity, market.
 ///
 /// It draws one card, or one stack of copies: the price stays the price of one
-/// — the list sorted by it — and the cost and the gain are the stack's, with
-/// the total value under the price so the two are never read as one figure.
+/// — the list sorted by it — and the stack's total value goes under the price,
+/// so the two are never read as one figure.
 struct OwnedCardRow: View {
     let row: InventoryRow
 
@@ -77,22 +77,6 @@ struct OwnedCardRow: View {
                     Text("bulk")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                } else if row.projectedRange == nil, let diff = gainCents {
-                    // The gain against what the card cost, split basis or not.
-                    // This is the number he reads before he sells. Not shown
-                    // under a projection, because it is a gain on the raw
-                    // price and the row no longer leads with that.
-                    Text((diff >= 0 ? "+" : "−") + abs(diff).asCurrency)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(diff >= 0 ? .green : .red)
-                } else if basisCents > 0 {
-                    Text("cost \(basisCents.asCurrency)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("no cost")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
                 }
             }
         }
@@ -114,12 +98,6 @@ struct OwnedCardRow: View {
         if let stack { return stack.cardIds.contains(where: masterSetHeld.contains) }
         return masterSetHeld.contains(row.card.id)
     }
-
-    /// The cost and the gain cover every copy the line stands for, so they can
-    /// be read against the total above them.
-    private var basisCents: Int { isStacked ? (stack?.totalBasisCents ?? 0) : row.card.totalBasisCents }
-
-    private var gainCents: Int? { isStacked ? stack?.unrealizedCents : row.unrealizedCents }
 }
 
 /// The look of a grader's label. PSA prints a red label with white text. CGC

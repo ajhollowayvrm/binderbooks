@@ -29,12 +29,11 @@ import Testing
 
     /// Cards, newest last so the page's order is the order they were made in.
     @discardableResult
-    private func packs(_ count: Int, basisCents: Int = 0, productId: Int = 1) -> [OwnedCard] {
+    private func packs(_ count: Int, productId: Int = 1) -> [OwnedCard] {
         var made: [OwnedCard] = []
         for i in 0..<count {
             let card = OwnedCard(productId: productId, printing: "", condition: CardCondition.nearMint.rawValue, confidence: .manual)
             card.isSealedSelf = true
-            card.acquisitionBasisCents = basisCents
             card.scannedAt = Date(timeIntervalSinceReferenceDate: 800_000_000 - Double(i))
             card.acquiredAt = card.scannedAt
             container.mainContext.insert(card)
@@ -48,7 +47,7 @@ import Testing
     }
 
     @Test @MainActor func nineIdenticalPacksAreOneLineWithACount() throws {
-        packs(9, basisCents: 800)
+        packs(9)
         try container.mainContext.save()
         let model = inventory([1: [ProductPrice(subTypeName: "", marketCents: 911, asOf: "2026-09-17")]])
         let cards = try fetch()
@@ -66,8 +65,6 @@ import Testing
         // stack carries the total beside it.
         #expect(stack.lead.marketCents == 911)
         #expect(stack.totalValueCents == 911 * 9)
-        #expect(stack.totalBasisCents == 800 * 9)
-        #expect(stack.unrealizedCents == (911 - 800) * 9)
         #expect(stack.route == .cardStack(stack.lead.card.id))
     }
 
@@ -121,7 +118,7 @@ import Testing
     /// The card screen's plus adds the same card with none of what the
     /// original is doing, so it joins the original's line.
     @Test @MainActor func theAddedCopyJoinsTheLine() throws {
-        let original = packs(1, basisCents: 500)[0]
+        let original = packs(1)[0]
         original.tags = ["listed"]
         original.isPersonalCollection = true
         try container.mainContext.save()
@@ -130,7 +127,6 @@ import Testing
         #expect(copy.id != original.id)
         #expect(copy.tags.isEmpty)
         #expect(!copy.isPersonalCollection)
-        #expect(copy.acquisitionBasisCents == 0)
         #expect(copy.sourceItem == nil)
 
         let stack = try #require(inventory().stacks(from: try fetch()).first)

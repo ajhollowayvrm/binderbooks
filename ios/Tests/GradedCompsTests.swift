@@ -42,7 +42,6 @@ import Testing
     @Test @MainActor func aKnownGradeReplacesTheProjection() {
         let card = OwnedCard(productId: 1, printing: "Holofoil", condition: "Near Mint", confidence: .manual)
         card.gradedCompCents = ["PSA 10": 12_000, "PSA 9": 4_000, "PSA 8": 2_500]
-        card.acquisitionBasisCents = 3_000
         card.tags = ["at PSA"]
 
         let out = InventoryRow(card: card, hit: nil, marketCents: 500)
@@ -57,8 +56,6 @@ import Testing
         #expect(back.projectedRange == nil)
         #expect(back.gradedValueCents == 4_000)
         #expect(back.priceText == "$40.00")
-        // The gain counts against the slab, not the raw card.
-        #expect(back.unrealizedCents == 1_000)
     }
 
     @Test func rangeTextCollapsesWhenTheCompsAgree() {

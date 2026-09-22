@@ -105,12 +105,7 @@ struct EditGradingSheet: View {
     }
 
     private var costFooter: String {
-        let count = submission.entries.count
-        switch count {
-        case 0: return "No cards are on this charge, so the cost stays on the charge."
-        case 1: return "A new total becomes the card's grading cost."
-        default: return "A new total splits equally over the \(count) cards, and each card's grading cost changes with it."
-        }
+        "The total is one grading charge on the books. No card changes."
     }
 
     private func save() {

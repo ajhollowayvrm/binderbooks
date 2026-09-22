@@ -10,8 +10,7 @@ struct PendingListingsFile: Identifiable {
 /// Review the stock a TCGplayer pricing export lists, then bring it onto the
 /// inventory with the `listed` tag.
 ///
-/// Nothing is saved until he taps Import. The cost is optional, because he
-/// often does not know what a card he listed long ago cost.
+/// Nothing is saved until he taps Import.
 struct TCGplayerListingImportSheet: View {
     let contents: TCGplayerPricingCSV.Contents
 
@@ -24,12 +23,8 @@ struct TCGplayerListingImportSheet: View {
 
     @State private var plan: Import.Plan?
     @State private var catalogMissing = false
-    @State private var costText = ""
     @State private var report: Import.Report?
     @State private var failure: String?
-
-    private var costCents: Int? { Money.cents(from: costText) }
-    private var costIsValid: Bool { costText.isEmpty || costCents != nil }
 
     var body: some View {
         NavigationStack {
@@ -54,7 +49,7 @@ struct TCGplayerListingImportSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Import") { run() }
-                        .disabled(report != nil || !(plan?.hasWork ?? false) || !costIsValid)
+                        .disabled(report != nil || !(plan?.hasWork ?? false))
                 }
             }
         }
@@ -87,13 +82,6 @@ struct TCGplayerListingImportSheet: View {
             }
 
             if plan.toAddCount > 0 {
-                Section {
-                    MoneyField(label: "Total cost", text: $costText)
-                } header: {
-                    Text("Cost of the new cards")
-                } footer: {
-                    Text(costDescription(plan.toAddCount))
-                }
                 lineSection("New to inventory", lines: plan.lines.filter { $0.toAdd > 0 }, count: \.toAdd)
             }
 
@@ -137,15 +125,6 @@ struct TCGplayerListingImportSheet: View {
         }
     }
 
-    private func costDescription(_ count: Int) -> String {
-        guard let costCents else {
-            return costText.isEmpty ? "Optional. Leave it blank for no cost yet." : "Type an amount, such as 12.50."
-        }
-        guard count > 1 else { return "\(costCents.asCurrency) for this card." }
-        let low = Allocation.splitEqually(costCents, into: count).min() ?? 0
-        return "\(costCents.asCurrency) over \(count) cards is \(low.asCurrency) each."
-    }
-
     // MARK: - Actions
 
     private func build() async {
@@ -166,9 +145,9 @@ struct TCGplayerListingImportSheet: View {
     }
 
     private func run() {
-        guard let plan, costIsValid else { return }
+        guard let plan else { return }
         do {
-            report = try Import.apply(plan, costCents: costCents, context: modelContext)
+            report = try Import.apply(plan, context: modelContext)
         } catch {
             failure = error.localizedDescription
         }

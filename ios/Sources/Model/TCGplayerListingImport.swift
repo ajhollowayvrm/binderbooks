@@ -237,10 +237,10 @@ enum TCGplayerListingImport {
         return key(a) < key(b)
     }
 
-    /// `costCents` is his total for the added cards. It splits evenly, the way
-    /// a cost typed in `AddToInventorySheet` does. Nil adds them with no cost.
+    /// Tags the held cards listed and adds the new cards, also tagged listed.
+    /// A new card has no purchase and no cost.
     @discardableResult
-    static func apply(_ plan: Plan, costCents: Int?, context: ModelContext) throws -> Report {
+    static func apply(_ plan: Plan, context: ModelContext) throws -> Report {
         let cards = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<OwnedCard>()).map { ($0.id, $0) })
         var tagged: [OwnedCard] = []
         var added: [OwnedCard] = []
@@ -262,12 +262,6 @@ enum TCGplayerListingImport {
             }
         }
 
-        if let costCents {
-            for (card, share) in zip(added, Allocation.splitEqually(costCents, into: added.count)) {
-                card.acquisitionBasisCents = share
-                card.basisIsManual = true
-            }
-        }
         CardTagEditor(context: context).add(ReservedTag.listed, to: tagged + added)
         try context.save()
         return Report(tagged: tagged.count, added: added.count)

@@ -10,6 +10,8 @@ final class ScanSessionModel {
     let session: ScanSession
     private let context: ModelContext
     private let catalog: CatalogController
+    /// Where a rip keeps its packs. See `Rip`. Tests pass their own.
+    private let defaults: UserDefaults
 
     /// Catalog rows for every product the session touches, by productId.
     private(set) var hits: [Int: SearchHit] = [:]
@@ -28,10 +30,11 @@ final class ScanSessionModel {
     /// catalog matches, so nothing is written to disk unless a card asks.
     private var pendingPhotos: [UUID: Data] = [:]
 
-    init(session: ScanSession, context: ModelContext, catalog: CatalogController) {
+    init(session: ScanSession, context: ModelContext, catalog: CatalogController, defaults: UserDefaults = .standard) {
         self.session = session
         self.context = context
         self.catalog = catalog
+        self.defaults = defaults
     }
 
     var cards: [OwnedCard] { session.cardsNewestFirst }
@@ -203,8 +206,7 @@ final class ScanSessionModel {
 
     /// Logs a card he found by name in the catalog, in place of the camera.
     /// It joins the session like a scanned card, so the commit treats it the
-    /// same: a purchase line, or a pull of the rip. He picked it, so it is
-    /// `.manual` and needs no review.
+    /// same. He picked it, so it is `.manual` and needs no review.
     func add(_ hit: SearchHit) async {
         hits[hit.productId] = hit
         let card = OwnedCard(productId: hit.productId, printing: session.defaultPrinting ?? "", condition: session.defaultCondition, confidence: .manual)
@@ -281,39 +283,6 @@ final class ScanSessionModel {
         for card in cards { card.condition = condition }
         save()
     }
-
-    /// Splits one total evenly over the given cards and marks the basis as his.
-    /// A split over several cards is still a derived figure for any one card, so
-    /// it stays flagged as allocated and never renders as a gain or a loss. A
-    /// total set on one card is that card's real cost.
-    func setBasis(totalCents: Int, for cards: [OwnedCard]) {
-        let tracked = cards.sorted { $0.scannedAt < $1.scannedAt }
-        guard !tracked.isEmpty else { return }
-        let shares = Allocation.splitEqually(totalCents, into: tracked.count)
-        for (card, share) in zip(tracked, shares) {
-            card.acquisitionBasisCents = share
-            card.basisIsManual = true
-            card.basisIsAllocated = tracked.count > 1
-        }
-        save()
-    }
-
-    /// Clears a price he set, so the purchase total covers the card again.
-    func clearBasis(for cards: [OwnedCard]) {
-        for card in cards {
-            card.acquisitionBasisCents = 0
-            card.basisIsManual = false
-            card.basisIsAllocated = false
-        }
-        save()
-    }
-
-    /// What he has priced himself. The commit sheet subtracts it from the total.
-    var manualBasisCents: Int {
-        cards.filter(\.basisIsManual).reduce(0) { $0 + $1.acquisitionBasisCents }
-    }
-
-    var pricedCardCount: Int { cards.filter(\.basisIsManual).count }
 
     func setBulk(_ isBulk: Bool, for cards: [OwnedCard]) {
         for card in cards { card.isBulk = isBulk }
@@ -429,32 +398,12 @@ final class ScanSessionModel {
 
     // MARK: - Commit
 
-    /// Attach the session to a purchase and mark it committed. A generic
-    /// session gets one new line per card, and the whole purchase reallocates.
-    /// A rip session's cards join the box's own line instead: its cost is
-    /// already fixed, so only that line's cards need their basis rewritten.
-    ///
-    /// The purchase is optional. He can log cards he never paid for, or cards
-    /// whose cost he does not want to record yet, and the ledger stays empty.
-    /// Those cards keep only the cost he set at review, if he set one.
-    func commit(to purchase: Purchase?) {
-        if let target = session.ripTarget {
-            // The packs leave inventory here, not when the rip started. Every
-            // line ripped with this one goes too. See `RipPool`.
-            let owner = purchase ?? target.purchase
-            RipPool.finish(target, pulls: cards, acquiredAt: owner?.date ?? Date(), context: context)
-            session.purchase = owner
-        } else if let purchase {
-            for card in cards where card.sourceItem == nil {
-                let item = PurchaseItem(productId: card.productId, quantity: 1, isSealed: false)
-                item.purchase = purchase
-                context.insert(item)
-                card.sourceItem = item
-                card.acquiredAt = purchase.date
-            }
-            Allocation.allocate(purchase)
-            Allocation.writeCardBases(purchase)
-            session.purchase = purchase
+    /// Mark the session committed, so its cards become inventory. It makes
+    /// no purchase and no purchase line. A rip session also takes its packs
+    /// out of inventory here. See `Rip`.
+    func commit() {
+        if Rip.isRip(session, defaults: defaults) {
+            Rip.finish(session, context: context, defaults: defaults)
         }
         session.committedAt = Date()
         save()
@@ -462,7 +411,7 @@ final class ScanSessionModel {
 
     func discard() {
         // A rip that never committed leaves the packs sealed, as they were.
-        if let target = session.ripTarget { RipPool.release(target, context: context) }
+        Rip.forget(session, defaults: defaults)
         CardPhotoStore.remove(cards.map(\.id))
         context.delete(session)
         save()

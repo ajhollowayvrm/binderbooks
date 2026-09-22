@@ -1,9 +1,8 @@
 import SwiftData
 import SwiftUI
 
-/// Put inventory cards on an order that is on the books. The first page picks
-/// the cards. The second page sets what each card cost, as `SellSheet` does.
-/// Each card gets the "sold" tag and leaves inventory.
+/// Put inventory cards on an order that is on the books. Pick the cards, then
+/// attach them. Each card gets the "sold" tag and leaves inventory.
 ///
 /// With a `line`, the sheet links one card to a line that names a card and
 /// links none. The order then does not count that card twice.
@@ -18,8 +17,6 @@ struct AttachCardsSheet: View {
     @Query private var cards: [OwnedCard]
 
     @State private var selection: [UUID] = []
-    @State private var pricing = false
-    @State private var basisTexts: [UUID: String] = [:]
     @State private var failed = false
 
     private var chosen: [OwnedCard] {
@@ -35,14 +32,10 @@ struct AttachCardsSheet: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Next") {
-                            basisTexts = CardCostRows.seeded(chosen, basisTexts)
-                            pricing = true
-                        }
-                        .disabled(selection.isEmpty)
+                        Button(line == nil ? "Attach" : "Link") { save(chosen) }
+                            .disabled(selection.isEmpty)
                     }
                 }
-                .navigationDestination(isPresented: $pricing) { costForm }
         }
         .alert("The cards were not attached", isPresented: $failed) {
             Button("OK") {}
@@ -51,54 +44,9 @@ struct AttachCardsSheet: View {
         }
     }
 
-    private var costForm: some View {
-        let picked = chosen
-        return Form {
-            Section {
-                CardCostRows(cards: picked, basisTexts: $basisTexts, name: name)
-            } header: {
-                Text("What the cards cost")
-            } footer: {
-                Text("What you paid for each card. A card left blank has no cost, and the order's gain is not known until it does.")
-            }
-
-            Section {
-                LabeledContent("Net") {
-                    Text(sale.netCents.asCurrency).font(.body.weight(.semibold).monospacedDigit())
-                }
-                LabeledContent("Gain") { GainText(cents: gainCents(picked)) }
-            } footer: {
-                if sale.lines.contains(where: { $0.id != line?.id }) {
-                    Text("The gain also counts the cards that are on this order already.")
-                }
-            }
-        }
-        .navigationTitle(picked.count == 1 ? "1 card" : "\(picked.count) cards")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button(line == nil ? "Attach" : "Link") { save(picked) }
-                    .disabled(picked.isEmpty)
-            }
-        }
-    }
-
-    private func name(_ card: OwnedCard) -> String {
-        card.displayName(model.hits[card.productId]) ?? "Card"
-    }
-
-    /// The gain the order shows after the save. The line to link is replaced,
-    /// so its old "no cost" does not count.
-    private func gainCents(_ picked: [OwnedCard]) -> Int? {
-        let kept = sale.lines.filter { $0.id != line?.id }
-        let typed = CardCostRows.typedCents(picked, basisTexts)
-        guard !picked.isEmpty, kept.allSatisfy({ !$0.basisIncomplete }), typed.allSatisfy({ $0 != nil }) else { return nil }
-        return sale.netCents - kept.reduce(0) { $0 + $1.basisCents } - typed.compactMap { $0 }.reduce(0, +)
-    }
-
     private func save(_ picked: [OwnedCard]) {
-        let items = zip(picked, CardCostRows.typedCents(picked, basisTexts)).map { card, cents in
-            SaleEditor.Attachment(card: card, describedAs: card.displayName(model.hits[card.productId]) ?? "", basisCents: cents)
+        let items = picked.map { card in
+            SaleEditor.Attachment(card: card, describedAs: card.displayName(model.hits[card.productId]) ?? "")
         }
         do {
             if let line, let item = items.first {

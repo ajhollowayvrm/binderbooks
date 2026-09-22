@@ -150,9 +150,8 @@ struct RootView: View {
             StatusTagBackfill.run(modelContext)
             // Simplified Chinese was dropped. Its cards go, once.
             ChineseRemoval.run(modelContext)
-            // The Rip option needs `isSealedSelf`, which arrived after boxes
-            // were already in inventory. This flags them, once.
-            SealedSelfBackfill.run(modelContext)
+            // eBay orders imported before 2026-09-22 were filed in the year 26.
+            SalesOrderCSV.repairCenturyDates(modelContext)
             applyDebugQuery()
         }
     }
@@ -165,7 +164,7 @@ struct RootView: View {
     static var debugLedgerTab: LedgerTab {
         #if DEBUG
         switch ProcessInfo.processInfo.environment["CT_OPEN_LEDGER"] {
-        case "summary", "outlook": return .summary
+        case "summary": return .summary
         default: return .activity
         }
         #else
@@ -241,14 +240,13 @@ struct RootView: View {
             search.text = ""
             path = NavigationPath()
         }
-        // `CT_OPEN_CARD=nopurchase` pushes the newest card with no purchase.
-        if let spec = env["CT_OPEN_CARD"], spec == "1" || spec == "nopurchase" {
+        // `CT_OPEN_CARD=1` pushes the newest card.
+        if env["CT_OPEN_CARD"] == "1" {
             Task {
                 while !catalog.isReady { try? await Task.sleep(for: .milliseconds(200)) }
                 var descriptor = FetchDescriptor<OwnedCard>(sortBy: [SortDescriptor(\.scannedAt, order: .reverse)])
-                if spec == "1" { descriptor.fetchLimit = 1 }
-                let cards = (try? modelContext.fetch(descriptor)) ?? []
-                if let card = spec == "1" ? cards.first : cards.first(where: { $0.sourceItem?.purchase == nil && !CardTagIndex.isSold($0) }) {
+                descriptor.fetchLimit = 1
+                if let card = (try? modelContext.fetch(descriptor))?.first {
                     try? await Task.sleep(for: .milliseconds(300))
                     path.append(AppRoute.ownedCard(card.id))
                 }

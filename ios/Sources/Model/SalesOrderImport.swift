@@ -44,8 +44,6 @@ enum SalesOrderImport {
         var describedAs: String
         var productId: Int?
         var cardId: UUID?
-        /// Nil when no card is linked, or the card has no cost.
-        var basisCents: Int?
         var skuId: Int?
     }
 
@@ -247,7 +245,6 @@ enum SalesOrderImport {
                     if let card = candidates.first(where: \.isSlabbed) ?? candidates.first {
                         used.insert(card.id)
                         new.cardId = card.id
-                        new.basisCents = card.totalBasisCents > 0 ? card.totalBasisCents : nil
                     }
                     lines.append(new)
                 }
@@ -396,7 +393,7 @@ enum SalesOrderImport {
             if match.addsLines, sale.lines.isEmpty {
                 for line in match.order.lines {
                     for _ in 0..<line.quantity {
-                        let added = SaleLine(sale: sale, basisIncomplete: true)
+                        let added = SaleLine(sale: sale)
                         added.describedAs = line.productName
                         context.insert(added)
                         report.linesAdded += 1
@@ -420,8 +417,7 @@ enum SalesOrderImport {
             var sold: [OwnedCard] = []
             for line in new.lines {
                 let card = line.cardId.flatMap { cards[$0] }.flatMap { CardTagIndex.isSold($0) ? nil : $0 }
-                let basis = card == nil ? nil : line.basisCents
-                let saleLine = SaleLine(sale: sale, card: card, basisCents: basis ?? 0, basisIncomplete: basis == nil)
+                let saleLine = SaleLine(sale: sale, card: card)
                 saleLine.describedAs = line.describedAs
                 context.insert(saleLine)
                 if let card {
@@ -442,8 +438,7 @@ enum SalesOrderImport {
             var sold: [OwnedCard] = []
             for line in addition.lines {
                 let card = line.cardId.flatMap { cards[$0] }.flatMap { CardTagIndex.isSold($0) ? nil : $0 }
-                let basis = card == nil ? nil : line.basisCents
-                let saleLine = SaleLine(sale: sale, card: card, basisCents: basis ?? 0, basisIncomplete: basis == nil)
+                let saleLine = SaleLine(sale: sale, card: card)
                 saleLine.describedAs = line.describedAs
                 context.insert(saleLine)
                 report.linesAdded += 1

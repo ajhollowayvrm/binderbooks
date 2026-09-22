@@ -4,10 +4,10 @@ import SwiftData
 /// The products he names on a purchase while he records it: the sealed box,
 /// the packs, or the singles, found in the catalog.
 ///
-/// Each product becomes one `PurchaseItem` with one card for each copy, the
-/// same shape `AddToInventorySheet` writes. A sealed product's cards are the
-/// boxes themselves, so they can be ripped later. The purchase total then
-/// splits over every copy, the same as a scanned card.
+/// Each product becomes one `PurchaseItem`, the record of what he bought. Each
+/// copy also becomes one card in inventory. A sealed product's cards are the
+/// boxes themselves, so he can rip them later. The cards have no link to the
+/// purchase and no cost. The purchase total stays on the books as it is.
 enum PurchaseIntake {
     struct Line: Identifiable, Hashable {
         var productId: Int
@@ -44,7 +44,7 @@ enum PurchaseIntake {
         lines.map { $0.quantity > 1 ? "\($0.quantity)x \($0.name)" : $0.name }.joined(separator: ", ")
     }
 
-    /// Writes the lines onto the purchase and splits its total over them.
+    /// Writes the lines onto the purchase and adds the cards to inventory.
     /// Returns the new cards.
     @discardableResult
     static func record(_ lines: [Line], on purchase: Purchase, context: ModelContext) -> [OwnedCard] {
@@ -57,13 +57,10 @@ enum PurchaseIntake {
                 let card = OwnedCard(productId: line.productId, printing: line.printing, condition: CardCondition.nearMint.rawValue, confidence: .manual)
                 card.isSealedSelf = line.isSealed
                 card.acquiredAt = purchase.date
-                card.sourceItem = item
                 context.insert(card)
                 added.append(card)
             }
         }
-        Allocation.allocate(purchase)
-        Allocation.writeCardBases(purchase)
         return added
     }
 }

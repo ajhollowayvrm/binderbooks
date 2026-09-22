@@ -45,7 +45,7 @@ struct LedgerEntry: Identifiable, Hashable {
                     kind: .purchase(purchase.id),
                     date: purchase.date,
                     title: purchase.vendor.isEmpty ? "Purchase" : purchase.vendor,
-                    detail: purchase.note.isEmpty ? cardCount(purchase) : "\(cardCount(purchase)) · \(purchase.note)",
+                    detail: [itemSummary(purchase), purchase.note].filter { !$0.isEmpty }.joined(separator: " · "),
                     amountCents: -purchase.landedCostCents
                 )
             )
@@ -92,63 +92,15 @@ struct LedgerEntry: Identifiable, Hashable {
         return out.sorted { $0.date == $1.date ? $0.title < $1.title : $0.date > $1.date }
     }
 
-    /// How many cards came out of a purchase. "no cards yet" is the gap he
-    /// looks for: money on the books with nothing in inventory to show for it.
-    ///
-    /// A rip of packs from several purchases hangs every pull on one of them.
-    /// That purchase says its cards came from a shared rip, and the others say
-    /// which purchase holds their pulls, not "no cards yet": the gap that
-    /// phrase points at is not there. The amount on the row stays what he paid.
-    static func cardCount(_ purchase: Purchase) -> String {
-        let count = purchase.items.reduce(0) { $0 + $1.cards.count }
-        let shared = sharedRipHomes(of: purchase)
+    /// How many items the purchase lists: "1 item", "6 items". Empty when it
+    /// lists none. A line of several copies counts each copy.
+    static func itemSummary(_ purchase: Purchase) -> String {
+        let count = purchase.items.reduce(0) { $0 + max(1, $1.quantity) }
         switch count {
-        case 0:
-            if let home = shared.first(where: { $0.id != purchase.id }) {
-                return "ripped with \(home.vendor.isEmpty ? "another purchase" : home.vendor)"
-            }
-            return "no cards yet"
-        case 1: return shared.isEmpty ? "1 card" : "1 card · shared rip"
-        default: return shared.isEmpty ? "\(count) cards" : "\(count) cards · shared rip"
+        case 0: return ""
+        case 1: return "1 item"
+        default: return "\(count) items"
         }
-    }
-
-    /// What a purchase holds, for a picker row: its lines, its cards, and the
-    /// sealed items still unopened. A count of lines alone said nothing about
-    /// what was in the purchase, so a row could not be told from the row above
-    /// it.
-    static func purchaseContents(_ purchase: Purchase) -> String {
-        var parts = ["\(purchase.items.count) \(purchase.items.count == 1 ? "line" : "lines")"]
-        parts.append(cardCount(purchase))
-        let sealed = purchase.items
-            .filter { $0.isSealed && !$0.isRipped }
-            .reduce(0) { $0 + max(1, $1.quantity) }
-        if sealed > 0 { parts.append("\(sealed) sealed unopened") }
-        return parts.joined(separator: " · ")
-    }
-
-    /// The part of the total that is not the cards themselves. Empty when he
-    /// paid none, so a row carries the line only when it says something.
-    static func purchaseExtras(_ purchase: Purchase) -> String {
-        let extra = purchase.shippingCents + purchase.taxCents + purchase.feesCents
-        guard extra > 0 else { return "" }
-        return "\(extra.asCurrency) of the total is shipping, tax, and fees"
-    }
-
-    /// The purchases that hold the pulls of each rip this purchase shares with
-    /// another purchase. Empty when every rip on it was its own.
-    static func sharedRipHomes(of purchase: Purchase) -> [Purchase] {
-        var homes: [Purchase] = []
-        var seen = Set<UUID>()
-        for item in purchase.items where item.isRipped && item.ripGroupId != nil {
-            let group = RipPool.lines(of: item)
-            guard Set(group.compactMap { $0.purchase?.id }).count > 1,
-                  let home = RipPool.home(of: group)?.purchase,
-                  seen.insert(home.id).inserted
-            else { continue }
-            homes.append(home)
-        }
-        return homes
     }
 
     static func channelName(_ raw: String) -> String {

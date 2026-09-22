@@ -4,12 +4,11 @@ import SwiftUI
 /// Record money by hand: a purchase, an order, a grading charge, or an expense.
 ///
 /// This writes the money. A purchase can also take what came in it, found in
-/// the catalog: each product goes into inventory with its share of the total.
-/// A note alone is enough, for a purchase the catalog does not describe.
-/// An order can also take the cards that sold, picked
-/// from inventory: each card goes on the order with its cost and is tagged
-/// sold. An order with no cards reads "gain not known" — the same shape as the
-/// 35 imported orders that recorded a price and no lines.
+/// the catalog: each product is recorded on the purchase and goes into
+/// inventory, with no link to the purchase and no cost. A note alone is
+/// enough, for a purchase the catalog does not describe. An order can also
+/// take the cards that sold, picked from inventory: each card goes on the
+/// order and is tagged sold.
 struct AddTransactionSheet: View {
     enum Kind: String, CaseIterable, Identifiable {
         case purchase = "Purchase"
@@ -58,7 +57,6 @@ struct AddTransactionSheet: View {
     @State private var shippingText = ""
     @State private var taxText = ""
     @State private var saleCards: [OwnedCard] = []
-    @State private var basisTexts: [UUID: String] = [:]
     @State private var picking = false
     @State private var lines: [PurchaseIntake.Line] = []
     @State private var searchingCatalog = false
@@ -82,13 +80,6 @@ struct AddTransactionSheet: View {
         case .sale: return amountCents - feesCents - shippingCents - taxCents
         case .expense: return amountCents
         }
-    }
-
-    /// Nil until every card has a cost, the same rule as `Sale.realizedGainCents`.
-    private var saleGainCents: Int? {
-        let typed = CardCostRows.typedCents(saleCards, basisTexts)
-        guard !saleCards.isEmpty, typed.allSatisfy({ $0 != nil }) else { return nil }
-        return previewCents - typed.compactMap { $0 }.reduce(0, +)
     }
 
     var body: some View {
@@ -118,18 +109,16 @@ struct AddTransactionSheet: View {
 
                 if kind == .sale {
                     Section {
-                        CardCostRows(cards: saleCards, basisTexts: $basisTexts, name: cardName)
+                        ForEach(saleCards) { Text(cardName($0)) }
                         Button {
                             picking = true
                         } label: {
                             Label(saleCards.isEmpty ? "Attach cards" : "Change cards", systemImage: "plus")
                         }
                     } header: {
-                        Text(saleCards.isEmpty ? "Cards" : "What the cards cost")
+                        Text("Cards")
                     } footer: {
-                        Text(saleCards.isEmpty
-                             ? "Pick the cards that sold, from inventory."
-                             : "What you paid for each card. A card left blank has no cost, and the order's gain is not known until it does.")
+                        Text("Pick the cards that sold, from inventory.")
                     }
                 }
 
@@ -159,8 +148,8 @@ struct AddTransactionSheet: View {
                         Text("What was in it")
                     } footer: {
                         Text(lines.isEmpty
-                             ? "Find the sealed product or the cards. Each one goes into inventory with its share of the total."
-                             : "Each one goes into inventory with its share of the total. Swipe a row to take it off.")
+                             ? "Find the sealed product or the cards. Each one is recorded on the purchase and goes into inventory."
+                             : "Each one is recorded on the purchase and goes into inventory. Swipe a row to take it off.")
                     }
                 }
 
@@ -178,9 +167,6 @@ struct AddTransactionSheet: View {
                             .font(.body.weight(.semibold).monospacedDigit())
                             .foregroundStyle(kind.isMoneyIn ? Color.green : Color.primary)
                     }
-                    if kind == .sale && !saleCards.isEmpty {
-                        LabeledContent("Gain") { GainText(cents: saleGainCents) }
-                    }
                 } footer: {
                     Text(footnote)
                 }
@@ -196,7 +182,6 @@ struct AddTransactionSheet: View {
             .sheet(isPresented: $picking) {
                 PickCardsSheet(initial: saleCards.map(\.id)) { cards in
                     saleCards = cards
-                    basisTexts = CardCostRows.seeded(cards, basisTexts)
                 }
             }
             .sheet(isPresented: $searchingCatalog) {
@@ -259,13 +244,13 @@ struct AddTransactionSheet: View {
         switch kind {
         case .purchase:
             return lines.isEmpty
-                ? "Nothing is identified yet. Open the purchase and scan what came out of it."
-                : "The products go into inventory, and the total splits over every copy."
+                ? "The purchase counts in your profit and loss. Cards you add later are not tied to it."
+                : "The products are recorded on the purchase and go into inventory."
         case .sale:
             return saleCards.isEmpty
-                ? "This records the money. With no cards attached, the gain reads as not known. You can attach cards later from the order."
+                ? "This records the money. You can attach cards later from the order."
                 : "This records the money, and the cards are tagged sold and leave inventory."
-        case .grading: return "No cards are attached. Each card keeps its own grading cost."
+        case .grading: return "No cards are attached."
         case .expense: return "A cost that attaches to no card. It comes off the profit on the Summary tab."
         }
     }
@@ -297,8 +282,8 @@ struct AddTransactionSheet: View {
             modelContext.insert(sale)
             try? modelContext.save()
             if !saleCards.isEmpty {
-                let items = zip(saleCards, CardCostRows.typedCents(saleCards, basisTexts)).map { card, cents in
-                    SaleEditor.Attachment(card: card, describedAs: card.displayName(inventory.hits[card.productId]) ?? "", basisCents: cents)
+                let items = saleCards.map { card in
+                    SaleEditor.Attachment(card: card, describedAs: card.displayName(inventory.hits[card.productId]) ?? "")
                 }
                 try? SaleEditor.attach(items, to: sale, context: modelContext)
                 inventory.invalidateHaystacks()

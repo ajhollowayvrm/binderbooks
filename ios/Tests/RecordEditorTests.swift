@@ -4,8 +4,9 @@ import Testing
 @testable import BinderBooks
 
 /// Every record on the books takes an edit after it is saved. These cover the
-/// edits with rules: a purchase split, a card's cost, a grading split, and a
-/// card's catalog product.
+/// edits with rules: a purchase, a grading charge, a card's catalog product,
+/// and new cards added by hand. No edit changes a card's cost, because a card
+/// has none.
 @Suite struct RecordEditorTests {
     @MainActor private func store() throws -> ModelContainer {
         try CollectionStore.container(inMemory: true)
@@ -13,7 +14,8 @@ import Testing
 
     private let bought = Date(timeIntervalSince1970: 1_780_000_000)
 
-    /// A $10.00 purchase with two cards, each on its own line, each $5.00 by the split.
+    /// A $10.00 purchase with two cards, each on its own line. The links and
+    /// the costs are old data, the shape an old import still brings in.
     @MainActor private func purchase(_ context: ModelContext) throws -> (Purchase, OwnedCard, OwnedCard) {
         let purchase = Purchase(date: bought, vendor: "Gamecraft", itemCostCents: 1_000)
         context.insert(purchase)
@@ -21,96 +23,64 @@ import Testing
         for _ in 0..<2 {
             let item = PurchaseItem(productId: 42)
             item.purchase = purchase
+            item.allocatedCostCents = 500
             context.insert(item)
             let card = OwnedCard(productId: 42, printing: "Normal", condition: CardCondition.nearMint.rawValue, confidence: .manual)
             card.sourceItem = item
             card.acquiredAt = bought
+            card.acquisitionBasisCents = 500
+            card.basisIsAllocated = true
             context.insert(card)
             cards.append(card)
         }
         try context.save()
-        Allocation.allocate(purchase)
-        Allocation.writeCardBases(purchase)
-        try context.save()
         return (purchase, cards[0], cards[1])
     }
 
-    @Test @MainActor func aNewTotalSplitsAgainAndTheCardsMoveWithTheDate() throws {
+    @Test @MainActor func editingAPurchaseChangesNoCard() throws {
         let container = try store()
         let context = container.mainContext
         let (purchase, a, b) = try purchase(context)
-        #expect(a.acquisitionBasisCents == 500)
 
         var details = PurchaseEditor.Details(purchase)
         details.itemCostCents = 2_000
         details.date = bought.addingTimeInterval(86_400)
         details.vendor = " Fuzzy's "
-        let resplit = try PurchaseEditor.apply(details, to: purchase, context: context)
+        try PurchaseEditor.apply(details, to: purchase, context: context)
 
-        #expect(resplit)
         #expect(purchase.vendor == "Fuzzy's")
-        #expect(a.acquisitionBasisCents == 1_000)
-        #expect(b.acquisitionBasisCents == 1_000)
-        #expect(a.acquiredAt == details.date)
-    }
-
-    /// The seed import wrote a real cost on its cards and marked none manual.
-    @Test @MainActor func aCostTheImportWroteIsNotOverwritten() throws {
-        let container = try store()
-        let context = container.mainContext
-        let (purchase, a, b) = try purchase(context)
-        b.basisIsAllocated = false
-        b.acquisitionBasisCents = 800
-        try context.save()
-
-        var details = PurchaseEditor.Details(purchase)
-        details.itemCostCents = 2_000
-        let resplit = try PurchaseEditor.apply(details, to: purchase, context: context)
-
-        #expect(!resplit)
-        #expect(a.acquisitionBasisCents == 500)
-        #expect(b.acquisitionBasisCents == 800)
-    }
-
-    @Test @MainActor func aTypedCostComesOutOfThePurchaseAndCanGoBackToTheSplit() throws {
-        let container = try store()
-        let context = container.mainContext
-        let (_, a, b) = try purchase(context)
-
-        var details = CardEditor.CostDetails(a)
-        #expect(details.usesSplit)
-        details.usesSplit = false
-        details.acquisitionBasisCents = 700
-        try CardEditor.apply(details, to: a, context: context)
-
-        #expect(a.acquisitionBasisCents == 700)
-        #expect(a.basisIsManual)
-        #expect(b.acquisitionBasisCents == 300)
-
-        details = CardEditor.CostDetails(a)
-        details.usesSplit = true
-        try CardEditor.apply(details, to: a, context: context)
-
-        #expect(!a.basisIsManual)
+        #expect(purchase.landedCostCents == 2_000)
+        #expect(purchase.date == details.date)
+        #expect(a.acquiredAt == bought)
+        #expect(b.acquiredAt == bought)
         #expect(a.acquisitionBasisCents == 500)
         #expect(b.acquisitionBasisCents == 500)
     }
 
-    @Test @MainActor func aDateChangeAloneDoesNotTurnASplitIntoATypedCost() throws {
+    /// `PurchaseItem.cards` is a cascade relationship. The delete must remove
+    /// the old links first, or the cards go with the purchase.
+    @Test @MainActor func deletingAPurchaseKeepsTheCardsThatWereLinkedToIt() throws {
         let container = try store()
         let context = container.mainContext
-        let (_, a, _) = try purchase(context)
+        let (purchase, a, b) = try purchase(context)
+        // A nested line, the shape an old rip left.
+        let child = PurchaseItem(productId: 43)
+        child.parentItem = purchase.items.first
+        context.insert(child)
+        let pulled = OwnedCard(productId: 43, printing: "Normal", condition: CardCondition.nearMint.rawValue, confidence: .manual)
+        pulled.sourceItem = child
+        context.insert(pulled)
+        try context.save()
 
-        var details = CardEditor.CostDetails(a)
-        details.acquiredAt = bought.addingTimeInterval(3_600)
-        try CardEditor.apply(details, to: a, context: context)
+        try PurchaseEditor.delete(purchase, context: context)
 
-        #expect(a.acquiredAt == details.acquiredAt)
-        #expect(!a.basisIsManual)
-        #expect(a.basisIsAllocated)
+        #expect(try context.fetchCount(FetchDescriptor<Purchase>()) == 0)
+        let cards = try context.fetch(FetchDescriptor<OwnedCard>())
+        #expect(Set(cards.map(\.id)) == [a.id, b.id, pulled.id])
+        #expect(cards.allSatisfy { $0.sourceItem == nil })
     }
 
-    @Test @MainActor func aNewGradingTotalLandsOnTheCardsAndANumberChangeDoesNot() throws {
+    @Test @MainActor func aNewGradingTotalChangesTheChargeAndNoCard() throws {
         let container = try store()
         let context = container.mainContext
         let (_, a, b) = try purchase(context)
@@ -122,18 +92,40 @@ import Testing
 
         var details = GradingEditor.Details(submission)
         details.gradingFeesCents = 3_000
-        try GradingEditor.apply(details, to: submission, context: context)
-
-        #expect(a.gradingBasisCents == 1_500)
-        #expect(b.gradingBasisCents == 1_500)
-
-        a.gradingBasisCents = 1_999
-        details = GradingEditor.Details(submission)
         details.submissionNumber = " 12345678 "
         try GradingEditor.apply(details, to: submission, context: context)
 
+        #expect(submission.totalCostCents == 3_000)
         #expect(submission.submissionNumber == "12345678")
-        #expect(a.gradingBasisCents == 1_999)
+        #expect(a.gradingBasisCents == 0)
+        #expect(b.gradingBasisCents == 0)
+        #expect(submission.entries.allSatisfy { $0.allocatedFeeCents == 0 })
+    }
+
+    @Test @MainActor func addingACardNeverTouchesAPurchase() throws {
+        let container = try store()
+        let context = container.mainContext
+        _ = try purchase(context)
+        let purchases = try context.fetchCount(FetchDescriptor<Purchase>())
+        let lines = try context.fetchCount(FetchDescriptor<PurchaseItem>())
+
+        let added = CardEditor.addCards(
+            productId: 7, isSealed: true, quantity: 3, printing: "",
+            condition: CardCondition.nearMint.rawValue, context: context
+        )
+        let typed = CardEditor.addCards(
+            productId: 0, isSealed: false, quantity: 1, printing: "",
+            condition: CardCondition.nearMint.rawValue,
+            manualName: " Pikachu ", manualMarketCents: 300, language: "it", context: context
+        )
+
+        #expect(added.count == 3)
+        #expect(added.allSatisfy { $0.isSealedSelf && $0.sourceItem == nil && $0.acquisitionBasisCents == 0 })
+        #expect(typed.first?.manualName == "Pikachu")
+        #expect(typed.first?.language == "it")
+        #expect(typed.first?.manualMarketCents == 300)
+        #expect(try context.fetchCount(FetchDescriptor<Purchase>()) == purchases)
+        #expect(try context.fetchCount(FetchDescriptor<PurchaseItem>()) == lines)
     }
 
     @Test @MainActor func anExpenseTakesItsEdit() throws {

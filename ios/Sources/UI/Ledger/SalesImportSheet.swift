@@ -175,7 +175,7 @@ struct SalesImportSheet: View {
         } header: {
             Text("New orders")
         } footer: {
-            Text("The file has no fees. The app estimates each order's fees and postage from your other orders on its channel, and marks the order estimated. A linked card is tagged sold, and its cost goes on the line.")
+            Text("The file has no fees. The app estimates each order's fees and postage from your other orders on its channel, and marks the order estimated. A linked card is tagged sold.")
         }
     }
 
@@ -203,7 +203,7 @@ struct SalesImportSheet: View {
         } header: {
             Text("Cards for orders already on your books")
         } footer: {
-            Text("These sales are on your books with no cards recorded — an order list imported without its pull sheet, or an order the pull sheet did not reach. The money on them does not change. A linked card is tagged sold, and its cost goes on the line.")
+            Text("These sales are on your books with no cards recorded — an order list imported without its pull sheet, or an order the pull sheet did not reach. The money on them does not change. A linked card is tagged sold.")
         }
     }
 

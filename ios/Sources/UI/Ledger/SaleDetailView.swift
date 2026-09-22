@@ -13,9 +13,6 @@ struct SaleDetailView: View {
     @State private var blockedMessage: String?
     @State private var editing = false
     @State private var attachTarget: AttachTarget?
-    @State private var costTarget: SaleLine?
-    @State private var costText = ""
-    @State private var showingCost = false
 
     /// What the attach sheet opens for: new cards, or one card for a line
     /// that links none.
@@ -62,8 +59,6 @@ struct SaleDetailView: View {
                     }
                 }
 
-                gain(for: sale)
-
                 Section {
                     if sale.lines.isEmpty {
                         Text("This order recorded a price and no cards.")
@@ -71,10 +66,6 @@ struct SaleDetailView: View {
                     }
                     ForEach(sale.lines.sorted { $0.describedAs < $1.describedAs }) { line in
                         row(for: line)
-                            .swipeActions(edge: .leading) {
-                                Button("Cost") { editCost(line) }
-                                    .tint(.blue)
-                            }
                             .swipeActions(edge: .trailing) {
                                 if line.card != nil {
                                     Button("Unsell", role: .destructive) { unsell(line) }
@@ -121,16 +112,6 @@ struct SaleDetailView: View {
                 AttachCardsSheet(sale: sale, line: target.line) { inventory.invalidateHaystacks() }
             }
         }
-        // `presenting` hands the line to the button, so the save does not
-        // depend on when the alert clears its state.
-        .alert("What the card cost", isPresented: $showingCost, presenting: costTarget) { line in
-            TextField("0.00", text: $costText)
-                .keyboardType(.decimalPad)
-            Button("Save") { saveCost(line) }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("What you paid for this card. Leave it blank when the cost is not known.")
-        }
         .confirmationDialog("Delete this order?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { deleteSale() }
         }
@@ -143,9 +124,6 @@ struct SaleDetailView: View {
 
     @ViewBuilder private func linesFooter(_ sale: Sale) -> some View {
         let notes = [
-            sale.lines.contains(where: \.basisIncomplete)
-                ? "A card with no cost is not counted in the gain. The revenue is real; what it cost was never recorded." : nil,
-            sale.lines.isEmpty ? nil : "Swipe a line to the right to change its cost.",
             sale.lines.contains(where: { $0.card == nil })
                 ? "Swipe a line that links no card to the left to link one from inventory." : nil,
             sale.lines.contains(where: { $0.card != nil })
@@ -153,23 +131,6 @@ struct SaleDetailView: View {
         ].compactMap { $0 }
         if !notes.isEmpty {
             Text(notes.joined(separator: " "))
-        }
-    }
-
-    private func editCost(_ line: SaleLine) {
-        costText = line.basisIncomplete ? "" : Money.fieldText(line.basisCents)
-        costTarget = line
-        showingCost = true
-    }
-
-    /// A blank field is no cost. Text that does not read as money changes
-    /// nothing, so a typo does not wipe a cost.
-    private func saveCost(_ line: SaleLine) {
-        let typed = costText.trimmingCharacters(in: .whitespaces)
-        if typed.isEmpty {
-            try? SaleEditor.setCost(nil, on: line, context: modelContext)
-        } else if let cents = Money.cents(from: typed) {
-            try? SaleEditor.setCost(cents, on: line, context: modelContext)
         }
     }
 
@@ -209,25 +170,6 @@ struct SaleDetailView: View {
         }
     }
 
-    @ViewBuilder private func gain(for sale: Sale) -> some View {
-        Section {
-            if let gain = sale.realizedGainCents {
-                LabeledContent("Gain") {
-                    Text(gain >= 0 ? gain.asCurrency : "−" + (-gain).asCurrency)
-                        .foregroundStyle(gain >= 0 ? Color.green : Color.red)
-                }
-            } else {
-                LabeledContent("Gain", value: "not known")
-            }
-        } footer: {
-            if sale.realizedGainCents == nil {
-                Text(sale.lines.isEmpty
-                     ? "The gain needs the cards on the order and a cost on each. Attach the cards that sold."
-                     : "The gain needs a cost on every card. This order has at least one card with none.")
-            }
-        }
-    }
-
     @ViewBuilder private func row(for line: SaleLine) -> some View {
         let name = line.card.flatMap { inventory.hits[$0.productId]?.name ?? ($0.manualName.isEmpty ? nil : $0.manualName) } ?? line.describedAs
         if let card = line.card {
@@ -250,9 +192,6 @@ struct SaleDetailView: View {
                 }
             }
             Spacer()
-            Text(line.basisIncomplete ? "no cost" : line.basisCents.asCurrency)
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(line.basisIncomplete ? .secondary : .primary)
         }
     }
 }

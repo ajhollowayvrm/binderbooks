@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 /// An order that sold, however it was exported.
 ///
@@ -91,9 +92,33 @@ enum SalesOrderCSV {
     /// 2026 for decades yet.
     static func day(_ text: String) -> Date? {
         for formatter in dayFormatters {
-            if let date = formatter.date(from: text) { return date.addingTimeInterval(12 * 60 * 60) }
+            // "M/d/yyyy" reads eBay's "Sep-18-26" as the year 26 and wins
+            // before "MMM-dd-yy" has a turn. No order he imports is that old,
+            // so a year before 2000 means the wrong format.
+            guard let date = formatter.date(from: text), utc.component(.year, from: date) >= 2000 else { continue }
+            return date.addingTimeInterval(12 * 60 * 60)
         }
         return nil
+    }
+
+    private static let utc: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }()
+
+    /// Moves a sale that `day` filed in the year 26 to 2026. The eBay import
+    /// did that to every order from 2026-09-12 to 2026-09-22. A second run
+    /// finds nothing, so it runs at every launch.
+    @MainActor
+    static func repairCenturyDates(_ context: ModelContext) {
+        let cutoff = utc.date(from: DateComponents(year: 1000, month: 1, day: 1))!
+        let descriptor = FetchDescriptor<Sale>(predicate: #Predicate { $0.soldAt < cutoff })
+        guard let sales = try? context.fetch(descriptor), !sales.isEmpty else { return }
+        for sale in sales {
+            if let fixed = utc.date(byAdding: .year, value: 2000, to: sale.soldAt) { sale.soldAt = fixed }
+        }
+        try? context.save()
     }
 
     private static let dayFormatters: [DateFormatter] = ["yyyy-MM-dd", "EEEE, dd MMMM yyyy", "M/d/yyyy", "MMM-dd-yy", "MMM-dd-yy HH:mm:ss"].map { format in

@@ -39,11 +39,10 @@ enum SaleEditor {
         }
     }
 
-    /// A card to put on an order, and what it cost. A nil cost is no cost.
+    /// A card to put on an order, and the name the line shows for it.
     struct Attachment {
         var card: OwnedCard
         var describedAs: String
-        var basisCents: Int?
     }
 
     /// A typed fee or postage is not an estimate. The flag goes off when
@@ -71,7 +70,7 @@ enum SaleEditor {
     static func attach(_ attachments: [Attachment], to sale: Sale, context: ModelContext) throws -> Int {
         var sold: [OwnedCard] = []
         for item in attachments where !CardTagIndex.isSold(item.card) && !sold.contains(where: { $0.id == item.card.id }) {
-            let line = SaleLine(sale: sale, card: item.card, basisCents: item.basisCents ?? 0, basisIncomplete: item.basisCents == nil)
+            let line = SaleLine(sale: sale, card: item.card)
             line.describedAs = item.describedAs
             context.insert(line)
             sold.append(item.card)
@@ -88,24 +87,9 @@ enum SaleEditor {
     static func link(_ line: SaleLine, to item: Attachment, context: ModelContext) throws -> Bool {
         guard line.card == nil, !CardTagIndex.isSold(item.card) else { return false }
         line.card = item.card
-        line.basisCents = item.basisCents ?? 0
-        line.basisIncomplete = item.basisCents == nil
         if line.describedAs.isEmpty { line.describedAs = item.describedAs }
         CardTagEditor(context: context).add(ReservedTag.sold, to: [item.card])
         try context.save()
         return true
-    }
-
-    /// Sets what the card on a line cost. Nil is no cost, and the order's gain
-    /// is then not known. The card's own cost record does not change.
-    static func setCost(_ cents: Int?, on line: SaleLine, context: ModelContext) throws {
-        line.basisCents = cents ?? 0
-        line.basisIncomplete = cents == nil
-        try context.save()
-    }
-
-    /// The cost to fill in for a card. Nil when the card has no cost on record.
-    static func knownBasis(_ card: OwnedCard) -> Int? {
-        card.totalBasisCents > 0 ? card.totalBasisCents : nil
     }
 }

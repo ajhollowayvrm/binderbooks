@@ -24,25 +24,6 @@ struct InventoryMetricsSheet: View {
 
                 Section("Value") {
                     row("Value", summary.marketCents.asCurrency)
-                    row("Basis", summary.basisCents.asCurrency)
-                }
-
-                if summary.pricedBasisCents > 0 || summary.pricedMarketCents > 0 {
-                    Section {
-                        row(
-                            "Unrealized",
-                            (summary.unrealizedCents >= 0 ? "+" : "−") + abs(summary.unrealizedCents).asCurrency,
-                            color: summary.unrealizedCents >= 0 ? .green : .red
-                        )
-                        row("Priced market", summary.pricedMarketCents.asCurrency)
-                        row("Priced basis", summary.pricedBasisCents.asCurrency)
-                    } footer: {
-                        if summary.allocatedCount > 0 {
-                            Text("Unrealized covers every card that has both a cost and a market price. \(summary.allocatedCount) of those costs were split out of a purchase rather than paid for one card.")
-                        } else {
-                            Text("Unrealized covers every card that has both a cost and a market price.")
-                        }
-                    }
                 }
             }
             .navigationTitle("Metrics")

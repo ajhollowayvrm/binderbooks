@@ -1,9 +1,9 @@
 import SwiftData
 import SwiftUI
 
-/// The cards came back. Grades and cert numbers land on the entries, the cert
-/// lands on the card so it renders as a slab, and each card's share of the
-/// fees becomes its grading basis.
+/// The cards came back. Grades and cert numbers land on the entries, and the
+/// cert lands on the card so it renders as a slab. The fees stay one grading
+/// charge on the books. No card carries them.
 ///
 /// Fees are editable here too, because the grader's invoice often arrives
 /// after the cards were sent.
@@ -81,7 +81,7 @@ struct GradingReturnSheet: View {
                 } header: {
                     Text("Cards")
                 } footer: {
-                    Text("No grade covers N0, altered, and rejected. The card still carries its share of the fees.")
+                    Text("No grade covers N0, altered, and rejected.")
                 }
 
                 Section {
@@ -105,11 +105,7 @@ struct GradingReturnSheet: View {
     }
 
     private var feeDescription: String {
-        let count = drafts.count
-        guard count > 0, totalCents > 0 else { return "Each card's share becomes its grading basis." }
-        let shares = Allocation.splitEqually(totalCents, into: count)
-        let low = shares.min() ?? 0
-        return "\(totalCents.asCurrency) over \(count) cards is \(low.asCurrency) each. That share becomes each card's grading basis."
+        "The total goes on the books as one grading charge."
     }
 
     private func name(for entryID: UUID) -> String {
@@ -133,7 +129,6 @@ struct GradingReturnSheet: View {
         submission.shipToGraderCents = Money.cents(from: shipOutText) ?? 0
         submission.shipReturnCents = Money.cents(from: shipBackText) ?? 0
         submission.insuranceCents = Money.cents(from: insuranceText) ?? 0
-        Allocation.allocate(submission)
 
         let editor = CardTagEditor(context: modelContext)
         for draft in drafts {
@@ -145,7 +140,6 @@ struct GradingReturnSheet: View {
             entry.certNumber = draft.noGrade ? "" : cert
 
             guard let card = entry.card else { continue }
-            card.gradingBasisCents = entry.allocatedFeeCents
             if !draft.noGrade, !cert.isEmpty {
                 card.certNumber = cert
                 card.graderRaw = submission.graderRaw

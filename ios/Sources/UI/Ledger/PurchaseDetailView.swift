@@ -1,25 +1,19 @@
 import SwiftData
 import SwiftUI
 
-/// One purchase: what it cost, the sealed packs still on it, the rips, and the
-/// cards.
+/// One purchase: what it cost, and what was in it.
 ///
-/// There is no rip record. The pulls land in inventory carrying their share of
-/// what the packs cost, and the ripped lines hold the rest. See `RipPool`.
+/// A purchase is money on the books. It has no link to the cards in
+/// inventory, so nothing here changes a card.
 struct PurchaseDetailView: View {
     let purchaseID: UUID
 
     @Environment(InventoryModel.self) private var inventory
-    @Environment(ScannerLauncher.self) private var launcher
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Query private var purchases: [Purchase]
     @State private var confirmDelete = false
-    @State private var showBlocked = false
     @State private var editing = false
-    @State private var addingCards = false
-    @State private var ripTarget: TagSheetTarget?
-    @State private var pullsTarget: PurchaseItem?
 
     init(purchaseID: UUID) {
         self.purchaseID = purchaseID
@@ -28,59 +22,16 @@ struct PurchaseDetailView: View {
 
     private var purchase: Purchase? { purchases.first }
 
-    /// Everything on the purchase, the unopened packs too.
-    private var allCards: [OwnedCard] {
-        (purchase?.items ?? []).flatMap(\.cards)
-    }
-
-    /// Cards, not the packs that stand for themselves.
-    private var cards: [OwnedCard] {
-        allCards.filter { !$0.isSealedSelf }.sorted { $0.acquiredAt > $1.acquiredAt }
-    }
-
-    /// The unopened packs, a sealed self-card each. A pack he sold keeps its
-    /// self-card, because its order points at it, so it is left out here.
-    private var packs: [OwnedCard] {
-        allCards.filter { $0.isSealedSelf && !CardTagIndex.isSold($0) }.sorted { $0.id.uuidString < $1.id.uuidString }
-    }
-
-    /// One row for each rip that holds a line of this purchase.
-    private var rips: [RipRow] {
-        var seen = Set<UUID>()
-        var rows: [RipRow] = []
-        for item in purchase?.items ?? [] where item.isRipped && !seen.contains(item.id) {
-            let group = RipPool.lines(of: item)
-            seen.formUnion(group.map(\.id))
-            if let home = RipPool.home(of: group) {
-                rows.append(RipRow(home: home, group: group))
-            }
+    /// The products on the purchase, with the quantity of each, in the order
+    /// they first appear.
+    static func contents(of purchase: Purchase) -> [(productId: Int, quantity: Int)] {
+        var order: [Int] = []
+        var totals: [Int: Int] = [:]
+        for item in purchase.items {
+            if totals[item.productId] == nil { order.append(item.productId) }
+            totals[item.productId, default: 0] += max(1, item.quantity)
         }
-        return rows
-    }
-
-    /// What each purchase put into a rip, this purchase first.
-    static func costShares(of group: [PurchaseItem], on purchase: Purchase) -> [(name: String, cents: Int)] {
-        var order: [UUID] = []
-        var totals: [UUID: (name: String, cents: Int)] = [:]
-        for line in group {
-            guard let owner = line.purchase else { continue }
-            if totals[owner.id] == nil {
-                order.append(owner.id)
-                let vendor = owner.vendor.isEmpty ? owner.date.formatted(date: .abbreviated, time: .omitted) : owner.vendor
-                totals[owner.id] = (owner.id == purchase.id ? "This purchase" : vendor, 0)
-            }
-            totals[owner.id]?.cents += line.allocatedCostCents
-        }
-        // This purchase first, the rest in the order their packs appear.
-        let mine = order.filter { $0 == purchase.id }
-        let others = order.filter { $0 != purchase.id }
-        return (mine + others).compactMap { totals[$0] }
-    }
-
-    struct RipRow: Identifiable {
-        var home: PurchaseItem
-        var group: [PurchaseItem]
-        var id: UUID { home.id }
+        return order.map { ($0, totals[$0] ?? 0) }
     }
 
     var body: some View {
@@ -104,57 +55,10 @@ struct PurchaseDetailView: View {
                     }
                 }
 
-                sealedSection
-
-                ripsSection(purchase)
+                contentsSection(purchase)
 
                 Section {
-                    Button {
-                        scanSingles(purchase)
-                    } label: {
-                        Label("Scan singles from this order", systemImage: "camera")
-                    }
-                    Button {
-                        scanSingles(purchase, search: true)
-                    } label: {
-                        Label("Add singles from the catalog", systemImage: "magnifyingglass")
-                    }
-                } footer: {
-                    Text("For cards you bought as singles. They are part of the buy, and the total splits over them. For what came out of a pack, rip the pack.")
-                }
-
-                Section {
-                    if cards.isEmpty {
-                        Text("Nothing has come out of this purchase yet.")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(cards) { card in
-                        NavigationLink(value: AppRoute.ownedCard(card.id)) {
-                            cardRow(card)
-                        }
-                    }
-                    // For cards already in inventory that came from this
-                    // purchase. Open it is for cards not scanned yet.
-                    Button {
-                        addingCards = true
-                    } label: {
-                        Label("Add cards from inventory…", systemImage: "plus.rectangle.on.rectangle")
-                    }
-                } header: {
-                    Text(cards.count == 1 ? "1 card" : "\(cards.count) cards")
-                } footer: {
-                    if cards.contains(where: \.basisIsAllocated) {
-                        // docs/04: the $193 box that yielded three near-worthless
-                        // hits. The per-card figure is derived, and the pack is
-                        // the truer read.
-                        Text("A derived cost is this purchase's total split over the cards. Read the purchase, not the card, to see how the opening did.")
-                    }
-                }
-
-                Section {
-                    Button("Delete purchase", role: .destructive) {
-                        if allCards.isEmpty { confirmDelete = true } else { showBlocked = true }
-                    }
+                    Button("Delete purchase", role: .destructive) { confirmDelete = true }
                 }
             } else {
                 ContentUnavailableView("This purchase is gone", systemImage: "questionmark.folder")
@@ -174,181 +78,44 @@ struct PurchaseDetailView: View {
                 EditPurchaseSheet(purchase: purchase) { inventory.invalidateHaystacks() }
             }
         }
-        .sheet(isPresented: $addingCards) {
-            if let purchase {
-                PurchaseCardsSheet(purchase: purchase) { inventory.invalidateHaystacks() }
-            }
+        .task(id: purchase?.items.count ?? 0) {
+            await inventory.load(productIds: purchase.map { Self.contents(of: $0).map(\.productId) } ?? [])
         }
-        .sheet(item: $pullsTarget) { home in
-            RipPullsSheet(home: home) { inventory.invalidateHaystacks() }
-        }
-        .ripSheet($ripTarget) { inventory.invalidateHaystacks() }
-        .task(id: allCards.count) { await inventory.load(for: rips.flatMap { $0.group.flatMap(\.cards) }) }
         .confirmationDialog("Delete this purchase?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { deletePurchase() }
-        }
-        // Deleting a purchase deletes its lines, and the lines own the cards.
-        // He removes the cards first, on purpose, or the purchase stays.
-        .alert("Cards came out of this purchase", isPresented: $showBlocked) {
-            Button("OK") {}
         } message: {
-            Text(allCards.count == 1
-                ? "1 card in inventory came from this purchase. Delete it first."
-                : "\(allCards.count) cards in inventory came from this purchase. Delete them first.")
+            Text("It leaves the books. Cards in inventory do not change.")
+        }
+    }
+
+    /// What he bought, by product.
+    private func contentsSection(_ purchase: Purchase) -> some View {
+        let contents = Self.contents(of: purchase)
+        return Section {
+            if contents.isEmpty {
+                Text("No items listed.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(contents, id: \.productId) { line in
+                HStack {
+                    Text(inventory.hits[line.productId]?.name ?? "Product")
+                        .lineLimit(2)
+                    Spacer()
+                    Text("\(line.quantity)×")
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("What was in it")
         }
     }
 
     private func deletePurchase() {
         guard let purchase else { return }
-        modelContext.delete(purchase)
-        try? modelContext.save()
+        try? PurchaseEditor.delete(purchase, context: modelContext)
+        inventory.invalidateHaystacks()
         dismiss()
-    }
-
-    private func cardRow(_ card: OwnedCard) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(card.displayName(inventory.hits[card.productId]) ?? "Unknown")
-                    .lineLimit(1)
-                HStack(spacing: 6) {
-                    if card.basisIsAllocated { Text("derived") }
-                    if card.basisIsManual { Text("you priced it") }
-                    if let set = card.setName(inventory.hits[card.productId]) { Text(set).lineLimit(1) }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Text(card.totalBasisCents.asCurrency)
-                .font(.callout.monospacedDigit())
-        }
-    }
-
-    /// The unopened packs, by product.
-    @ViewBuilder
-    private var sealedSection: some View {
-        let packs = packs
-        if !packs.isEmpty {
-            let byProduct = Dictionary(grouping: packs, by: \.productId)
-            let productIds = byProduct.keys.sorted()
-            Section {
-                ForEach(productIds, id: \.self) { productId in
-                    let copies = byProduct[productId] ?? []
-                    HStack {
-                        Text(inventory.hits[productId]?.name ?? "Sealed product")
-                            .lineLimit(2)
-                        Spacer()
-                        Text("\(copies.count)×")
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Button {
-                    ripTarget = TagSheetTarget(cards: packs)
-                } label: {
-                    Label(packs.count == 1 ? "Rip the pack…" : "Rip packs…", systemImage: "shippingbox.and.arrow.backward")
-                }
-            } header: {
-                Text(packs.count == 1 ? "1 sealed" : "\(packs.count) sealed")
-            } footer: {
-                Text("Rip them together, and what comes out shares the cost of all of them.")
-            }
-        }
-    }
-
-    /// Each rip: what the packs cost against what came out of them.
-    @ViewBuilder
-    private func ripsSection(_ purchase: Purchase) -> some View {
-        let rips = rips
-        if !rips.isEmpty {
-            Section {
-                ForEach(rips) { rip in
-                    ripRow(rip, on: purchase)
-                }
-            } header: {
-                Text(rips.count == 1 ? "Rip" : "Rips")
-            } footer: {
-                Text("Read the rip, not the card, to see how the opening did. The value leaves out pulls with no price.")
-            }
-        }
-    }
-
-    private func ripRow(_ rip: RipRow, on purchase: Purchase) -> some View {
-        let result = RipPool.result(of: rip.group, market: { inventory.marketCents(for: $0) })
-        let shares = Self.costShares(of: rip.group, on: purchase)
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(result.packs == 1 ? "1 pack" : "\(result.packs) packs")
-                    .font(.body.weight(.semibold))
-                Spacer()
-                Text((result.netCents >= 0 ? "+" : "−") + abs(result.netCents).asCurrency)
-                    .font(.body.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(result.netCents >= 0 ? .green : .red)
-            }
-            LabeledContent("Cost", value: result.costCents.asCurrency)
-                .font(.callout.monospacedDigit())
-            LabeledContent(result.pulls == 1 ? "1 pull, value" : "\(result.pulls) pulls, value", value: result.valueCents.asCurrency)
-                .font(.callout.monospacedDigit())
-            if result.unpriced > 0 {
-                Text("\(result.unpriced) with no price")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            // The cost above is every pack in the rip, and the packs came from
-            // more than one purchase. Each line says what one purchase paid, so
-            // the total no longer reads as this purchase's price.
-            if shares.count > 1 {
-                ForEach(shares, id: \.name) { share in
-                    LabeledContent(share.name, value: share.cents.asCurrency)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 12)
-                }
-            }
-            Menu {
-                Button {
-                    scanPulls(rip.home)
-                } label: {
-                    Label("Scan them", systemImage: "camera")
-                }
-                Button {
-                    scanPulls(rip.home, search: true)
-                } label: {
-                    Label("Search the catalog", systemImage: "magnifyingglass")
-                }
-                Button {
-                    pullsTarget = rip.home
-                } label: {
-                    Label("From inventory…", systemImage: "rectangle.stack")
-                }
-            } label: {
-                Label("Add pulls", systemImage: "plus.circle")
-            }
-            .buttonStyle(.borderless)
-            .font(.callout)
-        }
-        .padding(.vertical, 2)
-    }
-
-    /// Start a session already attached to this purchase, so the commit sheet
-    /// has nothing left to ask. Its cards are part of the buy.
-    /// `search` opens it with the catalog search showing, in place of the camera.
-    private func scanSingles(_ purchase: Purchase, search: Bool = false) {
-        let session = ScanSession()
-        session.purchase = purchase
-        modelContext.insert(session)
-        try? modelContext.save()
-        launcher.open(session, search: search)
-    }
-
-    /// More pulls for a rip that already committed. They join its home line.
-    private func scanPulls(_ home: PurchaseItem, search: Bool = false) {
-        let session = ScanSession()
-        session.purchase = home.purchase
-        session.ripTarget = home
-        modelContext.insert(session)
-        try? modelContext.save()
-        launcher.open(session, search: search)
     }
 }
 
@@ -443,7 +210,7 @@ struct GradingDetailView: View {
                 } footer: {
                     if submission.entries.isEmpty {
                         // docs/04: the charge names a card count and no cards.
-                        Text("The imported charges name a card count and nothing else, so nothing was joined to them. Each card carries its own grading cost.")
+                        Text("The imported charges name a card count and nothing else, so nothing was joined to them.")
                     } else {
                         Text("Swipe a card to take it off this submission.")
                     }
@@ -499,14 +266,13 @@ struct GradingDetailView: View {
         return entry.certNumber.isEmpty ? text : "\(text) · \(entry.certNumber)"
     }
 
-    /// The card leaves the submission and the fee it carried comes off it.
-    /// The slab stays: a cert number on a card is a fact about the card.
+    /// The card leaves the submission. The charge stays as it is. The slab
+    /// stays: a cert number on a card is a fact about the card.
     private func remove(_ entry: GradingEntry) {
         if let card = entry.card {
             let editor = CardTagEditor(context: modelContext)
             for label in ReservedTag.allAtGrader { editor.remove(label, from: [card]) }
             if card.status == .atGrader { card.status = .owned }
-            if card.gradingBasisCents == entry.allocatedFeeCents { card.gradingBasisCents = 0 }
         }
         modelContext.delete(entry)
         try? modelContext.save()
