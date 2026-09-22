@@ -87,7 +87,7 @@ struct OwnedCardCard: View {
                     .lineLimit(1)
             }
             identity
-            TagBadgeRow(tags: row.card.tags, limit: 2)
+            TagBadgeRow(tags: stack.badges, limit: 2)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

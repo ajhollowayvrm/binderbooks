@@ -48,12 +48,12 @@ struct OwnedCardRow: View {
                         if let language = CardLanguage.badge(row.card.language) { Text(language) }
                     }
                     if copies > 1 { Text("×\(copies)") }
-                    if row.card.isPersonalCollection { Text("PC") }
+                    if stack?.isAllPersonal ?? row.card.isPersonalCollection { Text("PC") }
                     if isHeldForMasterSet { MasterSetBadge() }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                TagBadgeRow(tags: row.card.tags)
+                TagBadgeRow(tags: stack?.badges ?? row.card.tags)
             }
 
             Spacer(minLength: 8)

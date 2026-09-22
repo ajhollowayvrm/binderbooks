@@ -2,7 +2,8 @@ import SwiftData
 import SwiftUI
 
 /// The copies behind one stacked line: nine Destined Rivals packs, each with
-/// its own cost and its own pack to rip.
+/// its own cost and its own pack to rip, or two copies of a card with one of
+/// them listed.
 ///
 /// The page collapses copies into one cell so it reads as inventory instead of
 /// nine identical tiles, and this is where the nine come back. The cell's card
@@ -53,6 +54,18 @@ struct CardStackView: View {
                 }
             } footer: {
                 Text("Every copy, added up. Cost counts the share each one carries of what its purchase cost.")
+            }
+
+            if !stack.mixedLabels.isEmpty {
+                Section {
+                    ForEach(stack.mixedLabels, id: \.self) { mixed in
+                        LabeledContent(mixed.label, value: "\(mixed.copies) of \(stack.copies)")
+                    }
+                } header: {
+                    Text("Not the same on every copy").textCase(nil)
+                } footer: {
+                    Text("Each copy below shows its own labels.")
+                }
             }
 
             Section {

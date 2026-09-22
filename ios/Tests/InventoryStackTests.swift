@@ -71,29 +71,51 @@ import Testing
         #expect(stack.route == .cardStack(stack.lead.card.id))
     }
 
-    /// A stack is only cards that would draw the same cell. Anything the cell
-    /// shows splits them.
+    /// What a card is splits the line: its condition, or a slab's cert.
     @Test @MainActor func aDifferenceSplitsTheLine() throws {
-        let made = packs(4)
+        let made = packs(3)
         made[1].condition = CardCondition.lightlyPlayed.rawValue
-        made[2].tags = ["binder 3"]
-        made[3].certNumber = "12345678"
+        made[2].certNumber = "12345678"
         try container.mainContext.save()
 
         let stacks = inventory().stacks(from: try fetch())
-        #expect(stacks.count == 4)
+        #expect(stacks.count == 3)
         #expect(stacks.allSatisfy { !$0.isStacked })
     }
 
-    /// Case and inner space fold in a label, the same as everywhere else, so
-    /// "Binder 3" and "binder  3" are one line.
-    @Test @MainActor func labelsCompareTheWayTagsDo() throws {
-        let made = packs(2)
-        made[0].tags = ["Binder 3"]
-        made[1].tags = ["binder  3"]
+    /// AJ's call, 2026-09-22: what a copy is doing does not split the line.
+    /// Two copies with one listed are one line of two, and the line says which
+    /// part is listed.
+    @Test @MainActor func oneListedAndOneNotIsOneLine() throws {
+        let made = packs(3)
+        made[0].tags = ["listed", "binder 3"]
+        made[1].tags = ["binder 3"]
+        made[2].tags = ["Binder 3"]
+        made[2].isPersonalCollection = true
         try container.mainContext.save()
 
-        #expect(inventory().stacks(from: try fetch()).count == 1)
+        let stacks = inventory().stacks(from: try fetch())
+        #expect(stacks.count == 1)
+        let stack = try #require(stacks.first)
+        #expect(stack.copies == 3)
+        #expect(stack.sharedTags == ["binder 3"])
+        #expect(stack.mixedLabels == [.init(label: "listed", copies: 1), .init(label: "PC", copies: 1)])
+        #expect(stack.badges == ["binder 3", "1 of 3 listed", "1 of 3 PC"])
+        #expect(!stack.isAllPersonal)
+    }
+
+    /// A label on every copy is drawn as it is on one card, with no count.
+    @Test @MainActor func aLabelOnEveryCopyHasNoCount() throws {
+        let made = packs(2)
+        made[0].tags = ["listed"]
+        made[1].tags = ["Listed"]
+        made.forEach { $0.isPersonalCollection = true }
+        try container.mainContext.save()
+
+        let stack = try #require(inventory().stacks(from: try fetch()).first)
+        #expect(stack.badges == ["listed"])
+        #expect(stack.mixedLabels.isEmpty)
+        #expect(stack.isAllPersonal)
     }
 
     /// A stack sits where its first copy sorted, so a sort or a filter reads

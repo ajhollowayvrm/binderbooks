@@ -52,6 +52,49 @@ struct InventoryStack: Identifiable {
         return gains.isEmpty ? nil : gains.reduce(0, +)
     }
 
+    /// The labels every copy carries, in the lead copy's order. The line draws
+    /// these the way it draws one card's.
+    var sharedTags: [String] {
+        lead.card.tags.filter { tag in rows.allSatisfy { CardTagIndex.has(tag, on: $0.card) } }
+    }
+
+    /// True when every copy is in the personal collection.
+    var isAllPersonal: Bool { rows.allSatisfy(\.card.isPersonalCollection) }
+
+    /// A label only some copies carry, and how many copies carry it.
+    struct MixedLabel: Hashable {
+        var label: String
+        var copies: Int
+    }
+
+    /// The labels that differ between copies, "PC" included. One copy listed
+    /// and one not is still one line, so the line says which part is listed.
+    var mixedLabels: [MixedLabel] {
+        var order: [String] = []
+        var display: [String: String] = [:]
+        var counts: [String: Int] = [:]
+        for row in rows {
+            let labels = row.card.tags + (row.card.isPersonalCollection ? ["PC"] : [])
+            for label in Set(labels.map(TagKey.of)) {
+                if display[label] == nil {
+                    order.append(label)
+                    display[label] = labels.first { TagKey.of($0) == label }
+                }
+                counts[label, default: 0] += max(1, row.card.quantity)
+            }
+        }
+        return order.compactMap { key in
+            guard let count = counts[key], count < copies, let label = display[key] else { return nil }
+            return MixedLabel(label: label, copies: count)
+        }
+    }
+
+    /// What the line's badges say: the shared labels, then "1 of 2 listed"
+    /// for each label only some copies carry.
+    var badges: [String] {
+        sharedTags + mixedLabels.map { "\($0.copies) of \(copies) \($0.label)" }
+    }
+
     /// Where a tap goes. One card opens that card. A stack opens the copies,
     /// because the lead card's detail would hide the other eight — and each
     /// one has its own cost, its own tags, and its own pack to rip.
@@ -59,10 +102,13 @@ struct InventoryStack: Identifiable {
         isStacked ? .cardStack(lead.card.id) : .ownedCard(lead.card.id)
     }
 
-    /// What makes two cards interchangeable on the page: the same product, the
-    /// same printing, condition and language, the same labels, and the same
-    /// kind of thing. Anything the cell draws is in here, so a stack can never
-    /// hide a difference the eye would have caught.
+    /// What makes two cards one line on the page: the same product, the same
+    /// printing, condition and language, and the same kind of thing.
+    ///
+    /// The labels and the personal collection are not in here. They say what
+    /// a copy is doing, not what it is, so a listed copy and an unlisted copy
+    /// are one line with a count. AJ's call, 2026-09-22. The line shows a label
+    /// only some copies carry as "1 of 2 listed", so the stack hides nothing.
     ///
     /// A slab is one of a kind — its cert, its grade and its value are its own
     /// — so it carries its id and stacks with nothing.
@@ -76,10 +122,7 @@ struct InventoryStack: Identifiable {
         var language: String
         var isSealedSelf: Bool
         var isBulk: Bool
-        var isPersonalCollection: Bool
         var manualMarketCents: Int?
-        /// Compared by `TagKey`, sorted, because the cell shows the labels.
-        var tagKeys: [String]
     }
 
     static func key(for card: OwnedCard) -> Key {
@@ -93,9 +136,7 @@ struct InventoryStack: Identifiable {
             language: card.language,
             isSealedSelf: card.isSealedSelf,
             isBulk: card.isBulk,
-            isPersonalCollection: card.isPersonalCollection,
-            manualMarketCents: card.manualMarketCents,
-            tagKeys: card.tags.map(TagKey.of).sorted()
+            manualMarketCents: card.manualMarketCents
         )
     }
 
