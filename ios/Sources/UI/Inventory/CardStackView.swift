@@ -15,6 +15,7 @@ struct CardStackView: View {
     let leadCardID: UUID
 
     @Environment(InventoryModel.self) private var model
+    @Environment(\.modelContext) private var modelContext
     @Query private var cards: [OwnedCard]
 
     var body: some View {
@@ -35,6 +36,20 @@ struct CardStackView: View {
         }
         .navigationTitle(stack?.lead.name ?? "Copies")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if let lead = stack?.lead.card, CardEditor.canAddCopy(of: lead) {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        // The list derives the copies again, so the new one
+                        // appears in it on its own.
+                        try? CardEditor.addCopy(of: lead, context: modelContext)
+                        model.invalidateHaystacks()
+                    } label: {
+                        Label("Add another", systemImage: "plus")
+                    }
+                }
+            }
+        }
     }
 
     private func list(_ stack: InventoryStack) -> some View {

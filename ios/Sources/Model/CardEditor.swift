@@ -141,3 +141,37 @@ enum CardEditor {
         try context.save()
     }
 }
+
+extension CardEditor {
+    /// True when the card screen offers "add another". A slab is one of a
+    /// kind, with its own cert and grade, so it has no plain copy.
+    static func canAddCopy(of card: OwnedCard) -> Bool {
+        !card.isSlabbed && !CardTagIndex.isSold(card)
+    }
+
+    /// One more copy of `card`, from the card screen's plus.
+    ///
+    /// The copy is the same card: product, printing, condition, language, and
+    /// a hand-entered name. What a copy is doing does not carry over: no
+    /// labels, no purchase, no cost, not in the personal collection. A bulk
+    /// line is one card with a count, so its count goes up instead.
+    @discardableResult
+    static func addCopy(of card: OwnedCard, context: ModelContext) throws -> OwnedCard {
+        if card.isBulk {
+            card.quantity = max(1, card.quantity) + 1
+            try context.save()
+            return card
+        }
+        let copy = OwnedCard(productId: card.productId, printing: card.printing, condition: card.condition, confidence: .manual)
+        copy.language = card.language
+        copy.isSealedSelf = card.isSealedSelf
+        copy.manualName = card.manualName
+        copy.manualSetName = card.manualSetName
+        copy.manualNumber = card.manualNumber
+        copy.manualMarketCents = card.manualMarketCents
+        context.insert(copy)
+        CardPhotoStore.copy(from: card.id, to: copy.id)
+        try context.save()
+        return copy
+    }
+}

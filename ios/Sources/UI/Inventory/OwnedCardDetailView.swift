@@ -49,6 +49,9 @@ private struct OwnedCardDetailBody: View {
     @State private var choosingPurchase = false
     @State private var ripTarget: TagSheetTarget?
     @State private var confirmMarkSChinese = false
+    /// Copies the plus added while this screen is open.
+    @State private var addedCopies = 0
+    @State private var addError: String?
     /// Bumped after a photo is saved or removed, so the thumbnail — which
     /// reads a file at a URL that does not itself change — redraws.
     @State private var photoRefresh = UUID()
@@ -58,6 +61,9 @@ private struct OwnedCardDetailBody: View {
 
     var body: some View {
         List {
+            if addedCopies > 0 || addError != nil {
+                addedNote
+            }
             identity
             sealed
             tags
@@ -76,6 +82,17 @@ private struct OwnedCardDetailBody: View {
         }
         .navigationTitle(card.displayName(hit) ?? "Card")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if CardEditor.canAddCopy(of: card) {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        addCopy()
+                    } label: {
+                        Label("Add another", systemImage: "plus")
+                    }
+                }
+            }
+        }
         .ripSheet($ripTarget) { model.invalidateHaystacks() }
         .confirmationDialog("No hits from this box?", isPresented: $confirmNoHits, titleVisibility: .visible) {
             Button("No hits", role: .destructive) { markNoHits() }
@@ -362,6 +379,36 @@ private struct OwnedCardDetailBody: View {
                     }
                 }
             }
+        }
+    }
+
+    /// How many copies of this card he holds now, the way the inventory line
+    /// counts them.
+    private var heldCopies: Int {
+        InventoryStack.stack(of: card.id, in: model.rows(from: allCards, applyFilter: false))?.copies ?? max(1, card.quantity)
+    }
+
+    private var addedNote: some View {
+        Section {
+            if let addError {
+                Text(addError).foregroundStyle(.red)
+            } else {
+                Label("Added \(addedCopies) \(addedCopies == 1 ? "copy" : "copies"). You hold \(heldCopies).", systemImage: "checkmark.circle")
+                    .foregroundStyle(.green)
+            }
+        } footer: {
+            Text("A new copy has no labels, no purchase, and no cost. Tap the stack on the inventory page to see each copy.")
+        }
+    }
+
+    private func addCopy() {
+        do {
+            try CardEditor.addCopy(of: card, context: modelContext)
+            addedCopies += 1
+            addError = nil
+            model.invalidateHaystacks()
+        } catch {
+            addError = "The copy was not saved: \(error.localizedDescription)"
         }
     }
 

@@ -118,6 +118,47 @@ import Testing
         #expect(stack.isAllPersonal)
     }
 
+    /// The card screen's plus adds the same card with none of what the
+    /// original is doing, so it joins the original's line.
+    @Test @MainActor func theAddedCopyJoinsTheLine() throws {
+        let original = packs(1, basisCents: 500)[0]
+        original.tags = ["listed"]
+        original.isPersonalCollection = true
+        try container.mainContext.save()
+
+        let copy = try CardEditor.addCopy(of: original, context: container.mainContext)
+        #expect(copy.id != original.id)
+        #expect(copy.tags.isEmpty)
+        #expect(!copy.isPersonalCollection)
+        #expect(copy.acquisitionBasisCents == 0)
+        #expect(copy.sourceItem == nil)
+
+        let stack = try #require(inventory().stacks(from: try fetch()).first)
+        #expect(stack.copies == 2)
+        #expect(stack.badges == ["1 of 2 listed", "1 of 2 PC"])
+    }
+
+    /// A bulk line is one card with a count, so the plus raises the count.
+    @Test @MainActor func thePlusOnABulkLineRaisesItsCount() throws {
+        let bulk = packs(1)[0]
+        bulk.isBulk = true
+        bulk.quantity = 40
+        try container.mainContext.save()
+
+        let same = try CardEditor.addCopy(of: bulk, context: container.mainContext)
+        #expect(same.id == bulk.id)
+        #expect(bulk.quantity == 41)
+        #expect(try fetch().count == 1)
+    }
+
+    /// A slab has its own cert and grade, so it has no plain copy.
+    @Test @MainActor func aSlabOffersNoPlus() throws {
+        let slab = packs(1)[0]
+        slab.certNumber = "12345678"
+        #expect(!CardEditor.canAddCopy(of: slab))
+        #expect(CardEditor.canAddCopy(of: packs(1)[0]))
+    }
+
     /// A stack sits where its first copy sorted, so a sort or a filter reads
     /// the same with stacking as without it.
     @Test @MainActor func aStackSitsWhereItsFirstCopySorted() throws {
