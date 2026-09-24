@@ -18,8 +18,13 @@ struct InventoryMetricsSheet: View {
                 Section {
                     row("Cards", "\(summary.cardCount)")
                     row("Lines", "\(lineCount)")
+                    if summary.onOrderCount > 0 {
+                        row("On order", "\(summary.onOrderCount)")
+                    }
                 } footer: {
-                    Text("Copies of the same card are one line. A bulk line counts every copy in \"Cards\" and once in \"Lines\".")
+                    Text(summary.onOrderCount > 0
+                         ? "Copies of the same card are one line. A bulk line counts every copy in \"Cards\" and once in \"Lines\". Cards on order are not in \"Cards\" or \"Value\" until you mark them received."
+                         : "Copies of the same card are one line. A bulk line counts every copy in \"Cards\" and once in \"Lines\".")
                 }
 
                 Section("Value") {

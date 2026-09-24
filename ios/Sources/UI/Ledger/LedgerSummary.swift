@@ -33,6 +33,9 @@ struct LedgerSummary: Equatable {
     var personalAtMarketCents = 0
     /// Every held card out at a grader, the personal collection too.
     var atGraderCount = 0
+    /// Paid for and not here yet. Counted nowhere else in "What you have",
+    /// and not in the potential, until it arrives. See `OnOrder`.
+    var onOrderCount = 0
 
     // Grading. A slab that came back counts at his comp for its grade, in
     // `heldAtMarketCents` too. A card still at a grader makes a range: his
@@ -141,6 +144,12 @@ extension LedgerSummary {
 
         for card in held {
             let quantity = max(1, card.quantity)
+            // The money is already in `purchasesCents`. The card counts once
+            // it arrives.
+            if OnOrder.isOnOrder(card) {
+                s.onOrderCount += quantity
+                continue
+            }
             if Self.isAtGrader(card) { s.atGraderCount += quantity }
             // His call, 2026-09-22: a card he keeps is not for sale, so it
             // does not count in what he could sell today.

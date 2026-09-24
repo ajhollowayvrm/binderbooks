@@ -168,6 +168,8 @@ struct InventoryFilter: Equatable {
 struct InventorySummary: Equatable {
     var cardCount = 0
     var marketCents = 0
+    /// Copies on order. Not in `cardCount` or `marketCents` until they arrive.
+    var onOrderCount = 0
 }
 
 /// Joins committed cards to the catalog and serves the filtered list.
@@ -231,6 +233,11 @@ final class InventoryModel {
     func summary(of rows: [InventoryRow]) -> InventorySummary {
         var s = InventorySummary()
         for row in rows {
+            // His call: a card on order counts once it arrives. See `OnOrder`.
+            if OnOrder.isOnOrder(row.card) {
+                s.onOrderCount += max(1, row.card.quantity)
+                continue
+            }
             s.cardCount += max(1, row.card.quantity)
             let market = (row.marketCents ?? 0) * max(1, row.card.quantity)
             s.marketCents += market

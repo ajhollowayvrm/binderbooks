@@ -15,10 +15,11 @@ import SwiftData
 /// The packs leave inventory only at `finish`, when the scan commits. A scan
 /// he discards changes nothing.
 enum Rip {
-    /// The packs among `cards` that can rip: sealed self-cards not sold. A sold
-    /// pack keeps its self-card, because its order points at it.
+    /// The packs among `cards` that can rip: sealed self-cards not sold and not
+    /// on order. A sold pack keeps its self-card, because its order points at
+    /// it. A pack on order is not in his hands yet. See `OnOrder`.
     static func rippable(_ cards: [OwnedCard]) -> [OwnedCard] {
-        cards.filter { $0.isSealedSelf && !CardTagIndex.isSold($0) }
+        cards.filter { $0.isSealedSelf && !CardTagIndex.isSold($0) && !OnOrder.isOnOrder($0) }
     }
 
     static func key(for session: ScanSession) -> String {

@@ -214,6 +214,10 @@ final class OwnedCard {
     /// this card.
     var isSealedSelf: Bool = false
 
+    /// When he expects a card on order to reach him. Read only while the card
+    /// carries the "on order" label, and nil when he gave no date. See `OnOrder`.
+    var expectedArrival: Date?
+
     /// Dormant since 2026-09-22. Kept for old stores and exports. Only
     /// `PurchaseEditor.delete` writes it: it clears the link before a purchase goes.
     var sourceItem: PurchaseItem?

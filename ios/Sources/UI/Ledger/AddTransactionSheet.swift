@@ -60,6 +60,10 @@ struct AddTransactionSheet: View {
     @State private var picking = false
     @State private var lines: [PurchaseIntake.Line] = []
     @State private var searchingCatalog = false
+    /// The order has not reached him yet. See `OnOrder`.
+    @State private var onOrder = false
+    @State private var hasExpected = false
+    @State private var expected = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
 
     private var amountCents: Int? { Money.cents(from: amountText) }
     private var feesCents: Int { Money.cents(from: feesText) ?? 0 }
@@ -150,6 +154,22 @@ struct AddTransactionSheet: View {
                         Text(lines.isEmpty
                              ? "Find the sealed product or the cards. Each one is recorded on the purchase and goes into inventory."
                              : "Each one is recorded on the purchase and goes into inventory. Swipe a row to take it off.")
+                    }
+
+                    if !lines.isEmpty {
+                        Section {
+                            Toggle("Not here yet", isOn: $onOrder.animation())
+                            if onOrder {
+                                Toggle("Expected date", isOn: $hasExpected.animation())
+                                if hasExpected {
+                                    DatePicker("Arrives", selection: $expected, displayedComponents: .date)
+                                }
+                            }
+                        } footer: {
+                            Text(onOrder
+                                 ? "A preorder or an order in the mail. It goes into inventory as on order: the purchase counts now, the products count once you mark them received, and they cannot be ripped or listed until then."
+                                 : "Turn this on for a preorder or an order that has not arrived.")
+                        }
                     }
                 }
 
@@ -268,7 +288,10 @@ struct AddTransactionSheet: View {
             )
             modelContext.insert(purchase)
             if !lines.isEmpty {
-                PurchaseIntake.record(lines, on: purchase, context: modelContext)
+                PurchaseIntake.record(
+                    lines, on: purchase, context: modelContext,
+                    onOrder: onOrder, expectedArrival: onOrder && hasExpected ? expected : nil
+                )
                 inventory.invalidateHaystacks()
             }
             try? modelContext.save()

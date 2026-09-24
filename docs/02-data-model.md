@@ -293,6 +293,12 @@ The reserved labels `sold`, `listed`, `at grader`, `graded`, and `lost` carry wh
 the status field carried. The later sale and grading flows write those labels.
 `StatusTagBackfill` copies each card's old status into its label once.
 
+The reserved label `on order` marks something paid for that has not arrived: a
+preorder, or an order in the mail. `OwnedCard.expectedArrival` is its optional date.
+The purchase counts the day he pays; the card counts in inventory value, the
+ledger's "What you have", and the potential only once he marks it received, and it
+cannot be ripped or listed until then. It can be sold. See `OnOrder`.
+
 **A tag is a note, not a dimension.** Nothing aggregates money by tag. A "market
 value by tag" tile would cross decision 23 in `00-brief.md`, which forbids a
 reporting layer.

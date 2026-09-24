@@ -28,6 +28,10 @@ struct AddToInventorySheet: View {
     @State private var manualSetName = ""
     @State private var manualNumber = ""
     @State private var valueText = ""
+    /// A preorder, or an order in the mail. See `OnOrder`.
+    @State private var onOrder = false
+    @State private var hasExpected = false
+    @State private var expected = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
     /// Kept between entries, because he enters a stack of Italian cards one
     /// after another.
     @AppStorage("handEntryLanguage") private var language = "en"
@@ -78,6 +82,20 @@ struct AddToInventorySheet: View {
                     }
                     chipRow("Condition", CardCondition.allCases.map(\.rawValue), selected: condition) { condition = $0 }
                 }
+
+                Section {
+                    Toggle("Not here yet", isOn: $onOrder.animation())
+                    if onOrder {
+                        Toggle("Expected date", isOn: $hasExpected.animation())
+                        if hasExpected {
+                            DatePicker("Arrives", selection: $expected, displayedComponents: .date)
+                        }
+                    }
+                } footer: {
+                    if onOrder {
+                        Text("It counts in inventory once you mark it received, and it cannot be ripped or listed until then.")
+                    }
+                }
             }
             .navigationTitle(detail?.hit.name ?? "Add by hand")
             .navigationBarTitleDisplayMode(.inline)
@@ -126,7 +144,7 @@ struct AddToInventorySheet: View {
     }
 
     private func save() {
-        CardEditor.addCards(
+        let added = CardEditor.addCards(
             productId: detail?.hit.productId ?? 0,
             isSealed: detail?.hit.isSealed ?? false,
             quantity: quantity,
@@ -139,6 +157,9 @@ struct AddToInventorySheet: View {
             language: isHandEntry ? language : "en",
             context: modelContext
         )
+        if onOrder {
+            OnOrder.mark(added, expected: hasExpected ? expected : nil, context: modelContext)
+        }
         onAdded?()
         dismiss()
     }

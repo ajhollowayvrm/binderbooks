@@ -37,6 +37,7 @@ enum TCGplayerListingExport {
         case personal = "personal collection"
         case atGrader = "at a grader"
         case sold
+        case onOrder = "on order"
         case notInCatalog = "not in the catalog"
         case noPrinting = "no printing chosen"
         case unknownCondition = "condition TCGplayer does not use"
@@ -46,6 +47,8 @@ enum TCGplayerListingExport {
     /// `plan`, because it needs the catalog's price rows.
     static func skipReason(for card: OwnedCard, hit: SearchHit?) -> SkipReason? {
         if CardTagIndex.isSold(card) { return .sold }
+        // Not in his hands yet, so there is nothing to ship. See `OnOrder`.
+        if OnOrder.isOnOrder(card) { return .onOrder }
         guard card.isIdentified, let hit else { return .notInCatalog }
         if isGraded(card) { return .slab }
         if card.isSealedSelf || hit.isSealed { return .sealed }
