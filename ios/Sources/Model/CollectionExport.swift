@@ -29,7 +29,8 @@ enum CollectionExport {
     /// Version 8 added the `OwnedCardDTO.manual…` fields, for a card he entered
     /// by hand because the catalog does not carry it.
     /// Version 9 added `PurchaseItemDTO.ripGroupId`, for packs ripped together.
-    static let version = 9
+    /// Version 10 added `OwnedCardDTO.expectedArrival`, for a card on order.
+    static let version = 10
 
     struct File: Codable, Equatable {
         var format: String = CollectionExport.format
@@ -131,6 +132,8 @@ enum CollectionExport {
         var manualSetName: String?
         var manualNumber: String?
         var manualMarketCents: Int?
+        /// Optional, like `tags`: added in version 10, for a card on order.
+        var expectedArrival: Date?
     }
 
     struct GradingSubmissionDTO: Codable, Equatable {
@@ -299,7 +302,8 @@ enum CollectionExport {
                     manualName: $0.manualName.isEmpty ? nil : $0.manualName,
                     manualSetName: $0.manualSetName.isEmpty ? nil : $0.manualSetName,
                     manualNumber: $0.manualNumber.isEmpty ? nil : $0.manualNumber,
-                    manualMarketCents: $0.manualMarketCents
+                    manualMarketCents: $0.manualMarketCents,
+                    expectedArrival: $0.expectedArrival
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString },
             sessions: sessions.map {
@@ -508,6 +512,7 @@ enum CollectionExport {
             card.manualSetName = dto.manualSetName ?? ""
             card.manualNumber = dto.manualNumber ?? ""
             card.manualMarketCents = dto.manualMarketCents
+            card.expectedArrival = dto.expectedArrival
             card.gradedCompCents = dto.gradedCompCents ?? [:]
             card.fetchedCompCents = dto.fetchedCompCents ?? [:]
             card.compsFetchedAt = dto.compsFetchedAt

@@ -78,9 +78,26 @@ struct OwnedCardRow: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+                if let due = dueText {
+                    Text(due)
+                        .font(.caption2)
+                        .foregroundStyle(OnOrder.due(row.card).isOverdue ? Color.orange : Color.secondary)
+                }
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// When the lead copy on order is due. The "on order" badge already says
+    /// it is on order, so this is only the date.
+    private var dueText: String? {
+        switch OnOrder.due(row.card) {
+        case .arrived, .undated: return nil
+        case .later(let date), .soon(let date):
+            return "due \(date.formatted(.dateTime.month(.abbreviated).day()))"
+        case .overdue:
+            return "overdue"
+        }
     }
 
     /// Cards, not lines: a bulk line of 40 counts 40, and a stack of nine

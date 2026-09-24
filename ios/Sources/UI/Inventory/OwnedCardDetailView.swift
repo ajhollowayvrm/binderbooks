@@ -63,6 +63,7 @@ private struct OwnedCardDetailBody: View {
                 addedNote
             }
             identity
+            onOrder
             sealed
             tags
             value
@@ -167,6 +168,55 @@ private struct OwnedCardDetailBody: View {
         }
     }
 
+    /// Only while the card is on order: when it is due, and the button that
+    /// says it came. See `OnOrder`.
+    @ViewBuilder
+    private var onOrder: some View {
+        if OnOrder.isOnOrder(card) {
+            Section {
+                LabeledContent("Status") {
+                    Text(dueText)
+                        .foregroundStyle(OnOrder.due(card).isOverdue ? Color.orange : Color.secondary)
+                }
+                Toggle("Expected date", isOn: Binding(
+                    get: { card.expectedArrival != nil },
+                    set: { on in
+                        let date: Date? = on ? (Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()) : nil
+                        OnOrder.setExpected(date, on: [card], context: modelContext)
+                    }
+                ))
+                if let expected = card.expectedArrival {
+                    DatePicker(
+                        "Arrives",
+                        selection: Binding(get: { expected }, set: { OnOrder.setExpected($0, on: [card], context: modelContext) }),
+                        displayedComponents: .date
+                    )
+                }
+                Button {
+                    OnOrder.receive([card], context: modelContext)
+                    model.invalidateHaystacks()
+                } label: {
+                    Label("Mark received", systemImage: "shippingbox.and.arrow.backward")
+                }
+            } header: {
+                Text("On order")
+            } footer: {
+                Text("Paid for, not here yet. It counts in inventory once you mark it received, and it cannot be ripped or listed until then.")
+            }
+        }
+    }
+
+    private var dueText: String {
+        switch OnOrder.due(card) {
+        case .arrived: return "Received"
+        case .undated: return "No date"
+        case .later(let date), .soon(let date):
+            return "Due \(date.formatted(date: .abbreviated, time: .omitted))"
+        case .overdue(let date):
+            return "Overdue since \(date.formatted(date: .abbreviated, time: .omitted))"
+        }
+    }
+
     /// Only on the self-card that stands for an unopened box. Ripping and
     /// dumping a dud are the same choice: what left inventory, one way or the
     /// other.
@@ -179,13 +229,17 @@ private struct OwnedCardDetailBody: View {
                 } label: {
                     Label("Rip it", systemImage: "camera")
                 }
+                .disabled(OnOrder.isOnOrder(card))
                 Button("No hits", role: .destructive) {
                     confirmNoHits = true
                 }
+                .disabled(OnOrder.isOnOrder(card))
             } header: {
                 Text("Sealed")
             } footer: {
-                Text("Scan what comes out. A dud with nothing in it still leaves inventory. Mark it No hits instead of ripping.")
+                Text(OnOrder.isOnOrder(card)
+                     ? "It is on order. Mark it received to rip it."
+                     : "Scan what comes out. A dud with nothing in it still leaves inventory. Mark it No hits instead of ripping.")
             }
         }
     }
@@ -286,6 +340,14 @@ private struct OwnedCardDetailBody: View {
                 Text("Grading is not tracked for S-Chinese cards.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if !OnOrder.isOnOrder(card), !CardTagIndex.isSold(card) {
+                Button {
+                    OnOrder.mark([card], expected: nil, context: modelContext)
+                    model.invalidateHaystacks()
+                } label: {
+                    Label("Mark as on order", systemImage: "shippingbox")
+                }
             }
             Toggle("Personal collection (not inventory)", isOn: Binding(get: { card.isPersonalCollection }, set: { card.isPersonalCollection = $0; save() }))
             Toggle("Bulk (identity only)", isOn: Binding(get: { card.isBulk }, set: { card.isBulk = $0; save() }))

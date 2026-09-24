@@ -46,8 +46,14 @@ enum PurchaseIntake {
 
     /// Writes the lines onto the purchase and adds the cards to inventory.
     /// Returns the new cards.
+    ///
+    /// `onOrder` is true when the order has not reached him yet. The cards go
+    /// in on order, with `expectedArrival` when he gave a date. See `OnOrder`.
     @discardableResult
-    static func record(_ lines: [Line], on purchase: Purchase, context: ModelContext) -> [OwnedCard] {
+    static func record(
+        _ lines: [Line], on purchase: Purchase, context: ModelContext,
+        onOrder: Bool = false, expectedArrival: Date? = nil
+    ) -> [OwnedCard] {
         var added: [OwnedCard] = []
         for line in lines where line.quantity > 0 {
             let item = PurchaseItem(productId: line.productId, quantity: line.quantity, isSealed: line.isSealed)
@@ -57,6 +63,12 @@ enum PurchaseIntake {
                 let card = OwnedCard(productId: line.productId, printing: line.printing, condition: CardCondition.nearMint.rawValue, confidence: .manual)
                 card.isSealedSelf = line.isSealed
                 card.acquiredAt = purchase.date
+                if onOrder {
+                    // A new card has no labels, so this is already the
+                    // normalised form `CardTagEditor` would write.
+                    card.tags = [ReservedTag.onOrder]
+                    card.expectedArrival = expectedArrival
+                }
                 context.insert(card)
                 added.append(card)
             }

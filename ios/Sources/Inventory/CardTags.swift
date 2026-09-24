@@ -39,8 +39,10 @@ enum ReservedTag {
     static let atCGC = "at CGC"
     static let graded = "graded"
     static let lost = "lost"
+    /// Paid for and not here yet: a preorder, or an order in the mail. See `OnOrder`.
+    static let onOrder = "on order"
 
-    static let all = [sold, listed, atGrader, atPSA, atCGC, graded, lost]
+    static let all = [sold, listed, atGrader, atPSA, atCGC, graded, lost, onOrder]
 
     /// The label a card wears while it is out at that grader.
     static func atGrader(_ grader: String) -> String {

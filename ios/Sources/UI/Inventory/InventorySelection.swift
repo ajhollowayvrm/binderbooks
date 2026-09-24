@@ -140,6 +140,7 @@ private struct InventorySelectionChrome: ViewModifier {
     @State private var compsTarget: TagSheetTarget?
     @State private var listTarget: TagSheetTarget?
     @State private var ripTarget: TagSheetTarget?
+    @State private var onOrderTarget: TagSheetTarget?
     @State private var deleteTarget: TagSheetTarget?
     @State private var fetcher = CompsFetcher()
     @State private var compsMessage: String?
@@ -216,6 +217,12 @@ private struct InventorySelectionChrome: ViewModifier {
             .ripSheet($ripTarget) {
                 model.invalidateHaystacks()
                 selection.end()
+            }
+            .sheet(item: $onOrderTarget) { target in
+                OnOrderSheet(cards: target.cards) {
+                    model.invalidateHaystacks()
+                    selection.end()
+                }
             }
             .confirmationDialog(
                 deleteTarget.map { $0.cards.count == 1 ? "Delete 1 card from inventory?" : "Delete \($0.cards.count) cards from inventory?" } ?? "",
@@ -310,12 +317,28 @@ private struct InventorySelectionChrome: ViewModifier {
                 Label("List on TCGplayer…", systemImage: "tablecells")
             }
             // Only sealed packs rip. Packs from several purchases rip as one.
+            // A pack on order is not here to open.
             Button {
                 ripTarget = TagSheetTarget(cards: selected)
             } label: {
                 Label("Rip…", systemImage: "shippingbox.and.arrow.backward")
             }
-            .disabled(!selected.allSatisfy(\.isSealedSelf))
+            .disabled(!selected.allSatisfy(\.isSealedSelf) || selected.contains(where: OnOrder.isOnOrder))
+            Divider()
+            Button {
+                onOrderTarget = TagSheetTarget(cards: selected)
+            } label: {
+                Label("Mark on order…", systemImage: "shippingbox")
+            }
+            .disabled(selected.contains(where: CardTagIndex.isSold))
+            Button {
+                OnOrder.receive(selected, context: modelContext)
+                model.invalidateHaystacks()
+                selection.end()
+            } label: {
+                Label("Mark received", systemImage: "checkmark.circle")
+            }
+            .disabled(!selected.contains(where: OnOrder.isOnOrder))
         } label: {
             Image(systemName: "ellipsis.circle")
         }

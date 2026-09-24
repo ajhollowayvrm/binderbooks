@@ -55,6 +55,9 @@ struct LedgerSummaryView: View {
                 if s.atGraderCount > 0 {
                     count("At a grader", s.atGraderCount)
                 }
+                if s.onOrderCount > 0 {
+                    count("On order", s.onOrderCount)
+                }
             } header: {
                 Text("What you have")
             } footer: {
@@ -111,6 +114,9 @@ struct LedgerSummaryView: View {
             // Their market figure is the raw print, not the slab. What they
             // could come back worth is in the potential, as a range.
             parts.append("Cards at a grader count at the raw print's price here.")
+        }
+        if s.onOrderCount > 0 {
+            parts.append("Cards on order are paid for under Purchases and count here once you mark them received.")
         }
         return parts.joined(separator: " ")
     }

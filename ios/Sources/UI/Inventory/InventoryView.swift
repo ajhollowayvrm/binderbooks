@@ -46,12 +46,16 @@ struct InventoryView: View {
         // Metrics all read cards.
         let stacks = InventoryStack.stacks(rows)
         let summary = model.summary(of: rows)
+        let reminder = OnOrder.reminder(for: cards)
         VStack(spacing: 0) {
             if !catalog.isReady {
                 catalogBanner
             }
             if case .refreshing(let done, let total) = catalog.priceState {
                 refreshingBanner(done: done, total: total)
+            }
+            if reminder.onOrder > 0, !selection.isSelecting {
+                onOrderBanner(reminder)
             }
             HStack(spacing: 0) {
                 filterRow
@@ -270,6 +274,33 @@ struct InventoryView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
+    }
+
+    /// What is on order, and what is late or close. A tap narrows the page to
+    /// them, and a second tap goes back. See `OnOrder`.
+    private func onOrderBanner(_ reminder: OnOrder.Reminder) -> some View {
+        let key = TagKey.of(ReservedTag.onOrder)
+        let showing = model.filter.tagKeys == [key]
+        var parts = ["\(reminder.onOrder) on order"]
+        if reminder.overdue > 0 { parts.append("\(reminder.overdue) overdue") }
+        if reminder.soon > 0 { parts.append("\(reminder.soon) due soon") }
+        return Button {
+            model.filter.tagKeys = showing ? [] : [key]
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: reminder.overdue > 0 ? "exclamationmark.circle" : "shippingbox")
+                Text(parts.joined(separator: " · "))
+                    .font(.footnote)
+                    .monospacedDigit()
+                Spacer()
+                Text(showing ? "Show all" : "Show")
+                    .font(.footnote.weight(.semibold))
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background((reminder.overdue > 0 ? Color.orange : Color.blue).opacity(0.14))
+        }
+        .buttonStyle(.plain)
     }
 
     private var catalogBanner: some View {
