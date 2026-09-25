@@ -5,9 +5,10 @@ import SwiftData
 /// the packs, or the singles, found in the catalog.
 ///
 /// Each product becomes one `PurchaseItem`, the record of what he bought. Each
-/// copy also becomes one card in inventory. A sealed product's cards are the
-/// boxes themselves, so he can rip them later. The cards have no link to the
-/// purchase and no cost. The purchase total stays on the books as it is.
+/// copy also becomes one card in inventory, linked to its line. A sealed
+/// product's cards are the boxes themselves, so he can rip them later. The
+/// purchase's landed cost splits over the cards by market price. See
+/// `CostBasis.split`.
 enum PurchaseIntake {
     struct Line: Identifiable, Hashable {
         var productId: Int
@@ -44,10 +45,18 @@ enum PurchaseIntake {
         lines.map { $0.quantity > 1 ? "\($0.quantity)x \($0.name)" : $0.name }.joined(separator: ", ")
     }
 
-    /// Writes the lines onto the purchase and adds the cards to inventory.
-    /// Returns the new cards.
+    /// Writes the lines onto the purchase, adds the cards to inventory, and
+    /// splits the cost over them. Returns the new cards.
+    ///
+    /// `marketCents` must already know the products, or the split is equal.
     @discardableResult
-    static func record(_ lines: [Line], on purchase: Purchase, context: ModelContext) -> [OwnedCard] {
+    static func record(
+        _ lines: [Line],
+        on purchase: Purchase,
+        since start: Date? = Books.start(),
+        marketCents: (OwnedCard) -> Int? = { _ in nil },
+        context: ModelContext
+    ) -> [OwnedCard] {
         var added: [OwnedCard] = []
         for line in lines where line.quantity > 0 {
             let item = PurchaseItem(productId: line.productId, quantity: line.quantity, isSealed: line.isSealed)
@@ -58,9 +67,11 @@ enum PurchaseIntake {
                 card.isSealedSelf = line.isSealed
                 card.acquiredAt = purchase.date
                 context.insert(card)
+                card.sourceItem = item
                 added.append(card)
             }
         }
+        CostBasis.split(purchase, since: start, marketCents: marketCents)
         return added
     }
 }

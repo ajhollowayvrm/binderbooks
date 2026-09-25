@@ -5,7 +5,7 @@ import SwiftUI
 ///
 /// This writes the money. A purchase can also take what came in it, found in
 /// the catalog: each product is recorded on the purchase and goes into
-/// inventory, with no link to the purchase and no cost. A note alone is
+/// inventory, and the purchase's cost splits over those cards by market price. A note alone is
 /// enough, for a purchase the catalog does not describe. An order can also
 /// take the cards that sold, picked from inventory: each card goes on the
 /// order and is tagged sold.
@@ -244,8 +244,8 @@ struct AddTransactionSheet: View {
         switch kind {
         case .purchase:
             return lines.isEmpty
-                ? "The purchase counts in your profit and loss. Cards you add later are not tied to it."
-                : "The products are recorded on the purchase and go into inventory."
+                ? "The purchase counts in your profit and loss. It puts no cost on a card, because no card is on it."
+                : "The products go into inventory. The landed cost splits over them by market price."
         case .sale:
             return saleCards.isEmpty
                 ? "This records the money. You can attach cards later from the order."
@@ -267,12 +267,21 @@ struct AddTransactionSheet: View {
                 itemCostCents: amountCents, shippingCents: shippingCents, taxCents: taxCents, feesCents: feesCents
             )
             modelContext.insert(purchase)
-            if !lines.isEmpty {
-                PurchaseIntake.record(lines, on: purchase, context: modelContext)
-                inventory.invalidateHaystacks()
-            }
             try? modelContext.save()
             onAdded(.purchase(purchase.id))
+            if !lines.isEmpty {
+                // The split reads market prices, so the products load first.
+                // The sheet closes at once. The context outlives it.
+                let lines = lines
+                let context = modelContext
+                let inventory = inventory
+                Task { @MainActor in
+                    await inventory.load(productIds: lines.map(\.productId))
+                    PurchaseIntake.record(lines, on: purchase, marketCents: { inventory.marketCents(for: $0) }, context: context)
+                    try? context.save()
+                    inventory.invalidateHaystacks()
+                }
+            }
 
         case .sale:
             let sale = Sale(soldAt: date, channelRaw: Self.channelKey(name), grossCents: amountCents)

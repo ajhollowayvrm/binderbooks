@@ -5,8 +5,8 @@ import Testing
 
 /// Every record on the books takes an edit after it is saved. These cover the
 /// edits with rules: a purchase, a grading charge, a card's catalog product,
-/// and new cards added by hand. No edit changes a card's cost, because a card
-/// has none.
+/// and new cards added by hand. A purchase edit splits the new total over its
+/// cards again.
 @Suite struct RecordEditorTests {
     @MainActor private func store() throws -> ModelContainer {
         try CollectionStore.container(inMemory: true)
@@ -37,7 +37,7 @@ import Testing
         return (purchase, cards[0], cards[1])
     }
 
-    @Test @MainActor func editingAPurchaseChangesNoCard() throws {
+    @Test @MainActor func editingAPurchaseSplitsTheNewTotal() throws {
         let container = try store()
         let context = container.mainContext
         let (purchase, a, b) = try purchase(context)
@@ -46,15 +46,38 @@ import Testing
         details.itemCostCents = 2_000
         details.date = bought.addingTimeInterval(86_400)
         details.vendor = " Fuzzy's "
-        try PurchaseEditor.apply(details, to: purchase, context: context)
+        try PurchaseEditor.apply(details, to: purchase, since: nil, context: context)
 
         #expect(purchase.vendor == "Fuzzy's")
         #expect(purchase.landedCostCents == 2_000)
         #expect(purchase.date == details.date)
         #expect(a.acquiredAt == bought)
         #expect(b.acquiredAt == bought)
-        #expect(a.acquisitionBasisCents == 500)
-        #expect(b.acquisitionBasisCents == 500)
+        // No prices, so the split is equal.
+        #expect(a.acquisitionBasisCents == 1_000)
+        #expect(b.acquisitionBasisCents == 1_000)
+    }
+
+    /// A cost he typed stays. The rest of the total goes to the other card.
+    @Test @MainActor func aTypedCostSurvivesAPurchaseEdit() throws {
+        let container = try store()
+        let context = container.mainContext
+        let (purchase, a, b) = try purchase(context)
+
+        try CostBasis.setTyped(1_500, on: a, since: nil, marketCents: { _ in nil }, context: context)
+        #expect(a.acquisitionBasisCents == 1_500)
+        #expect(b.acquisitionBasisCents == 0)
+
+        var details = PurchaseEditor.Details(purchase)
+        details.shippingCents = 600
+        try PurchaseEditor.apply(details, to: purchase, since: nil, context: context)
+        #expect(a.acquisitionBasisCents == 1_500)
+        #expect(b.acquisitionBasisCents == 100)
+
+        try CostBasis.clearTyped(on: a, since: nil, marketCents: { _ in nil }, context: context)
+        #expect(!a.basisIsManual)
+        #expect(a.acquisitionBasisCents == 800)
+        #expect(b.acquisitionBasisCents == 800)
     }
 
     /// `PurchaseItem.cards` is a cascade relationship. The delete must remove
@@ -78,9 +101,11 @@ import Testing
         let cards = try context.fetch(FetchDescriptor<OwnedCard>())
         #expect(Set(cards.map(\.id)) == [a.id, b.id, pulled.id])
         #expect(cards.allSatisfy { $0.sourceItem == nil })
+        // The money left the books, so the split cost goes too.
+        #expect(cards.allSatisfy { $0.acquisitionBasisCents == 0 })
     }
 
-    @Test @MainActor func aNewGradingTotalChangesTheChargeAndNoCard() throws {
+    @Test @MainActor func aNewGradingTotalChangesTheChargeAndEachCardsShare() throws {
         let container = try store()
         let context = container.mainContext
         let (_, a, b) = try purchase(context)
@@ -97,7 +122,11 @@ import Testing
 
         #expect(submission.totalCostCents == 3_000)
         #expect(submission.submissionNumber == "12345678")
+        // The share is read from the charge. Nothing is stored on the card.
         #expect(a.gradingBasisCents == 0)
+        let shares = CostBasis.gradingShares([submission], since: nil)
+        #expect(shares[a.id] == 1_500)
+        #expect(shares[b.id] == 1_500)
         #expect(b.gradingBasisCents == 0)
         #expect(submission.entries.allSatisfy { $0.allocatedFeeCents == 0 })
     }

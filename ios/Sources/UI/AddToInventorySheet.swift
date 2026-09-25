@@ -2,7 +2,8 @@ import SwiftData
 import SwiftUI
 
 /// Add a card to inventory by hand: how many, which printing, what condition.
-/// No purchase and no cost. The short road for a card that was never scanned.
+/// No purchase, so the card costs $0 until he types a cost. The short road
+/// for a card that was never scanned.
 ///
 /// With a catalog product, the sheet adds that product. Without one, he types
 /// the card himself. That is the road for an Italian or a Korean print, which

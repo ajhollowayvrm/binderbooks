@@ -34,7 +34,8 @@ enum GradingEditor {
         }
     }
 
-    /// A new total changes the charge. No card changes.
+    /// A new total changes the charge, and so the cost of each card on it.
+    /// The share is read from the charge, not stored. See `CostBasis.gradingShares`.
     static func apply(_ details: Details, to submission: GradingSubmission, context: ModelContext) throws {
         submission.submissionNumber = details.submissionNumber.trimmingCharacters(in: .whitespaces)
         submission.serviceLevel = details.serviceLevel.trimmingCharacters(in: .whitespaces)

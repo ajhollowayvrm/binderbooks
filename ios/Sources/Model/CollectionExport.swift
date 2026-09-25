@@ -9,10 +9,9 @@ import SwiftData
 /// since the reference date, which JSON doubles reproduce exactly. Arrays are
 /// sorted by id so two exports of the same store are byte-identical.
 ///
-/// Since 2026-09-22 a card has no link to a purchase and no cost. The fields
-/// that held them are dormant (see `Models.swift`). Export and import are the
-/// only code that reads and writes them. They keep doing so without change, so
-/// an old file imports and his data round-trips exactly.
+/// A card's cost and its link to a purchase travel with it, so his data
+/// round-trips exactly. A file from before the fresh start of 2026-09-25
+/// imports with every card at $0. See `booksStartedAt`.
 enum CollectionExport {
     static let format = "cardtracker-collection"
     /// Version 2 added `OwnedCardDTO.tags` and `basisIsManual`. Version 3 added
@@ -29,7 +28,10 @@ enum CollectionExport {
     /// Version 8 added the `OwnedCardDTO.manual…` fields, for a card he entered
     /// by hand because the catalog does not carry it.
     /// Version 9 added `PurchaseItemDTO.ripGroupId`, for packs ripped together.
-    static let version = 9
+    /// Version 10 added `File.booksStartedAt`, the day the books start. A file
+    /// with no start comes from before the fresh start of 2026-09-25, so every
+    /// card in it imports at $0. See `Books`.
+    static let version = 10
 
     struct File: Codable, Equatable {
         var format: String = CollectionExport.format
@@ -47,6 +49,8 @@ enum CollectionExport {
         var sales: [SaleDTO]?
         var saleLines: [SaleLineDTO]?
         var expenses: [BusinessExpenseDTO]?
+        /// Optional, like `grading`: added in version 10.
+        var booksStartedAt: Date?
 
         var counts: String {
             var parts = ["\(purchases.count) purchases", "\(purchaseItems.count) lines", "\(cards.count) cards", "\(sessions.count) sessions"]
@@ -257,7 +261,7 @@ enum CollectionExport {
     // MARK: - Export
 
     @MainActor
-    static func snapshot(_ context: ModelContext, now: Date = Date()) throws -> File {
+    static func snapshot(_ context: ModelContext, now: Date = Date(), defaults: UserDefaults = .standard) throws -> File {
         let purchases = try context.fetch(FetchDescriptor<Purchase>())
         let items = try context.fetch(FetchDescriptor<PurchaseItem>())
         let cards = try context.fetch(FetchDescriptor<OwnedCard>())
@@ -344,7 +348,8 @@ enum CollectionExport {
                     id: $0.id, date: $0.date, category: $0.category, vendor: $0.vendor,
                     amountCents: $0.amountCents, note: $0.note, sourceRef: $0.sourceRef
                 )
-            }.sorted { $0.id.uuidString < $1.id.uuidString }
+            }.sorted { $0.id.uuidString < $1.id.uuidString },
+            booksStartedAt: Books.start(defaults)
         )
     }
 
@@ -377,7 +382,7 @@ enum CollectionExport {
     /// Idempotent: importing the same file twice changes nothing the second time.
     @MainActor
     @discardableResult
-    static func apply(_ file: File, to context: ModelContext, mode: Mode) throws -> Report {
+    static func apply(_ file: File, to context: ModelContext, mode: Mode, defaults: UserDefaults = .standard) throws -> Report {
         var report = Report()
 
         if mode == .replace {
@@ -609,6 +614,15 @@ enum CollectionExport {
             expense.note = dto.note
             expense.sourceRef = dto.sourceRef ?? ""
             report.expenses += 1
+        }
+
+        // The fresh start. A file that carries a start sets it. A file with
+        // no start is older than the fresh start, so when the books have a
+        // start, its cards cost $0: that money is written off.
+        if let start = file.booksStartedAt {
+            Books.setStart(start, defaults: defaults)
+        } else if Books.start(defaults) != nil {
+            CostBasis.zero(file.cards.compactMap { cards[$0.id] })
         }
 
         try context.save()

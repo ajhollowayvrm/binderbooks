@@ -63,6 +63,32 @@ reads a basis.
   and the potential). The potential counts a returned slab at its grade's comp,
   and adds a low and a best figure from the comps of the cards at a grader.
 
+**Amended 2026-09-25: cost basis is back, and the books start fresh.** AJ's
+decision. BinderBooks manages the card business, so a card has a cost again. The
+debt from before 2026-09-25 is written off.
+
+- **The start.** On the first launch of the new build, the books start at that
+  moment. Every card he holds then costs $0. The Summary counts only the purchases,
+  grading, sales, and expenses dated on or after the start. The older rows stay in
+  the ledger for reference. See `Books` in `CostBasis.swift`.
+- **Purchases.** A purchase links its cards to its lines again, through
+  `OwnedCard.sourceItem`. Its landed cost splits over the cards by market price.
+  An edit to the purchase splits again. A cost he types on one card stays, and the
+  rest splits around it. A purchase dated before the start puts $0 on its cards.
+- **Rips.** At the commit, what the packs cost splits over the pulls by market
+  price. The ripped line keeps its cost, so a later edit to the purchase total goes
+  to the other lines.
+- **Grading.** A charge dated on or after the start splits equally over the cards
+  on it. The share is read from the charge. It is not stored.
+- **Sales.** An order's gain is its net less the cost of its cards. A line that
+  links no card has no cost, so the gain reads high by it.
+- **Export.** Version 10 adds `booksStartedAt`. A file with no start is older than
+  the fresh start, so its cards import at $0.
+- **Fields.** These fields are live again: `OwnedCard.acquisitionBasisCents`,
+  `basisIsAllocated`, `basisIsManual`, `sourceItem`, and `PurchaseItem.allocatedCostCents`,
+  `isRipped`, and `cards`. The other fields in the list above stay dormant.
+- Where this amendment and the amendment of 2026-09-22 disagree, this one wins.
+
 ---
 
 ## Money

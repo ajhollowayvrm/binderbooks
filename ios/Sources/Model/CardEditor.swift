@@ -27,8 +27,15 @@ enum PurchaseEditor {
         var landedCostCents: Int { itemCostCents + shippingCents + taxCents + feesCents }
     }
 
-    /// Writes the new details onto the purchase. No card changes.
-    static func apply(_ details: Details, to purchase: Purchase, context: ModelContext) throws {
+    /// Writes the new details onto the purchase, and splits the new total
+    /// over its cards again. See `CostBasis.split`.
+    static func apply(
+        _ details: Details,
+        to purchase: Purchase,
+        since start: Date? = Books.start(),
+        marketCents: (OwnedCard) -> Int? = { _ in nil },
+        context: ModelContext
+    ) throws {
         purchase.date = details.date
         purchase.vendor = details.vendor.trimmingCharacters(in: .whitespaces)
         purchase.note = details.note.trimmingCharacters(in: .whitespaces)
@@ -36,15 +43,17 @@ enum PurchaseEditor {
         purchase.shippingCents = details.shippingCents
         purchase.taxCents = details.taxCents
         purchase.feesCents = details.feesCents
+        CostBasis.split(purchase, since: start, marketCents: marketCents)
         try context.save()
     }
 
     /// Deletes a purchase and keeps every card.
     ///
-    /// Old data can still link a card to a purchase line through the dormant
-    /// `OwnedCard.sourceItem`. `PurchaseItem.cards` is a cascade relationship,
-    /// so deleting the line also deletes those cards. This removes each link
-    /// and saves before the purchase goes. Always delete a purchase here.
+    /// `PurchaseItem.cards` is a cascade relationship, so deleting the line
+    /// also deletes its cards. This removes each link and saves before the
+    /// purchase goes. Always delete a purchase here. The money leaves the
+    /// books, so a card that took its cost from the split now costs $0. A
+    /// cost he typed stays.
     static func delete(_ purchase: Purchase, context: ModelContext) throws {
         var lines = purchase.items
         var index = 0
@@ -53,7 +62,13 @@ enum PurchaseEditor {
             index += 1
         }
         for line in lines {
-            for card in line.cards { card.sourceItem = nil }
+            for card in line.cards {
+                card.sourceItem = nil
+                if !card.basisIsManual {
+                    card.acquisitionBasisCents = 0
+                    card.basisIsAllocated = false
+                }
+            }
         }
         try context.save()
         context.delete(purchase)
@@ -89,7 +104,7 @@ extension CardEditor {
     /// product, or of one card he typed himself when `productId` is 0. The
     /// typed name, set, number, value, and language apply only then.
     ///
-    /// No purchase and no cost: a card stands alone.
+    /// No purchase, so the cards cost $0 until he types a cost.
     @discardableResult
     static func addCards(
         productId: Int,

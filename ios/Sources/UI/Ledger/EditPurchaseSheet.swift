@@ -8,6 +8,7 @@ struct EditPurchaseSheet: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(InventoryModel.self) private var inventory
 
     @State private var date: Date
     @State private var vendor: String
@@ -72,6 +73,10 @@ struct EditPurchaseSheet: View {
                     Text(moneyFooter)
                 }
             }
+            .task {
+                // The split reads market prices.
+                await inventory.load(for: purchase.items.flatMap(\.cards))
+            }
             .navigationTitle("Edit purchase")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -89,13 +94,13 @@ struct EditPurchaseSheet: View {
     }
 
     private var moneyFooter: String {
-        "The total counts in your profit and loss. No card changes."
+        "The total counts in your profit and loss. It splits again over the cards on the purchase, by market price. A cost you typed on a card stays."
     }
 
     private func save() {
         guard let details else { return }
         do {
-            try PurchaseEditor.apply(details, to: purchase, context: modelContext)
+            try PurchaseEditor.apply(details, to: purchase, marketCents: { inventory.marketCents(for: $0) }, context: modelContext)
             onSaved()
             dismiss()
         } catch {

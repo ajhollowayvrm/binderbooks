@@ -9,6 +9,7 @@ struct SaleDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Query private var sales: [Sale]
+    @Query private var submissions: [GradingSubmission]
     @State private var confirmDelete = false
     @State private var blockedMessage: String?
     @State private var editing = false
@@ -51,12 +52,18 @@ struct SaleDetailView: View {
                     LabeledContent("Net") {
                         Text(sale.netCents.asCurrency).font(.body.weight(.semibold).monospacedDigit())
                     }
+                    let cost = costCents(sale)
+                    deduction("Cost of the cards", cost)
+                    LabeledContent("Gain") {
+                        let gain = sale.netCents - cost
+                        Text((gain >= 0 ? "+" : "−") + abs(gain).asCurrency)
+                            .font(.body.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(gain >= 0 ? Color.green : Color.red)
+                    }
                 } header: {
                     Text("Money")
                 } footer: {
-                    if sale.costsEstimated {
-                        Text("The fees and the postage are estimates. The order file had no fees, so the app estimated them from your other orders on this channel.")
-                    }
+                    moneyFooter(sale)
                 }
 
                 Section {
@@ -119,6 +126,27 @@ struct SaleDetailView: View {
             Button("OK") {}
         } message: {
             Text(blockedMessage ?? "")
+        }
+    }
+
+    /// What the cards on the order cost. A line that links no card adds
+    /// nothing, so the gain reads high by its cost.
+    private func costCents(_ sale: Sale) -> Int {
+        let shares = CostBasis.gradingShares(submissions, since: Books.start())
+        return sale.lines.compactMap(\.card).reduce(0) { $0 + CostBasis.cost(of: $1, grading: shares) }
+    }
+
+    @ViewBuilder private func moneyFooter(_ sale: Sale) -> some View {
+        let notes = [
+            sale.costsEstimated
+                ? "The fees and the postage are estimates. The order file had no fees, so the app estimated them from your other orders on this channel." : nil,
+            sale.lines.contains(where: { $0.card == nil })
+                ? "A line that links no card has no cost, so the gain reads high." : nil,
+            Books.start().map { sale.soldAt < $0 } == true
+                ? "This order is from before the books started. It is not counted on the Summary." : nil,
+        ].compactMap { $0 }
+        if !notes.isEmpty {
+            Text(notes.joined(separator: " "))
         }
     }
 

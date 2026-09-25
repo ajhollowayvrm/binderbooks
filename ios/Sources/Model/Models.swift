@@ -7,9 +7,10 @@ import SwiftData
 //
 // All money is Int cents.
 //
-// Since 2026-09-22 a card has no link to a purchase and no cost. The fields
-// that held the link and the cost stay, marked dormant, so old stores open and
-// old exports import. Only `CollectionExport` reads and writes them.
+// From 2026-09-22 to 2026-09-25 a card had no cost. Since 2026-09-25 it has
+// a cost again, from the day the books start. See `CostBasis` and `Books`.
+// The fields still marked dormant stay so old stores open and old exports
+// import. Only `CollectionExport` reads and writes them.
 
 /// Kept only because the default value of the dormant
 /// `Purchase.allocationMethodRaw` uses it.
@@ -88,7 +89,7 @@ enum CardLanguage {
     }
 }
 
-/// Money left his account. Says nothing about what was bought.
+/// Money left his account. Its landed cost splits over the cards on its lines.
 @Model
 final class Purchase {
     #Unique<Purchase>([\.id])
@@ -131,7 +132,7 @@ final class Purchase {
 }
 
 /// One line of a purchase: a sealed product, or cards. The record of what he
-/// bought. It has no link to the cards in inventory.
+/// bought, linked to the cards it put in inventory.
 @Model
 final class PurchaseItem {
     #Unique<PurchaseItem>([\.id])
@@ -140,7 +141,8 @@ final class PurchaseItem {
     var productId: Int = 0
     var quantity: Int = 1
     var isSealed: Bool = false
-    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
+    /// What this line's cards cost, from the last split. Fixed once the line
+    /// is ripped. See `CostBasis.split`.
     var allocatedCostCents: Int = 0
 
     var purchase: Purchase?
@@ -152,7 +154,7 @@ final class PurchaseItem {
     @Relationship(deleteRule: .cascade, inverse: \PurchaseItem.parentItem)
     var childItems: [PurchaseItem] = []
 
-    /// Dormant since 2026-09-22. Kept for old stores and exports. The delete
+    /// The cards this line put in inventory. They share its cost. The delete
     /// rule is cascade, so delete a purchase only with `PurchaseEditor.delete`.
     @Relationship(deleteRule: .cascade, inverse: \OwnedCard.sourceItem)
     var cards: [OwnedCard] = []
@@ -160,7 +162,8 @@ final class PurchaseItem {
     /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
     var identifiedGroupId: Int?
 
-    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
+    /// True once a card on this line was ripped. The line then keeps its
+    /// cost: that money moved on to the pulls. See `CostBasis.moveRipCost`.
     var isRipped: Bool = false
 
     /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
@@ -193,13 +196,16 @@ final class OwnedCard {
     var acquiredAt: Date = Date()
     var statusRaw: String = CardStatus.owned.rawValue
 
-    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
+    /// What the card came in at, in cents: its share of a purchase or of
+    /// the packs it came from, or a cost he typed. Grading is not in it. See
+    /// `CostBasis`.
     var acquisitionBasisCents: Int = 0
-    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
+    /// Dormant. The grading share is read from the charges, not stored. See
+    /// `CostBasis.gradingShares`. Kept for old stores and exports.
     var gradingBasisCents: Int = 0
-    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
+    /// True when a split wrote `acquisitionBasisCents`.
     var basisIsAllocated: Bool = false
-    /// Dormant since 2026-09-22. No behavior reads or writes it. Kept for old stores and exports.
+    /// True when he typed `acquisitionBasisCents`. A split does not change it.
     var basisIsManual: Bool = false
 
     /// Not individually accounted: one card with a count.
@@ -214,8 +220,8 @@ final class OwnedCard {
     /// this card.
     var isSealedSelf: Bool = false
 
-    /// Dormant since 2026-09-22. Kept for old stores and exports. Only
-    /// `PurchaseEditor.delete` writes it: it clears the link before a purchase goes.
+    /// The purchase line the card came in on. Nil for a card he scanned,
+    /// pulled, or added by hand.
     var sourceItem: PurchaseItem?
     var scanSession: ScanSession?
 
@@ -450,8 +456,8 @@ final class GradingSubmission {
     }
 }
 
-/// One card inside a submission. The fees stay on the submission as one
-/// grading charge.
+/// One card inside a submission. The charge splits equally over the cards on
+/// it, and each share counts in the card's cost.
 @Model
 final class GradingEntry {
     #Unique<GradingEntry>([\.id])

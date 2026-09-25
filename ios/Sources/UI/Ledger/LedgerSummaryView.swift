@@ -9,8 +9,8 @@ import SwiftUI
 /// came back counts at its grade's comp, and a card still at a grader gives a
 /// low and a best figure. There is no grade picker; he judges the grade.
 ///
-/// Every figure covers the whole business over the whole period. Nothing here
-/// is broken down by vendor, set, or product — decision 23.
+/// Every figure covers the whole business since the books start. Nothing
+/// here is broken down by vendor, set, or product — decision 23.
 struct LedgerSummaryView: View {
     var purchases: [Purchase]
     var grading: [GradingSubmission]
@@ -30,9 +30,11 @@ struct LedgerSummaryView: View {
     private var summary: LedgerSummary {
         LedgerSummary.make(
             purchases: purchases, grading: grading, sales: sales, expenses: expenses,
-            held: held, marketCents: { inventory.marketCents(for: $0) }
+            held: held, since: start, marketCents: { inventory.marketCents(for: $0) }
         )
     }
+
+    private var start: Date? { Books.start() }
 
     private var costs: SellingCosts {
         SellingCostsKey.effective(
@@ -48,6 +50,7 @@ struct LedgerSummaryView: View {
             Section {
                 count("Cards to sell", s.heldCardCount)
                 row("At market", s.heldAtMarketCents)
+                row("At cost", s.heldAtCostCents)
                 if s.personalCardCount > 0 {
                     count("Personal collection", s.personalCardCount)
                     row("At market", s.personalAtMarketCents)
@@ -68,14 +71,20 @@ struct LedgerSummaryView: View {
                 row("Spent", s.spentCents, weight: .bold)
             } header: {
                 Text("What you spent")
+            } footer: {
+                if let start {
+                    Text("Since \(start.formatted(date: .abbreviated, time: .shortened)), when the books started. Earlier records stay in the ledger and are not counted here.")
+                }
             }
 
             Section {
                 row("Sales, net", s.revenueCents, weight: .bold)
+                deduction("Cost of the cards sold", s.soldCostCents)
+                signed("Gain on the cards sold", s.gainOnSalesCents)
             } header: {
                 Text("What you earned")
             } footer: {
-                Text("What your orders brought in, after marketplace fees, sales tax, and the shipping you paid.")
+                Text(earnedFootnote(s))
             }
 
             Section {
@@ -89,6 +98,7 @@ struct LedgerSummaryView: View {
             Section {
                 row("Cards to sell, at market", s.heldAtMarketCents)
                 deduction("Selling costs (\(costs.percentText))", s.heldAtMarketCents - costs.net(s.heldAtMarketCents))
+                signed("Gain over their cost", costs.net(s.heldAtMarketCents) - s.heldAtCostCents)
                 signed("If you sold today", s.ifSoldTodayCents(costs), weight: .bold)
                 if s.atGraderWithCompsCount > 0 {
                     signed("If graded cards come back low", s.ifGradedLowCents(costs))
@@ -105,8 +115,17 @@ struct LedgerSummaryView: View {
         }
     }
 
+    private func earnedFootnote(_ s: LedgerSummary) -> String {
+        var parts = ["What your orders brought in, after marketplace fees, sales tax, and the shipping you paid. The gain takes off what the cards on the orders cost."]
+        if s.soldLinesWithoutCardCount > 0 {
+            let n = s.soldLinesWithoutCardCount
+            parts.append("\(n) order \(n == 1 ? "line links" : "lines link") no card, so \(n == 1 ? "its" : "their") cost is not known and the gain reads high. Link the cards on the order.")
+        }
+        return parts.joined(separator: " ")
+    }
+
     private func haveFootnote(_ s: LedgerSummary) -> String {
-        var parts = ["Market value comes from the catalog's prices. A graded card that came back counts at your comp for its grade. Sold cards are not counted."]
+        var parts = ["Market value comes from the catalog's prices. A graded card that came back counts at your comp for its grade. Cost is what the card came in at, plus its grading. A card you held when the books started costs $0. Sold cards are not counted."]
         if s.atGraderCount > 0 {
             // Their market figure is the raw print, not the slab. What they
             // could come back worth is in the potential, as a range.
@@ -116,7 +135,7 @@ struct LedgerSummaryView: View {
     }
 
     private func potentialFootnote(_ s: LedgerSummary) -> String {
-        var parts = ["Where you are, plus what the cards to sell would bring, less your selling costs. Your personal collection is not counted."]
+        var parts = ["Where you are, plus what the cards to sell would bring, less your selling costs. The gain over their cost is what they would bring less what they cost. Your personal collection is not counted."]
         if s.atGraderWithCompsCount > 0 {
             parts.append("\"Come back low\" counts each card at a grader at your lowest comp for that grader. \"Best\" counts it at your best comp.")
         }

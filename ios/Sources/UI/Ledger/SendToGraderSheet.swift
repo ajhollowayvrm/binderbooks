@@ -66,7 +66,7 @@ struct SendToGraderSheet: View {
 
     private var costDescription: String {
         guard totalCents > 0 else { return "Fees can be filled in when the cards come back." }
-        return "\(totalCents.asCurrency) goes on the books as one grading charge."
+        return "\(totalCents.asCurrency) goes on the books as one grading charge. It splits equally over the cards, and each share counts in the card's cost."
     }
 
     private func save() {

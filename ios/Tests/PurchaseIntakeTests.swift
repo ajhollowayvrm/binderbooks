@@ -29,9 +29,10 @@ import Testing
         #expect(PurchaseIntake.note(for: lines) == "2x Chaos Rising Booster Pack, Charizard ex")
     }
 
-    /// The items go on the purchase. The cards go into inventory with no link
-    /// to it and no cost, and the landed total stays $27.65.
-    @Test @MainActor func aPurchaseRecordsItsItemsAndTheCardsStandAlone() throws {
+    /// The items go on the purchase, and the cards go into inventory linked
+    /// to their lines. The landed $27.65 splits by market price: two $5 packs
+    /// and a $15 Charizard take 20%, 20%, and 60%.
+    @Test @MainActor func aPurchaseRecordsItsItemsAndSplitsItsCostByMarket() throws {
         let container = try store()
         let context = container.mainContext
         let purchase = Purchase(date: bought, vendor: "Whatnot", itemCostCents: 2_500, shippingCents: 78, taxCents: 187)
@@ -41,22 +42,42 @@ import Testing
         lines[0].quantity = 2
         lines = PurchaseIntake.adding(hit(20, "Charizard ex"), printings: ["Holofoil"], to: lines)
 
-        let cards = PurchaseIntake.record(lines, on: purchase, context: context)
+        let market = [10: 500, 20: 1_500]
+        let cards = PurchaseIntake.record(lines, on: purchase, since: nil, marketCents: { market[$0.productId] }, context: context)
         try context.save()
 
         #expect(cards.count == 3)
         #expect(purchase.items.count == 2)
         #expect(purchase.items.reduce(0) { $0 + $1.quantity } == 3)
         #expect(purchase.landedCostCents == 2_765)
-        #expect(cards.allSatisfy { $0.sourceItem == nil && $0.acquisitionBasisCents == 0 && $0.acquiredAt == bought })
-        #expect(purchase.items.allSatisfy { $0.cards.isEmpty && $0.allocatedCostCents == 0 })
+        #expect(cards.allSatisfy { $0.sourceItem != nil && $0.basisIsAllocated && $0.acquiredAt == bought })
+        #expect(cards.reduce(0) { $0 + $1.acquisitionBasisCents } == 2_765)
+        #expect(purchase.items.reduce(0) { $0 + $1.allocatedCostCents } == 2_765)
 
         let packs = cards.filter { $0.productId == 10 }
         #expect(packs.count == 2)
+        #expect(packs.map(\.acquisitionBasisCents) == [553, 553])
         #expect(packs.filter { $0.isSealedSelf }.count == 2)
 
         let single = try #require(cards.first { $0.productId == 20 })
         #expect(!single.isSealedSelf)
         #expect(single.printing == "Holofoil")
+        #expect(single.acquisitionBasisCents == 1_659)
+    }
+
+    /// A purchase dated before the books start is off the books, so its cards
+    /// cost $0.
+    @Test @MainActor func aPurchaseBeforeTheStartPutsNoCostOnItsCards() throws {
+        let container = try store()
+        let context = container.mainContext
+        let purchase = Purchase(date: bought, vendor: "Walmart", itemCostCents: 1_000)
+        context.insert(purchase)
+        let lines = PurchaseIntake.adding(hit(20, "Charizard ex"), printings: ["Holofoil"], to: [])
+
+        let cards = PurchaseIntake.record(lines, on: purchase, since: bought.addingTimeInterval(1), context: context)
+
+        #expect(cards.count == 1)
+        #expect(cards[0].acquisitionBasisCents == 0)
+        #expect(cards[0].sourceItem != nil)
     }
 }

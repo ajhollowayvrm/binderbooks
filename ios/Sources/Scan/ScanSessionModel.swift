@@ -400,10 +400,10 @@ final class ScanSessionModel {
 
     /// Mark the session committed, so its cards become inventory. It makes
     /// no purchase and no purchase line. A rip session also takes its packs
-    /// out of inventory here. See `Rip`.
+    /// out of inventory here, and moves their cost to the pulls. See `Rip`.
     func commit() {
         if Rip.isRip(session, defaults: defaults) {
-            Rip.finish(session, context: context, defaults: defaults)
+            Rip.finish(session, context: context, marketCents: { self.marketCents(for: $0) ?? $0.manualMarketCents }, defaults: defaults)
         }
         session.committedAt = Date()
         save()

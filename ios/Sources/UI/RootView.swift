@@ -152,6 +152,9 @@ struct RootView: View {
             ChineseRemoval.run(modelContext)
             // eBay orders imported before 2026-09-22 were filed in the year 26.
             SalesOrderCSV.repairCenturyDates(modelContext)
+            // The books start fresh on 2026-09-25: every card held then costs
+            // $0, and the Summary counts from then on. Once.
+            Books.startFresh(modelContext)
             applyDebugQuery()
         }
     }

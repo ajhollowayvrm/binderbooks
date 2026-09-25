@@ -4,9 +4,10 @@ import SwiftData
 /// Ripping sealed packs: the packs leave inventory, and the pulls come in
 /// through an ordinary scan.
 ///
-/// A rip has no cost and no purchase. The purchase that bought the packs stays
-/// on the books as it is, and the pulls are cards with no link to it. So a rip
-/// only has to remember which packs it opens until the scan commits.
+/// What the packs cost moves to the pulls when the scan commits, split by
+/// market price. See `CostBasis.moveRipCost`. The purchase that bought the
+/// packs stays on the books as it is, and the pulls have no link to it. So a
+/// rip only has to remember which packs it opens until the scan commits.
 ///
 /// The pack ids live in `UserDefaults`, one key for each scan session. They do
 /// not live on the session's own cards, because a discarded session deletes
@@ -67,13 +68,21 @@ enum Rip {
     }
 
     /// The rip itself, when the scan commits. Each recorded pack that is still
-    /// sealed and not sold leaves inventory. The pulls stay as the scan made
-    /// them.
-    static func finish(_ session: ScanSession, context: ModelContext, defaults: UserDefaults = .standard) {
+    /// sealed and not sold leaves inventory, and its cost moves to the pulls.
+    ///
+    /// `marketCents` weighs the pulls. With no prices, the cost splits equally.
+    static func finish(
+        _ session: ScanSession,
+        context: ModelContext,
+        marketCents: (OwnedCard) -> Int? = { _ in nil },
+        defaults: UserDefaults = .standard
+    ) {
         let ids = packIds(for: session, defaults: defaults)
         if !ids.isEmpty {
             let packs = (try? context.fetch(FetchDescriptor<OwnedCard>(predicate: #Predicate { ids.contains($0.id) }))) ?? []
-            for pack in rippable(packs) {
+            let opening = rippable(packs)
+            CostBasis.moveRipCost(from: opening, to: session.cards, marketCents: marketCents)
+            for pack in opening {
                 context.delete(pack)
             }
             try? context.save()
@@ -86,9 +95,13 @@ enum Rip {
         defaults.removeObject(forKey: key(for: session))
     }
 
-    /// A rip with nothing to scan. The packs leave inventory at once.
+    /// A rip with nothing to scan. The packs leave inventory at once, and
+    /// their cost goes with them: no card is left to carry it. The purchase
+    /// that bought them stays on the books.
     static func ripWithNothing(_ packs: [OwnedCard], context: ModelContext) {
-        for pack in rippable(packs) {
+        let opening = rippable(packs)
+        CostBasis.moveRipCost(from: opening, to: [], marketCents: { _ in nil })
+        for pack in opening {
             context.delete(pack)
         }
         try? context.save()

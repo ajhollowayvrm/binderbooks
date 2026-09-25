@@ -4,7 +4,7 @@ import SwiftUI
 import UIKit
 
 /// One owned card: catalog data, its value, its scan, and the edits that need
-/// no other model. A card has no purchase and no cost.
+/// no other model.
 struct OwnedCardDetailView: View {
     @Query private var cards: [OwnedCard]
 
@@ -66,6 +66,7 @@ private struct OwnedCardDetailBody: View {
             sealed
             tags
             value
+            CardCostSection(card: card, model: model)
             GradedCompsSection(card: card, categoryId: hit?.categoryId)
             source
             // A card with no catalog product: one he entered by hand, or an
@@ -466,5 +467,114 @@ struct ManualIdentitySection: View {
     private func save() {
         try? modelContext.save()
         onChange()
+    }
+}
+
+/// What the card cost: what it came in at, plus its share of each grading
+/// charge on the books. He can type a cost over the split. See `CostBasis`.
+struct CardCostSection: View {
+    let card: OwnedCard
+    let model: InventoryModel
+
+    @Environment(\.modelContext) private var modelContext
+    @Query private var submissions: [GradingSubmission]
+    @State private var typing = false
+    @State private var costText = ""
+    @State private var failed = false
+
+    private var start: Date? { Books.start() }
+    private var gradingCents: Int { CostBasis.gradingShares(submissions, since: start)[card.id] ?? 0 }
+
+    var body: some View {
+        let grading = gradingCents
+        Section {
+            LabeledContent("Cost") {
+                Text((card.acquisitionBasisCents + grading).asCurrency)
+                    .font(.body.monospacedDigit().weight(.semibold))
+            }
+            LabeledContent(sourceLabel, value: card.acquisitionBasisCents.asCurrency)
+            if grading > 0 {
+                LabeledContent("Grading", value: grading.asCurrency)
+            }
+            Button(card.basisIsManual ? "Change the cost you typed" : "Type a cost") {
+                costText = Money.fieldText(card.acquisitionBasisCents)
+                typing = true
+            }
+            if card.basisIsManual {
+                Button("Clear the cost you typed") { clear() }
+            }
+        } header: {
+            Text("Cost")
+        } footer: {
+            Text(footnote)
+        }
+        .alert("What did this card cost?", isPresented: $typing) {
+            TextField("0.00", text: $costText)
+                .keyboardType(.decimalPad)
+            Button("Save") { save() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(card.sourceItem?.purchase == nil
+                ? "Grading is added on top."
+                : "Grading is added on top. The rest of the purchase splits again around this card.")
+        }
+        .alert("The cost did not save", isPresented: $failed) {
+            Button("OK") {}
+        } message: {
+            Text("The store did not accept the change. Try again.")
+        }
+    }
+
+    private var sourceLabel: String {
+        if card.basisIsManual { return "You typed" }
+        if card.sourceItem?.purchase != nil { return "From the purchase" }
+        if card.basisIsAllocated { return "From the packs" }
+        return "Came in at"
+    }
+
+    private var footnote: String {
+        if card.basisIsManual {
+            return "A split does not change a cost you typed."
+        }
+        if let purchase = card.sourceItem?.purchase {
+            let vendor = purchase.vendor.isEmpty ? "the purchase" : purchase.vendor
+            return "Its share of \(vendor) on \(purchase.date.formatted(date: .abbreviated, time: .omitted)), split by market price."
+        }
+        if card.basisIsAllocated {
+            return "Its share of the packs it came from, split by market price."
+        }
+        if let start, card.acquiredAt < start {
+            return "You held this card when the books started, so it costs $0."
+        }
+        return "No purchase is behind this card. Type a cost if it had one."
+    }
+
+    private func save() {
+        guard let cents = Money.cents(from: costText) else { return }
+        Task {
+            await loadPurchase()
+            do {
+                try CostBasis.setTyped(cents, on: card, since: start, marketCents: { model.marketCents(for: $0) }, context: modelContext)
+            } catch {
+                failed = true
+            }
+        }
+    }
+
+    private func clear() {
+        Task {
+            await loadPurchase()
+            do {
+                try CostBasis.clearTyped(on: card, since: start, marketCents: { model.marketCents(for: $0) }, context: modelContext)
+            } catch {
+                failed = true
+            }
+        }
+    }
+
+    /// The split reads the market prices of every card on the purchase.
+    private func loadPurchase() async {
+        guard let purchase = card.sourceItem?.purchase else { return }
+        await model.load(for: purchase.items.flatMap(\.cards))
     }
 }

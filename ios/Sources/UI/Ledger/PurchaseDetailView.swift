@@ -3,8 +3,8 @@ import SwiftUI
 
 /// One purchase: what it cost, and what was in it.
 ///
-/// A purchase is money on the books. It has no link to the cards in
-/// inventory, so nothing here changes a card.
+/// A purchase is money on the books. Its landed cost splits over the cards
+/// on its lines, by market price. See `CostBasis.split`.
 struct PurchaseDetailView: View {
     let purchaseID: UUID
 
@@ -24,14 +24,16 @@ struct PurchaseDetailView: View {
 
     /// The products on the purchase, with the quantity of each, in the order
     /// they first appear.
-    static func contents(of purchase: Purchase) -> [(productId: Int, quantity: Int)] {
+    static func contents(of purchase: Purchase) -> [(productId: Int, quantity: Int, costCents: Int)] {
         var order: [Int] = []
         var totals: [Int: Int] = [:]
+        var costs: [Int: Int] = [:]
         for item in purchase.items {
             if totals[item.productId] == nil { order.append(item.productId) }
             totals[item.productId, default: 0] += max(1, item.quantity)
+            costs[item.productId, default: 0] += item.allocatedCostCents
         }
-        return order.map { ($0, totals[$0] ?? 0) }
+        return order.map { ($0, totals[$0] ?? 0, costs[$0] ?? 0) }
     }
 
     var body: some View {
@@ -84,7 +86,7 @@ struct PurchaseDetailView: View {
         .confirmationDialog("Delete this purchase?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { deletePurchase() }
         } message: {
-            Text("It leaves the books. Cards in inventory do not change.")
+            Text("It leaves the books. Its cards stay in inventory and cost $0, unless you typed their cost.")
         }
     }
 
@@ -104,10 +106,18 @@ struct PurchaseDetailView: View {
                     Text("\(line.quantity)×")
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(.secondary)
+                    Text(line.costCents.asCurrency)
+                        .font(.callout.monospacedDigit())
                 }
             }
         } header: {
             Text("What was in it")
+        } footer: {
+            if let start = Books.start(), purchase.date < start {
+                Text("This purchase is from before the books started. It is not counted on the Summary, and its cards cost $0.")
+            } else if !contents.isEmpty {
+                Text("The landed cost splits over the cards by market price. A ripped line keeps the cost it had when you ripped it.")
+            }
         }
     }
 

@@ -238,7 +238,7 @@ enum TCGplayerListingImport {
     }
 
     /// Tags the held cards listed and adds the new cards, also tagged listed.
-    /// A new card has no purchase and no cost.
+    /// A new card has no purchase, so it costs $0 until he types a cost.
     @discardableResult
     static func apply(_ plan: Plan, context: ModelContext) throws -> Report {
         let cards = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<OwnedCard>()).map { ($0.id, $0) })

@@ -105,7 +105,7 @@ struct EditGradingSheet: View {
     }
 
     private var costFooter: String {
-        "The total is one grading charge on the books. No card changes."
+        "The total is one grading charge on the books. It splits equally over the cards on it, and each card's cost changes with it."
     }
 
     private func save() {

@@ -1,10 +1,13 @@
 import Foundation
 
-/// What the books say, over the whole period and over the whole business.
+/// What the books say, since the books start, over the whole business.
 ///
 /// The ledger answers "what happened". This answers AJ's questions, in his
 /// words of 2026-09-22: what do I have, what have I spent, what have I earned,
 /// and what is the potential, grading included, from his own comps.
+///
+/// Since 2026-09-25 the money counts only from the start of the books, and a
+/// card has a cost again. See `Books` and `CostBasis`.
 ///
 /// It totals and it does not slice. No vendor, no set, no product, no channel —
 /// decision 23 in docs/00-brief.md, amended 2026-09-11 to allow the totals and
@@ -24,6 +27,15 @@ struct LedgerSummary: Equatable {
     /// What every grading charge cost.
     var gradingCents = 0
     var expensesCents = 0
+
+    // Cost. See `CostBasis`.
+    /// What the cards to sell cost. The personal collection is apart.
+    var heldAtCostCents = 0
+    /// What the cards on the orders cost.
+    var soldCostCents = 0
+    /// Order lines that name a card and link none. Their cost is unknown, so
+    /// the gain on the orders reads high by their cost.
+    var soldLinesWithoutCardCount = 0
 
     // What he has. The cards he could sell, and the personal collection
     // apart, because he keeps those.
@@ -56,6 +68,9 @@ struct LedgerSummary: Equatable {
     /// Earned less spent. A card he still holds counts as nothing here, so
     /// this equals `differenceCents`.
     var profitCents: Int { revenueCents - spentCents }
+
+    /// What the orders brought in, less what their cards cost.
+    var gainOnSalesCents: Int { revenueCents - soldCostCents }
 
     /// The profit if he sold every card he holds today at market, less the
     /// selling costs.
@@ -119,15 +134,25 @@ extension LedgerSummary {
     /// `held` is the cards still in inventory, already filtered by `isHeld`.
     /// `marketCents` answers with a card's market value, or nil when the catalog
     /// has no price for it — the same contract as `InventoryModel.marketCents`.
+    ///
+    /// `since` is the start of the books. A row dated before it is left out.
+    /// Nil counts every row.
     static func make(
         purchases: [Purchase],
         grading: [GradingSubmission],
         sales: [Sale],
         expenses: [BusinessExpense],
         held: [OwnedCard],
+        since start: Date? = nil,
         marketCents: (OwnedCard) -> Int?
     ) -> LedgerSummary {
         var s = LedgerSummary()
+
+        let shares = CostBasis.gradingShares(grading, since: start)
+        let purchases = purchases.filter { Books.counts($0.date, since: start) }
+        let grading = grading.filter { Books.counts(Books.date(of: $0), since: start) }
+        let sales = sales.filter { Books.counts($0.soldAt, since: start) }
+        let expenses = expenses.filter { Books.counts($0.date, since: start) }
 
         let entries = LedgerEntry.entries(purchases: purchases, grading: grading, sales: sales, expenses: expenses)
         for entry in entries {
@@ -138,6 +163,14 @@ extension LedgerSummary {
         s.purchasesCents = purchases.reduce(0) { $0 + $1.landedCostCents }
         s.gradingCents = grading.reduce(0) { $0 + $1.totalCostCents }
         s.expensesCents = expenses.reduce(0) { $0 + $1.amountCents }
+
+        for line in sales.flatMap(\.lines) {
+            if let card = line.card {
+                s.soldCostCents += CostBasis.cost(of: card, grading: shares)
+            } else if !line.describedAs.isEmpty {
+                s.soldLinesWithoutCardCount += 1
+            }
+        }
 
         for card in held {
             let quantity = max(1, card.quantity)
@@ -152,6 +185,7 @@ extension LedgerSummary {
             }
             s.heldCardCount += quantity
             s.heldAtMarketCents += value
+            s.heldAtCostCents += CostBasis.cost(of: card, grading: shares)
 
             if Self.isAtGrader(card) {
                 let grader = GradedComps.graderAtGrader(tags: card.tags)

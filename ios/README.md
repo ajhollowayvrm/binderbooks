@@ -91,9 +91,10 @@ table and marks the card uncertain unless the session has a printing default.
 
 Every match persists as an `OwnedCard` on the `ScanSession` the moment it lands.
 Review defaults to the cards that need a look, supports multi-select edits of
-condition, printing, set, and bulk, and commits the session. Commit ties the cards
-to no purchase and gives them no cost: purchases are money out on the ledger and
-nothing else (AJ's call, 2026-09-22). A card is inventory once its session commits.
+condition, printing, set, and bulk, and commits the session. A scanned card has
+no purchase, so it costs $0 until AJ types a cost on the card screen. A rip
+commit moves the cost of the packs to the pulls, split by market price. A card
+is inventory once its session commits.
 
 The simulator has no camera. Debug builds show a text field in the viewfinder that
 feeds the same path. See the debug launch variables below.
@@ -193,8 +194,10 @@ list because it belongs to the list.
 have (the cards to sell and the personal collection, at market), what you spent
 (purchases, grading, and expenses), what you earned (sales, net), where you are
 (earned less spent), and the potential (where you are, plus the cards to sell at
-market less selling costs). A card carries no cost, so the cards he holds count
-as nothing until they sell. A slab that came back counts at his comp for its
+market less selling costs). Every figure counts from the day the books start,
+2026-09-25. "What you have" shows the cards to sell at cost, and "What you
+earned" takes the cost of the cards sold off the sales. See `CostBasis`. A slab
+that came back counts at his comp for its
 grade. The potential adds two figures when cards are out at a grader: every
 such card at his lowest comp for that grader, and at his best. There is no
 grade picker; he judges the grade himself.
