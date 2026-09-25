@@ -81,6 +81,30 @@ import Testing
         #expect(july.moneyOutCents == 500)
     }
 
+    /// The debt from before the books start is written off. A month header
+    /// counts only the rows on the books, and the older rows stay listed.
+    @Test func aMonthTotalsOnlyTheRowsOnTheBooks() {
+        let entries = [
+            LedgerEntry(kind: .sale(UUID()), date: day("2026-08-20"), title: "TCGplayer", detail: "", amountCents: 1_205),
+            LedgerEntry(kind: .sale(UUID()), date: day("2026-08-02"), title: "eBay", detail: "", amountCents: 3_000),
+            LedgerEntry(kind: .purchase(UUID()), date: day("2026-08-17"), title: "Gamecraft", detail: "", amountCents: -19_839),
+            LedgerEntry(kind: .purchase(UUID()), date: day("2026-07-04"), title: "Walmart", detail: "", amountCents: -500),
+        ]
+
+        let months = LedgerMonth.group(entries, since: day("2026-08-17"))
+        #expect(months.count == 2)
+
+        let august = months[0]
+        #expect(august.entries.count == 3)
+        #expect(august.moneyInCents == 1_205)
+        #expect(august.moneyOutCents == 19_839)
+
+        let july = months[1]
+        #expect(july.entries.count == 1)
+        #expect(july.moneyInCents == 0)
+        #expect(july.moneyOutCents == 0)
+    }
+
     @Test func theFilterKeepsOneSideOfTheLedger() {
         let sale = LedgerEntry(kind: .sale(UUID()), date: .now, title: "eBay", detail: "", amountCents: 3_000)
         let purchase = LedgerEntry(kind: .purchase(UUID()), date: .now, title: "Walmart", detail: "", amountCents: -500)

@@ -115,22 +115,32 @@ struct LedgerEntry: Identifiable, Hashable {
 }
 
 /// The entries of one month, and what the month did.
+///
+/// The totals count only the entries on the books. AJ's call, 2026-09-25: the
+/// debt from before the books start is written off, so a month before the
+/// start totals $0 and the start month counts from the start day. The rows
+/// stay in the list for reference. See `Books`.
 struct LedgerMonth: Identifiable {
     var start: Date
     var entries: [LedgerEntry]
+    var booksStart: Date? = nil
 
     var id: Date { start }
-    var moneyInCents: Int { entries.filter(\.isMoneyIn).reduce(0) { $0 + $1.amountCents } }
-    var moneyOutCents: Int { -entries.filter { !$0.isMoneyIn }.reduce(0) { $0 + $1.amountCents } }
+    var moneyInCents: Int { counted.filter(\.isMoneyIn).reduce(0) { $0 + $1.amountCents } }
+    var moneyOutCents: Int { -counted.filter { !$0.isMoneyIn }.reduce(0) { $0 + $1.amountCents } }
 
     var title: String { start.formatted(.dateTime.month(.wide).year()) }
 
-    static func group(_ entries: [LedgerEntry], calendar: Calendar = .current) -> [LedgerMonth] {
+    private var counted: [LedgerEntry] {
+        entries.filter { Books.counts($0.date, since: booksStart) }
+    }
+
+    static func group(_ entries: [LedgerEntry], since booksStart: Date? = nil, calendar: Calendar = .current) -> [LedgerMonth] {
         let buckets = Dictionary(grouping: entries) { entry in
             calendar.date(from: calendar.dateComponents([.year, .month], from: entry.date)) ?? entry.date
         }
         return buckets
-            .map { LedgerMonth(start: $0.key, entries: $0.value) }
+            .map { LedgerMonth(start: $0.key, entries: $0.value, booksStart: booksStart) }
             .sorted { $0.start > $1.start }
     }
 }

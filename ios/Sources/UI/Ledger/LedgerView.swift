@@ -33,7 +33,7 @@ struct LedgerView: View {
     private var months: [LedgerMonth] {
         let all = LedgerEntry.entries(purchases: purchases, grading: grading, sales: sales, expenses: expenses)
         let query = LedgerSearch(search)
-        return LedgerMonth.group(all.filter { filter.keeps($0) && query.keeps($0) })
+        return LedgerMonth.group(all.filter { filter.keeps($0) && query.keeps($0) }, since: Books.start())
     }
 
     /// One side of the books shows one number. A "$0.00 out" on the In filter
