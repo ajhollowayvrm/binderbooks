@@ -495,12 +495,21 @@ struct TCGplayerExportSheet: View {
     }
 }
 
+/// A CSV that the share sheet sends as a named file.
+///
+/// The CSV goes through a temporary file. Messages and AirDrop read a data
+/// representation of CSV as a text snippet, because CSV conforms to plain
+/// text. They then drop the name and write "text-<id>.txt", which Seller
+/// Portal does not import. A file keeps its name and its ".csv".
 struct CSVFile: Transferable {
     var text: String
     var name: String
 
     static var transferRepresentation: some TransferRepresentation {
-        DataRepresentation(exportedContentType: .commaSeparatedText) { Data($0.text.utf8) }
-            .suggestedFileName { $0.name }
+        FileRepresentation(exportedContentType: .commaSeparatedText) { file in
+            let url = URL.temporaryDirectory.appending(path: file.name)
+            try Data(file.text.utf8).write(to: url, options: .atomic)
+            return SentTransferredFile(url)
+        }
     }
 }
