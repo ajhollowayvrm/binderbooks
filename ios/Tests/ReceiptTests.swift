@@ -222,6 +222,20 @@ import Testing
         #expect(loose.purchase == nil)
     }
 
+    /// Store credit paid for all of it. The cards come in at $0.
+    @Test @MainActor func aZeroPurchasePutsItsCardsAtZero() throws {
+        let container = try store()
+        let context = container.mainContext
+        let purchase = Purchase(vendor: "Gamecraft", note: "Store credit", itemCostCents: 0)
+        context.insert(purchase)
+        let lines = [PurchaseIntake.Line(productId: 1, name: "Booster Box", setName: "Set", isSealed: true, quantity: 2)]
+        let cards = PurchaseIntake.record(lines, on: purchase, since: .distantPast, marketCents: { _ in 14_000 }, context: context)
+        try context.save()
+        #expect(cards.count == 2)
+        #expect(cards.allSatisfy { $0.acquisitionBasisCents == 0 })
+        #expect(purchase.landedCostCents == 0)
+    }
+
     @Test @MainActor func receiptsSurviveTheExportRoundTrip() throws {
         let source = try store()
         let target = try store()

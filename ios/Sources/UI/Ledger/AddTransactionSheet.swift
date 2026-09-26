@@ -84,7 +84,9 @@ struct AddTransactionSheet: View {
     private var taxCents: Int { Money.cents(from: taxText) ?? 0 }
 
     private var canSave: Bool {
-        guard let amountCents, amountCents > 0 else { return false }
+        // A purchase can be $0: he paid with store credit. Its cards come in
+        // at $0. Every other kind is money that moved, so it needs an amount.
+        guard let amountCents, amountCents > 0 || (kind == .purchase && amountCents == 0) else { return false }
         return !who.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
