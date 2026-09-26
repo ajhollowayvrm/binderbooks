@@ -67,6 +67,16 @@ private struct OwnedCardDetailBody: View {
             tags
             value
             CardCostSection(card: card, model: model)
+            if let purchase = card.purchase {
+                // The receipt belongs to the purchase, not the card. He looks
+                // for it on the box he is holding, so it shows here too.
+                ReceiptsSection(receipts: purchase.receipts, owner: .purchase(purchase))
+                Section {
+                    NavigationLink(value: LedgerEntry.Kind.purchase(purchase.id)) {
+                        LabeledContent("Bought from", value: "\(purchase.vendor.isEmpty ? "Purchase" : purchase.vendor), \(purchase.date.formatted(date: .abbreviated, time: .omitted))")
+                    }
+                }
+            }
             GradedCompsSection(card: card, categoryId: hit?.categoryId)
             source
             // A card with no catalog product: one he entered by hand, or an

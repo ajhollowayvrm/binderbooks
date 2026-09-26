@@ -196,6 +196,32 @@ import Testing
         #expect(try context.fetch(FetchDescriptor<Receipt>()).isEmpty)
     }
 
+    /// A card shows its purchase's receipts. A pull from a ripped pack finds
+    /// the purchase through the pack's line.
+    @Test @MainActor func aCardFindsItsPurchaseThroughARippedPack() throws {
+        let container = try store()
+        let context = container.mainContext
+        let purchase = Purchase(vendor: "Target", itemCostCents: 4_999)
+        let box = PurchaseItem(productId: 1, isSealed: true)
+        let pack = PurchaseItem(productId: 2)
+        context.insert(purchase)
+        context.insert(box)
+        context.insert(pack)
+        box.purchase = purchase
+        pack.parentItem = box
+        let sealed = OwnedCard(productId: 1, printing: "", condition: "Near Mint", confidence: .manual)
+        let pull = OwnedCard(productId: 3, printing: "", condition: "Near Mint", confidence: .manual)
+        let loose = OwnedCard(productId: 4, printing: "", condition: "Near Mint", confidence: .manual)
+        [sealed, pull, loose].forEach(context.insert)
+        sealed.sourceItem = box
+        pull.sourceItem = pack
+        try context.save()
+
+        #expect(sealed.purchase?.id == purchase.id)
+        #expect(pull.purchase?.id == purchase.id)
+        #expect(loose.purchase == nil)
+    }
+
     @Test @MainActor func receiptsSurviveTheExportRoundTrip() throws {
         let source = try store()
         let target = try store()

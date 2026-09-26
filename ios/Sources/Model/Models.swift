@@ -89,6 +89,19 @@ enum CardLanguage {
     }
 }
 
+extension OwnedCard {
+    /// The purchase the card came from. A pull from a ripped pack has no
+    /// purchase of its own, so this walks up to the pack's line.
+    var purchase: Purchase? {
+        var item = sourceItem
+        while let current = item {
+            if let purchase = current.purchase { return purchase }
+            item = current.parentItem
+        }
+        return nil
+    }
+}
+
 /// Money left his account. Its landed cost splits over the cards on its lines.
 @Model
 final class Purchase {
