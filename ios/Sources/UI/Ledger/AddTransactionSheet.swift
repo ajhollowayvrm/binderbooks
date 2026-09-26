@@ -40,10 +40,15 @@ struct AddTransactionSheet: View {
     /// The kind the sheet opens on. The ledger's plus opens on a purchase; the
     /// plus menu on the landing screen names the kind, because there the
     /// choice was already made.
-    init(kind: Kind = .purchase, onAdded: @escaping (LedgerEntry.Kind) -> Void) {
+    /// `receipts` are files shared in from another app. The sheet reads them
+    /// when it opens, the same way it reads a receipt picked in the sheet.
+    init(kind: Kind = .purchase, receipts: [ReceiptFile] = [], onAdded: @escaping (LedgerEntry.Kind) -> Void) {
         self.onAdded = onAdded
+        self.sharedReceipts = receipts
         _kind = State(initialValue: kind)
     }
+
+    private let sharedReceipts: [ReceiptFile]
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -66,6 +71,12 @@ struct AddTransactionSheet: View {
     @State private var readingReceipt = false
     /// The fields the receipt filled, so the sheet can say to check them.
     @State private var filledFromReceipt = false
+    /// What the receipts say, and the money fields as the receipt filled them.
+    /// A new kind fills the money again while he has not changed it.
+    @State private var receiptDraft: ReceiptDraft?
+    @State private var filledMoney: [String] = []
+
+    private var moneyFields: [String] { [amountText, feesText, shippingText, taxText] }
 
     private var amountCents: Int? { Money.cents(from: amountText) }
     private var feesCents: Int { Money.cents(from: feesText) ?? 0 }
@@ -197,6 +208,16 @@ struct AddTransactionSheet: View {
             .sheet(isPresented: $searchingCatalog) {
                 PurchaseCatalogSheet(lines: $lines)
             }
+            .task {
+                if !sharedReceipts.isEmpty && receipts.isEmpty { addReceipts(sharedReceipts) }
+            }
+            // A purchase splits the total into item, shipping, and tax. An
+            // expense is the total. The same receipt fills each kind its way.
+            .onChange(of: kind) {
+                guard let receiptDraft, moneyFields == filledMoney else { return }
+                amountText = ""; feesText = ""; shippingText = ""; taxText = ""
+                fillMoney(from: receiptDraft)
+            }
         }
     }
 
@@ -242,31 +263,42 @@ struct AddTransactionSheet: View {
             who = vendor
             filled = true
         }
-        if amountText.isEmpty && feesText.isEmpty && shippingText.isEmpty && taxText.isEmpty {
-            switch kind {
-            case .purchase:
-                if let fields = draft.purchaseFields {
-                    amountText = Money.fieldText(fields.itemCents)
-                    shippingText = fields.shippingCents == 0 ? "" : Money.fieldText(fields.shippingCents)
-                    taxText = fields.taxCents == 0 ? "" : Money.fieldText(fields.taxCents)
-                    filled = true
-                }
-            case .grading:
-                if let fields = draft.gradingFields {
-                    amountText = Money.fieldText(fields.feesCents)
-                    shippingText = fields.shippingCents == 0 ? "" : Money.fieldText(fields.shippingCents)
-                    filled = true
-                }
-            case .expense:
-                if let cents = draft.expenseCents {
-                    amountText = Money.fieldText(cents)
-                    filled = true
-                }
-            case .sale:
-                break
-            }
+        if moneyFields.allSatisfy(\.isEmpty) || moneyFields == filledMoney {
+            amountText = ""; feesText = ""; shippingText = ""; taxText = ""
+            filled = fillMoney(from: draft) || filled
         }
+        receiptDraft = draft
         filledFromReceipt = filledFromReceipt || filled
+    }
+
+    /// Writes the draft's money into the empty fields for the current kind.
+    @discardableResult
+    private func fillMoney(from draft: ReceiptDraft) -> Bool {
+        var filled = false
+        switch kind {
+        case .purchase:
+            if let fields = draft.purchaseFields {
+                amountText = Money.fieldText(fields.itemCents)
+                shippingText = fields.shippingCents == 0 ? "" : Money.fieldText(fields.shippingCents)
+                taxText = fields.taxCents == 0 ? "" : Money.fieldText(fields.taxCents)
+                filled = true
+            }
+        case .grading:
+            if let fields = draft.gradingFields {
+                amountText = Money.fieldText(fields.feesCents)
+                shippingText = fields.shippingCents == 0 ? "" : Money.fieldText(fields.shippingCents)
+                filled = true
+            }
+        case .expense:
+            if let cents = draft.expenseCents {
+                amountText = Money.fieldText(cents)
+                filled = true
+            }
+        case .sale:
+            break
+        }
+        filledMoney = moneyFields
+        return filled
     }
 
     /// The vendors, graders, and payees already on the books, so a receipt

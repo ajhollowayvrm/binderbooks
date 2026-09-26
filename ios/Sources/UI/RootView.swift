@@ -27,6 +27,10 @@ struct RootView: View {
     /// The transaction the plus menu asked for, which is also the kind the
     /// sheet opens on.
     @State private var addingTransaction: AddTransactionSheet.Kind?
+    /// Receipts shared in from Mail, Safari, or Files, one entry each, oldest
+    /// first. The Add sheet opens on the first; the next opens when it closes.
+    @State private var sharedReceipts: [SharedReceipt] = []
+    @State private var openSharedReceipt: SharedReceipt?
 
     var body: some View {
         @Bindable var search = search
@@ -108,6 +112,12 @@ struct RootView: View {
                     path.append(entry)
                 }
             }
+            .sheet(item: $openSharedReceipt, onDismiss: showNextSharedReceipt) { shared in
+                AddTransactionSheet(receipts: [shared.file]) { entry in
+                    path.append(entry)
+                }
+            }
+            .onOpenURL { url in receiveSharedFile(url) }
             .navigationDestination(for: SearchHit.self) { hit in
                 ProductDetailView(productId: hit.productId)
             }
@@ -196,6 +206,19 @@ struct RootView: View {
     }
 
     /// Resume the open session if there is one. Otherwise start a new one.
+    private func receiveSharedFile(_ url: URL) {
+        Task { @MainActor in
+            guard let file = await SharedReceipt.read(url) else { return }
+            sharedReceipts.append(SharedReceipt(file: file))
+            if openSharedReceipt == nil { showNextSharedReceipt() }
+        }
+    }
+
+    private func showNextSharedReceipt() {
+        guard !sharedReceipts.isEmpty else { return }
+        openSharedReceipt = sharedReceipts.removeFirst()
+    }
+
     private func openScanner() {
         if let open = openSessions.first {
             launcher.open(open)
@@ -270,6 +293,13 @@ struct RootView: View {
         // that kind, because simctl cannot open a menu.
         if let kind = env["CT_OPEN_ADD"].flatMap({ AddTransactionSheet.Kind(rawValue: $0) }) {
             addingTransaction = kind
+        }
+        // `CT_SHARE_RECEIPT=<path>` hands a file in the way the share sheet
+        // does, because simctl cannot tap Share. Comma-separate several.
+        if let paths = env["CT_SHARE_RECEIPT"] {
+            for path in paths.split(separator: ",") {
+                receiveSharedFile(URL(fileURLWithPath: String(path)))
+            }
         }
         if env["CT_OPEN_SCANNER"] == "1" {
             Task {
@@ -364,5 +394,22 @@ struct SearchHeader: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
+    }
+}
+
+/// One file another app shared in, read and ready for the Add sheet.
+struct SharedReceipt: Identifiable {
+    var id = UUID()
+    var file: ReceiptFile
+
+    /// Reads the file, then deletes the copy iOS put in Documents/Inbox. The
+    /// receipt lives in the store once he adds it; the copy is only clutter.
+    static func read(_ url: URL) async -> ReceiptFile? {
+        guard url.isFileURL else { return nil }
+        let file = await ReceiptReader.file(at: url)
+        if url.pathComponents.contains("Inbox") {
+            try? FileManager.default.removeItem(at: url)
+        }
+        return file
     }
 }

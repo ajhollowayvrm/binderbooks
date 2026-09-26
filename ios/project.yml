@@ -61,6 +61,18 @@ targets:
         # scanner and the receipt scanner both use the camera.
         NSCameraUsageDescription: BinderBooks reads the name and number on a card to identify it, and scans your paper receipts.
         ITSAppUsesNonExemptEncryption: false
+        # BinderBooks opens a PDF or an image as a receipt. This puts the app in
+        # the share sheet of Mail, Safari (Options → PDF), and Files. A share
+        # extension would need an App Group, and a free Personal Team cannot
+        # sign one. iOS copies the file into Documents/Inbox; the app deletes
+        # it after it reads it.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Receipt
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - com.adobe.pdf
+              - public.image
+        LSSupportsOpeningDocumentsInPlace: false
 
   BinderBooksTests:
     type: bundle.unit-test

@@ -92,6 +92,19 @@ import Testing
         #expect((fields?.itemCents ?? 0) + (fields?.shippingCents ?? 0) + (fields?.taxCents ?? 0) == 10_224)
     }
 
+    /// The text PDFKit gives for a real PDF: close rows joined on one line.
+    @Test func rowsThatAPDFJoinsStillReadApart() {
+        let text = "TCGplayer Order Confirmation Order placed September 21, 2026 Subtotal $100.00\nShipping $4.99 Sales Tax $7.25\nOrder Total $112.24"
+        let draft = ReceiptParser.parse(text.components(separatedBy: "\n"), now: now)
+        #expect(draft.vendor == "TCGplayer")
+        #expect(draft.subtotalCents == 10_000)
+        #expect(draft.shippingCents == 499)
+        #expect(draft.taxCents == 725)
+        #expect(draft.totalCents == 11_224)
+        #expect(day(draft.date) == "2026-09-21")
+        #expect(ReceiptParser.segments(["Qty 2 @ 4.99 9.98 each"]) == ["Qty 2 @ 4.99", "9.98 each"])
+    }
+
     @Test func aGraderInvoiceIsAGradingCharge() {
         let lines = [
             "PSA",

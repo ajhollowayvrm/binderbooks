@@ -65,7 +65,7 @@ enum ReceiptParser {
     static let graders = ["PSA", "CGC", "Beckett", "BGS", "TAG", "SGC"]
 
     static func parse(_ lines: [String], knownVendors: [String] = [], now: Date = Date()) -> ReceiptDraft {
-        let lines = lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let lines = segments(lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
         var draft = ReceiptDraft()
         draft.totalCents = total(lines)
         draft.subtotalCents = labelled(lines, matches: isSubtotal)
@@ -86,6 +86,26 @@ enum ReceiptParser {
     /// and a `try!` on it traps on first use.
     private static let moneyPattern = try! NSRegularExpression(pattern: #"(?<![\d.,])-?\$?\s?(\d{1,3}(?:,\d{3})+|\d+)\.(\d{2})(?!\d)"#)
     private static let onlyMoneyPattern = try! Regex(#"^[A-Z]{0,3}\s?-?\$?\s?(\d{1,3}(?:,\d{3})+|\d+)\.\d{2}\s?[A-Z]{0,3}$"#)
+
+    /// Each line cut after each amount, so every piece is one label and its
+    /// amount. PDFKit joins rows that sit close together: "Shipping $4.99
+    /// Sales Tax $7.25" is one line, and its rightmost amount is the tax.
+    /// Text after the last amount stays on the last piece: "Total 58.39 USD".
+    static func segments(_ lines: [String]) -> [String] {
+        lines.flatMap { line -> [String] in
+            let matches = moneyPattern.matches(in: line, range: NSRange(line.startIndex..., in: line))
+            guard matches.count > 1 else { return [line] }
+            var pieces: [String] = []
+            var start = line.startIndex
+            for match in matches.dropLast() {
+                guard let range = Range(match.range, in: line) else { continue }
+                pieces.append(String(line[start..<range.upperBound]))
+                start = range.upperBound
+            }
+            pieces.append(String(line[start...]))
+            return pieces.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        }
+    }
 
     /// Every amount on the line, in cents, left to right.
     static func amounts(in line: String) -> [Int] {
