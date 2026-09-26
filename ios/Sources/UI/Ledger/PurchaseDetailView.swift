@@ -57,6 +57,8 @@ struct PurchaseDetailView: View {
                     }
                 }
 
+                ReceiptsSection(receipts: purchase.receipts, owner: .purchase(purchase))
+
                 contentsSection(purchase)
 
                 Section {
@@ -225,6 +227,8 @@ struct GradingDetailView: View {
                         Text("Swipe a card to take it off this submission.")
                     }
                 }
+
+                ReceiptsSection(receipts: submission.receipts, owner: .grading(submission))
 
                 Section {
                     Button("Delete submission", role: .destructive) { requestDelete(submission) }

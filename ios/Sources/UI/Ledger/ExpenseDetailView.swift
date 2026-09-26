@@ -44,6 +44,8 @@ struct ExpenseDetailView: View {
                     }
                 }
 
+                ReceiptsSection(receipts: expense.receipts, owner: .expense(expense))
+
                 Section {
                     Button("Delete expense", role: .destructive) { confirmDelete = true }
                 } footer: {

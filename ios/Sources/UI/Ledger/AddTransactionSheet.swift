@@ -31,6 +31,8 @@ struct AddTransactionSheet: View {
         /// An expense is one amount. Nothing rides on top of it and nothing
         /// comes off it, so the three extra fields would only be empty rows.
         var hasExtras: Bool { self != .expense }
+        /// Money out has a receipt. An order's record is the marketplace's.
+        var takesReceipts: Bool { self != .sale }
     }
 
     var onAdded: (LedgerEntry.Kind) -> Void
@@ -60,6 +62,10 @@ struct AddTransactionSheet: View {
     @State private var picking = false
     @State private var lines: [PurchaseIntake.Line] = []
     @State private var searchingCatalog = false
+    @State private var receipts: [ReceiptFile] = []
+    @State private var readingReceipt = false
+    /// The fields the receipt filled, so the sheet can say to check them.
+    @State private var filledFromReceipt = false
 
     private var amountCents: Int? { Money.cents(from: amountText) }
     private var feesCents: Int { Money.cents(from: feesText) ?? 0 }
@@ -90,6 +96,10 @@ struct AddTransactionSheet: View {
                         ForEach(Kind.allCases) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                }
+
+                if kind.takesReceipts {
+                    receiptSection
                 }
 
                 Section {
@@ -190,6 +200,85 @@ struct AddTransactionSheet: View {
         }
     }
 
+    /// The receipt comes first. What it says fills the fields below it.
+    private var receiptSection: some View {
+        Section {
+            ForEach(Array(receipts.enumerated()), id: \.element.id) { index, file in
+                ReceiptRow(kind: file.kind, data: file.data, fileName: file.fileName, index: index)
+            }
+            .onDelete { receipts.remove(atOffsets: $0) }
+            AddReceiptMenu(onAdd: addReceipts, reading: $readingReceipt) {
+                if readingReceipt {
+                    HStack { ProgressView(); Text("Reading the receipt…") }
+                } else {
+                    Label(receipts.isEmpty ? "Add a receipt" : "Add another page", systemImage: "paperclip")
+                }
+            }
+        } header: {
+            Text("Receipt")
+        } footer: {
+            Text(filledFromReceipt
+                 ? "The fields below come from the receipt. Check each one before you add."
+                 : "Scan a paper receipt, or pick a screenshot or a PDF. The app fills in what it can read.")
+        }
+    }
+
+    /// Fills each empty field from what the receipts say. A field he already
+    /// typed stays. All the receipts are read together, because the total of
+    /// a long receipt is on its last page.
+    private func addReceipts(_ files: [ReceiptFile]) {
+        receipts.append(contentsOf: files)
+        let draft = ReceiptParser.parse(receipts.flatMap(\.lines), knownVendors: ledgerVendors())
+        var filled = false
+
+        if draft.looksLikeGrading, kind == .purchase, amountText.isEmpty {
+            kind = .grading
+        }
+        if let receiptDate = draft.date, Calendar.current.isDateInToday(date), !Calendar.current.isDateInToday(receiptDate) {
+            date = receiptDate
+            filled = true
+        }
+        if who.trimmingCharacters(in: .whitespaces).isEmpty, let vendor = draft.vendor {
+            who = vendor
+            filled = true
+        }
+        if amountText.isEmpty && feesText.isEmpty && shippingText.isEmpty && taxText.isEmpty {
+            switch kind {
+            case .purchase:
+                if let fields = draft.purchaseFields {
+                    amountText = Money.fieldText(fields.itemCents)
+                    shippingText = fields.shippingCents == 0 ? "" : Money.fieldText(fields.shippingCents)
+                    taxText = fields.taxCents == 0 ? "" : Money.fieldText(fields.taxCents)
+                    filled = true
+                }
+            case .grading:
+                if let fields = draft.gradingFields {
+                    amountText = Money.fieldText(fields.feesCents)
+                    shippingText = fields.shippingCents == 0 ? "" : Money.fieldText(fields.shippingCents)
+                    filled = true
+                }
+            case .expense:
+                if let cents = draft.expenseCents {
+                    amountText = Money.fieldText(cents)
+                    filled = true
+                }
+            case .sale:
+                break
+            }
+        }
+        filledFromReceipt = filledFromReceipt || filled
+    }
+
+    /// The vendors, graders, and payees already on the books, so a receipt
+    /// from a store he has used before gets the ledger's spelling.
+    private func ledgerVendors() -> [String] {
+        let purchases = (try? modelContext.fetch(FetchDescriptor<Purchase>())) ?? []
+        let expenses = (try? modelContext.fetch(FetchDescriptor<BusinessExpense>())) ?? []
+        let grading = (try? modelContext.fetch(FetchDescriptor<GradingSubmission>())) ?? []
+        let names = purchases.map(\.vendor) + expenses.map(\.vendor) + grading.map(\.graderRaw)
+        return Array(Set(names.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }))
+    }
+
     private func money(_ label: String, _ text: Binding<String>) -> some View {
         HStack {
             Text(label)
@@ -267,7 +356,7 @@ struct AddTransactionSheet: View {
                 itemCostCents: amountCents, shippingCents: shippingCents, taxCents: taxCents, feesCents: feesCents
             )
             modelContext.insert(purchase)
-            try? modelContext.save()
+            ReceiptOwner.purchase(purchase).attach(receipts, context: modelContext)
             onAdded(.purchase(purchase.id))
             if !lines.isEmpty {
                 // The split reads market prices, so the products load first.
@@ -303,7 +392,7 @@ struct AddTransactionSheet: View {
             let submission = GradingSubmission(graderRaw: name, shippedAt: date, gradingFeesCents: amountCents)
             submission.shipToGraderCents = shippingCents
             modelContext.insert(submission)
-            try? modelContext.save()
+            ReceiptOwner.grading(submission).attach(receipts, context: modelContext)
             onAdded(.grading(submission.id))
 
         case .expense:
@@ -312,7 +401,7 @@ struct AddTransactionSheet: View {
                 amountCents: amountCents, note: note.trimmingCharacters(in: .whitespaces)
             )
             modelContext.insert(expense)
-            try? modelContext.save()
+            ReceiptOwner.expense(expense).attach(receipts, context: modelContext)
             onAdded(.expense(expense.id))
         }
         dismiss()

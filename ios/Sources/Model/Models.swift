@@ -100,6 +100,8 @@ final class Purchase {
     var vendor: String = ""
     /// What he would write on a receipt.
     var note: String = ""
+    /// Dormant: no screen ever wrote it. A receipt is a `Receipt` now. Kept
+    /// for old stores and exports.
     @Attribute(.externalStorage) var receiptImageData: Data?
 
     var itemCostCents: Int = 0
@@ -116,6 +118,9 @@ final class Purchase {
 
     @Relationship(deleteRule: .cascade, inverse: \PurchaseItem.purchase)
     var items: [PurchaseItem] = []
+
+    @Relationship(deleteRule: .cascade, inverse: \Receipt.purchase)
+    var receipts: [Receipt] = []
 
     init(date: Date = Date(), vendor: String, note: String = "", itemCostCents: Int, shippingCents: Int = 0, taxCents: Int = 0, feesCents: Int = 0) {
         self.id = UUID()
@@ -442,6 +447,9 @@ final class GradingSubmission {
     @Relationship(deleteRule: .cascade, inverse: \GradingEntry.submission)
     var entries: [GradingEntry] = []
 
+    @Relationship(deleteRule: .cascade, inverse: \Receipt.grading)
+    var receipts: [Receipt] = []
+
     var sourceRef: String = ""
 
     init(graderRaw: String, shippedAt: Date? = nil, gradingFeesCents: Int = 0) {
@@ -583,6 +591,9 @@ final class BusinessExpense {
 
     var sourceRef: String = ""
 
+    @Relationship(deleteRule: .cascade, inverse: \Receipt.expense)
+    var receipts: [Receipt] = []
+
     init(date: Date = Date(), category: String = "", vendor: String = "", amountCents: Int = 0, note: String = "") {
         self.id = UUID()
         self.date = date
@@ -593,11 +604,52 @@ final class BusinessExpense {
     }
 }
 
+/// The record of money out: a photo of a paper receipt, a screenshot of an
+/// order page, or a PDF invoice.
+///
+/// A receipt belongs to one purchase, one grading charge, or one expense. An
+/// entry can have many: a long receipt takes two photos. The receipt is the
+/// fact. When the entry disagrees with it, the entry is wrong.
+@Model
+final class Receipt {
+    #Unique<Receipt>([\.id])
+
+    enum Kind: String {
+        case image
+        case pdf
+    }
+
+    var id: UUID = UUID()
+    var addedAt: Date = Date()
+    var kindRaw: String = Kind.image.rawValue
+    /// A JPEG for an image, the file itself for a PDF.
+    @Attribute(.externalStorage) var data: Data = Data()
+    /// The name of a picked file. Empty for a photo or a scan.
+    var fileName: String = ""
+    /// The text the app read off it, for search later.
+    var text: String = ""
+
+    var purchase: Purchase?
+    var grading: GradingSubmission?
+    var expense: BusinessExpense?
+
+    init(kind: Kind, data: Data, fileName: String = "", text: String = "") {
+        self.id = UUID()
+        self.addedAt = Date()
+        self.kindRaw = kind.rawValue
+        self.data = data
+        self.fileName = fileName
+        self.text = text
+    }
+
+    var kind: Kind { Kind(rawValue: kindRaw) ?? .image }
+}
+
 enum CollectionStore {
     static let models: [any PersistentModel.Type] = [
         Purchase.self, PurchaseItem.self, OwnedCard.self, ScanSession.self,
         GradingSubmission.self, GradingEntry.self, Sale.self, SaleLine.self,
-        BusinessExpense.self,
+        BusinessExpense.self, Receipt.self,
     ]
 
     static func container(inMemory: Bool = false) throws -> ModelContainer {

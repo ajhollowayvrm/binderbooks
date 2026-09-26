@@ -164,6 +164,12 @@ struct LedgerRow: View {
                     .lineLimit(2)
             }
             Spacer(minLength: 12)
+            if entry.hasReceipt {
+                Image(systemName: "paperclip")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Has a receipt")
+            }
             Text(amount)
                 .font(.body.monospacedDigit())
                 .foregroundStyle(entry.isMoneyIn ? Color.green : Color.primary)

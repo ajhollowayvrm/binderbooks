@@ -31,7 +31,10 @@ enum CollectionExport {
     /// Version 10 added `File.booksStartedAt`, the day the books start. A file
     /// with no start comes from before the fresh start of 2026-09-25, so every
     /// card in it imports at $0. See `Books`.
-    static let version = 10
+    /// Version 11 added `File.receipts`: the photos and PDFs of what he paid,
+    /// each tied to a purchase, a grading charge, or an expense. The bytes
+    /// travel in the file, base64, so a backup with receipts is large.
+    static let version = 11
 
     struct File: Codable, Equatable {
         var format: String = CollectionExport.format
@@ -51,12 +54,15 @@ enum CollectionExport {
         var expenses: [BusinessExpenseDTO]?
         /// Optional, like `grading`: added in version 10.
         var booksStartedAt: Date?
+        /// Optional, like `grading`: added in version 11.
+        var receipts: [ReceiptDTO]?
 
         var counts: String {
             var parts = ["\(purchases.count) purchases", "\(purchaseItems.count) lines", "\(cards.count) cards", "\(sessions.count) sessions"]
             if let grading, !grading.isEmpty { parts.append("\(grading.count) submissions") }
             if let sales, !sales.isEmpty { parts.append("\(sales.count) sales") }
             if let expenses, !expenses.isEmpty { parts.append("\(expenses.count) expenses") }
+            if let receipts, !receipts.isEmpty { parts.append("\(receipts.count) receipts") }
             return parts.joined(separator: ", ")
         }
     }
@@ -199,6 +205,18 @@ enum CollectionExport {
         var sourceRef: String?
     }
 
+    struct ReceiptDTO: Codable, Equatable {
+        var id: UUID
+        var addedAt: Date
+        var kindRaw: String
+        var data: Data
+        var fileName: String
+        var text: String
+        var purchaseId: UUID?
+        var gradingId: UUID?
+        var expenseId: UUID?
+    }
+
     struct ScanSessionDTO: Codable, Equatable {
         var id: UUID
         var startedAt: Date
@@ -244,6 +262,7 @@ enum CollectionExport {
         var sales = 0
         var saleLines = 0
         var expenses = 0
+        var receipts = 0
         var deleted = 0
 
         /// What the import wrote, leaving out anything the file did not carry.
@@ -254,6 +273,7 @@ enum CollectionExport {
             if sales > 0 { parts.append("\(sales) sales") }
             if saleLines > 0 { parts.append("\(saleLines) sale lines") }
             if expenses > 0 { parts.append("\(expenses) expenses") }
+            if receipts > 0 { parts.append("\(receipts) receipts") }
             return parts.joined(separator: ", ") + ". \(deleted) rows deleted first."
         }
     }
@@ -271,6 +291,7 @@ enum CollectionExport {
         let sales = try context.fetch(FetchDescriptor<Sale>())
         let saleLines = try context.fetch(FetchDescriptor<SaleLine>())
         let expenses = try context.fetch(FetchDescriptor<BusinessExpense>())
+        let receipts = try context.fetch(FetchDescriptor<Receipt>())
 
         return File(
             exportedAt: ISO8601DateFormatter().string(from: now),
@@ -349,7 +370,13 @@ enum CollectionExport {
                     amountCents: $0.amountCents, note: $0.note, sourceRef: $0.sourceRef
                 )
             }.sorted { $0.id.uuidString < $1.id.uuidString },
-            booksStartedAt: Books.start(defaults)
+            booksStartedAt: Books.start(defaults),
+            receipts: receipts.map {
+                ReceiptDTO(
+                    id: $0.id, addedAt: $0.addedAt, kindRaw: $0.kindRaw, data: $0.data, fileName: $0.fileName,
+                    text: $0.text, purchaseId: $0.purchase?.id, gradingId: $0.grading?.id, expenseId: $0.expense?.id
+                )
+            }.sorted { $0.id.uuidString < $1.id.uuidString }
         )
     }
 
@@ -386,6 +413,7 @@ enum CollectionExport {
         var report = Report()
 
         if mode == .replace {
+            for receipt in try context.fetch(FetchDescriptor<Receipt>()) { context.delete(receipt); report.deleted += 1 }
             for expense in try context.fetch(FetchDescriptor<BusinessExpense>()) { context.delete(expense); report.deleted += 1 }
             for line in try context.fetch(FetchDescriptor<SaleLine>()) { context.delete(line); report.deleted += 1 }
             for sale in try context.fetch(FetchDescriptor<Sale>()) { context.delete(sale); report.deleted += 1 }
@@ -407,6 +435,7 @@ enum CollectionExport {
         var sales = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<Sale>()).map { ($0.id, $0) })
         var saleLines = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<SaleLine>()).map { ($0.id, $0) })
         var expenses = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<BusinessExpense>()).map { ($0.id, $0) })
+        var receipts = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<Receipt>()).map { ($0.id, $0) })
 
         for dto in file.purchases {
             let purchase = purchases[dto.id] ?? {
@@ -614,6 +643,25 @@ enum CollectionExport {
             expense.note = dto.note
             expense.sourceRef = dto.sourceRef ?? ""
             report.expenses += 1
+        }
+
+        for dto in file.receipts ?? [] {
+            let receipt = receipts[dto.id] ?? {
+                let r = Receipt(kind: .image, data: Data())
+                r.id = dto.id
+                context.insert(r)
+                receipts[dto.id] = r
+                return r
+            }()
+            receipt.addedAt = dto.addedAt
+            receipt.kindRaw = dto.kindRaw
+            receipt.data = dto.data
+            receipt.fileName = dto.fileName
+            receipt.text = dto.text
+            receipt.purchase = dto.purchaseId.flatMap { purchases[$0] }
+            receipt.grading = dto.gradingId.flatMap { submissions[$0] }
+            receipt.expense = dto.expenseId.flatMap { expenses[$0] }
+            report.receipts += 1
         }
 
         // The fresh start. A file that carries a start sets it. A file with

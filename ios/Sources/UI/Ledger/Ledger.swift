@@ -26,6 +26,8 @@ struct LedgerEntry: Identifiable, Hashable {
     var detail: String
     /// Positive is money in. Negative is money out.
     var amountCents: Int
+    /// A receipt is attached. A sale never has one.
+    var hasReceipt: Bool = false
 
     var id: Kind { kind }
     var isMoneyIn: Bool { amountCents >= 0 }
@@ -46,7 +48,8 @@ struct LedgerEntry: Identifiable, Hashable {
                     date: purchase.date,
                     title: purchase.vendor.isEmpty ? "Purchase" : purchase.vendor,
                     detail: [itemSummary(purchase), purchase.note].filter { !$0.isEmpty }.joined(separator: " · "),
-                    amountCents: -purchase.landedCostCents
+                    amountCents: -purchase.landedCostCents,
+                    hasReceipt: !purchase.receipts.isEmpty
                 )
             )
         }
@@ -59,7 +62,8 @@ struct LedgerEntry: Identifiable, Hashable {
                     date: submission.shippedAt ?? submission.returnedAt ?? .distantPast,
                     title: submission.graderRaw.isEmpty ? "Grading" : "\(submission.graderRaw.uppercased()) grading",
                     detail: count == 0 ? "no cards attached" : "\(count) cards",
-                    amountCents: -submission.totalCostCents
+                    amountCents: -submission.totalCostCents,
+                    hasReceipt: !submission.receipts.isEmpty
                 )
             )
         }
@@ -84,7 +88,8 @@ struct LedgerEntry: Identifiable, Hashable {
                     date: expense.date,
                     title: expense.vendor.isEmpty ? "Expense" : expense.vendor,
                     detail: expense.category.isEmpty ? expense.note : expense.category,
-                    amountCents: -expense.amountCents
+                    amountCents: -expense.amountCents,
+                    hasReceipt: !expense.receipts.isEmpty
                 )
             )
         }

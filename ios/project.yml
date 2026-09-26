@@ -57,9 +57,9 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-        # VisionKit's scanner arrives in step 4. iOS terminates an app that opens the
-        # camera without this string, so it is here from the start.
-        NSCameraUsageDescription: BinderBooks reads the name and number on a card to identify it.
+        # iOS terminates an app that opens the camera without this string. The card
+        # scanner and the receipt scanner both use the camera.
+        NSCameraUsageDescription: BinderBooks reads the name and number on a card to identify it, and scans your paper receipts.
         ITSAppUsesNonExemptEncryption: false
 
   BinderBooksTests:
