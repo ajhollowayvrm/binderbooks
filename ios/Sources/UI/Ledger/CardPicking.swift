@@ -68,21 +68,27 @@ struct InventoryCardPicker: View {
 
 /// Picks the cards for an order that is not saved yet. The order saves them.
 struct PickCardsSheet: View {
+    var title = "Attach cards"
+    var footer = "Sold cards are not on this list. One card can be on one order only."
     var onDone: ([OwnedCard]) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Query private var cards: [OwnedCard]
     @State private var selection: [UUID]
 
-    init(initial: [UUID], onDone: @escaping ([OwnedCard]) -> Void) {
+    init(initial: [UUID], title: String = "Attach cards",
+         footer: String = "Sold cards are not on this list. One card can be on one order only.",
+         onDone: @escaping ([OwnedCard]) -> Void) {
+        self.title = title
+        self.footer = footer
         self.onDone = onDone
         _selection = State(initialValue: initial)
     }
 
     var body: some View {
         NavigationStack {
-            InventoryCardPicker(selection: $selection)
-                .navigationTitle("Attach cards")
+            InventoryCardPicker(selection: $selection, footer: footer)
+                .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

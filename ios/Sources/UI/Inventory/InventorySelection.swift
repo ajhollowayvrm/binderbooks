@@ -141,6 +141,7 @@ private struct InventorySelectionChrome: ViewModifier {
     @State private var listTarget: TagSheetTarget?
     @State private var ripTarget: TagSheetTarget?
     @State private var deleteTarget: TagSheetTarget?
+    @State private var purchaseTarget: TagSheetTarget?
     @State private var fetcher = CompsFetcher()
     @State private var compsMessage: String?
 
@@ -212,6 +213,11 @@ private struct InventorySelectionChrome: ViewModifier {
             }
             .sheet(item: $listTarget) { target in
                 TCGplayerExportSheet(preselected: Set(target.cards.map(\.id)))
+            }
+            .sheet(item: $purchaseTarget) { target in
+                ChoosePurchaseSheet(cards: target.cards) {
+                    selection.end()
+                }
             }
             .ripSheet($ripTarget) {
                 model.invalidateHaystacks()
@@ -298,6 +304,13 @@ private struct InventorySelectionChrome: ViewModifier {
         Button("Sell") { sellTarget = TagSheetTarget(cards: selected) }
             .disabled(selected.isEmpty || selected.contains { CardTagIndex.has(ReservedTag.sold, on: $0) })
         Menu {
+            // The cards came from a purchase already on the books. They take
+            // their share of its cost.
+            Button {
+                purchaseTarget = TagSheetTarget(cards: selected)
+            } label: {
+                Label("Add to a purchase…", systemImage: "cart")
+            }
             Button {
                 compsTarget = TagSheetTarget(cards: selected)
             } label: {
