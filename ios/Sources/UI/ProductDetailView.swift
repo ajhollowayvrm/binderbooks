@@ -7,13 +7,12 @@ import SwiftUI
 /// The page used to read the catalog alone, so the set checklist could mark a
 /// card as held and then open a page that never mentioned his copy. Every
 /// route into this view had the same blind spot — the search results, the
-/// scanner's candidates, recently viewed. His own cards come first now, above
+/// scanner's candidates. His own cards come first now, above
 /// the prices, because on a card he owns that is the question he came with.
 struct ProductDetailView: View {
     var productId: Int
 
     @Environment(CatalogController.self) private var catalog
-    @Environment(RecentlyViewed.self) private var recents
     @Environment(InventoryModel.self) private var inventory
     @Query private var mine: [OwnedCard]
     @State private var detail: ProductDetail?
@@ -49,8 +48,6 @@ struct ProductDetailView: View {
             detail = try await CatalogSearch(database: db).detail(productId: productId)
             if detail == nil {
                 errorMessage = "Product \(productId) is not in the installed catalog."
-            } else {
-                recents.record(productId)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -116,19 +113,17 @@ struct ProductDetailView: View {
                 }
             }
 
-            Section("Market price") {
+            Section("TCGplayer price") {
                 if detail.prices.isEmpty {
                     Text("No TCGplayer price yet.")
                         .foregroundStyle(.secondary)
                 } else {
-                    // Market price only. The low, mid, and high columns are
-                    // noise for a collection he values at market.
+                    // Market and low. The mid and high columns are noise.
                     ForEach(detail.prices) { price in
                         HStack {
                             Text(price.subTypeName)
                             Spacer()
-                            Text(price.marketCents?.asCurrency ?? "—")
-                                .font(.body.monospacedDigit().weight(.semibold))
+                            TCGPriceText(marketCents: price.marketCents, lowCents: price.lowCents, font: .body, alignment: .trailing)
                         }
                     }
                     if let asOf = detail.prices.first?.asOf {

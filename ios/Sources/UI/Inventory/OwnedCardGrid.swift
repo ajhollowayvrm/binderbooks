@@ -59,13 +59,21 @@ struct OwnedCardCard: View {
     private var row: InventoryRow { stack.lead }
 
     var body: some View {
+        if !row.card.isGone { cell }
+    }
+
+    private var cell: some View {
         VStack(alignment: .leading, spacing: 5) {
             art
-            HStack(spacing: 4) {
-                Text(row.priceText)
-                    .font(.subheadline.monospacedDigit().weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
+            HStack(alignment: .top, spacing: 4) {
+                if row.showsTCGPrices, let price = row.tcgPrice {
+                    TCGPriceText(marketCents: price.marketCents, lowCents: price.lowCents)
+                } else {
+                    Text(row.priceText)
+                        .font(.subheadline.monospacedDigit().weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
                 ConfidenceMarker(
                     confidence: row.card.matchConfidence,
                     identified: row.card.hasIdentity,

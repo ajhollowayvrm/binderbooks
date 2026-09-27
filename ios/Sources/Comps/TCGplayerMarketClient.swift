@@ -7,6 +7,18 @@ protocol TCGplayerMarket: Sendable {
     func details(productId: Int) async throws -> TCGplayerMarketClient.Details
 }
 
+/// What the condition prices ask TCGplayer. A protocol, so the tests run with
+/// no network. See `ConditionPrices`.
+protocol TCGplayerSkuPricing: Sendable {
+    func details(productId: Int) async throws -> TCGplayerMarketClient.Details
+    /// TCGplayer's market price for each SKU, in cents. A SKU with no market
+    /// price is not in the result.
+    func marketPrices(skuIds: [Int]) async throws -> [Int: Int]
+    /// The price of the cheapest live listing of one SKU, shipping not
+    /// counted, the same as the catalog's low price. Nil when nobody sells it.
+    func lowestPrice(productId: Int, condition: String, printing: String, language: String) async throws -> Int?
+}
+
 /// TCGplayer's storefront endpoints: the ones its own product page calls.
 ///
 /// They need no key. TCGplayer does not document them and can change them with
@@ -15,10 +27,13 @@ protocol TCGplayerMarket: Sendable {
 ///
 /// The catalog cannot answer these questions. TCGCSV has no SKU endpoint, and
 /// its prices are one row per printing, over every condition, once a day.
-struct TCGplayerMarketClient: TCGplayerMarket {
+struct TCGplayerMarketClient: TCGplayerMarket, TCGplayerSkuPricing {
     var session: URLSession = .shared
 
     static let base = URL(string: "https://mp-search-api.tcgplayer.com")!
+    /// The market price for each SKU. Verified on 2026-09-27: a POST of
+    /// `{"skuIds": […]}` returns `[{"skuId", "marketPrice", …}]`.
+    static let gateway = URL(string: "https://mpgateway.tcgplayer.com")!
 
     enum Failure: Error, Equatable {
         case http(Int)
@@ -64,6 +79,25 @@ struct TCGplayerMarketClient: TCGplayerMarket {
         return try Self.parseCheapest(try await send(request))
     }
 
+    func marketPrices(skuIds: [Int]) async throws -> [Int: Int] {
+        guard !skuIds.isEmpty else { return [:] }
+        var request = URLRequest(url: Self.gateway.appending(path: "v1/pricepoints/marketprice/skus/search"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["skuIds": skuIds])
+        request.timeoutInterval = 20
+        return try Self.parseMarketPrices(try await send(request))
+    }
+
+    func lowestPrice(productId: Int, condition: String, printing: String, language: String) async throws -> Int? {
+        var request = URLRequest(url: Self.base.appending(path: "v1/product/\(productId)/listings"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try Self.listingsBody(condition: condition, printing: printing, language: language, sortField: "price")
+        request.timeoutInterval = 20
+        return try Self.parseCheapest(try await send(request))?.priceCents
+    }
+
     /// The product's exact name and every SKU. The SKUs are for a SKU that
     /// nobody sells.
     func details(productId: Int) async throws -> Details {
@@ -84,7 +118,9 @@ struct TCGplayerMarketClient: TCGplayerMarket {
     /// The filter TCGplayer's product page sends, narrowed to one SKU. Custom
     /// listings are left out: each is one seller's photographed copy, with
     /// its own description, and not the card the SKU describes.
-    static func listingsBody(condition: String, printing: String, language: String) throws -> Data {
+    /// `sortField` is "price+shipping" for the order a buyer sees, or "price"
+    /// for the lowest price alone.
+    static func listingsBody(condition: String, printing: String, language: String, sortField: String = "price+shipping") throws -> Data {
         let body: [String: Any] = [
             "filters": [
                 "term": [
@@ -100,7 +136,7 @@ struct TCGplayerMarketClient: TCGplayerMarket {
             ],
             "from": 0,
             "size": 1,
-            "sort": ["field": "price+shipping", "order": "asc"],
+            "sort": ["field": sortField, "order": "asc"],
             "context": ["shippingCountry": "US", "cart": [String: Any]()],
             "aggregations": ["listingType"],
         ]
@@ -116,6 +152,21 @@ struct TCGplayerMarketClient: TCGplayerMarket {
             throw Failure.unreadable
         }
         return Listing(skuId: sku, priceCents: cents(price), shippingCents: row.shippingPrice.map(cents) ?? 0)
+    }
+
+    static func parseMarketPrices(_ data: Data) throws -> [Int: Int] {
+        guard let rows = try? JSONDecoder().decode([MarketPriceRow].self, from: data) else { throw Failure.unreadable }
+        var out: [Int: Int] = [:]
+        for row in rows {
+            guard let sku = Int(exactly: row.skuId), let price = row.marketPrice else { continue }
+            out[sku] = cents(price)
+        }
+        return out
+    }
+
+    struct MarketPriceRow: Decodable {
+        var skuId: Double
+        var marketPrice: Decimal?
     }
 
     static func parseDetails(_ data: Data) throws -> Details {

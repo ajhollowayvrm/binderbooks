@@ -256,7 +256,7 @@ struct CardCorrectionView: View {
                     .font(.caption)
                     .lineLimit(2)
                     .frame(width: 104, alignment: .leading)
-                if let price = hit.priceLabel {
+                if let price = TCGPriceText.inline(marketCents: hit.topMarketCents, lowCents: hit.topLowCents) {
                     Text(price)
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)

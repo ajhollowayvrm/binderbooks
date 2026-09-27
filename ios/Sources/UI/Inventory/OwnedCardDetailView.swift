@@ -202,8 +202,13 @@ private struct OwnedCardDetailBody: View {
     }
 
     private var value: some View {
-        Section("Value") {
-            LabeledContent(card.isHandEntered ? "Your value" : "Value", value: model.marketCents(for: card)?.asCurrency ?? "—")
+        Section {
+            if let price = model.tcgPrice(for: card) {
+                LabeledContent("TCGplayer market", value: price.marketCents?.asCurrency ?? "—")
+                LabeledContent("TCGplayer low", value: price.lowCents?.asCurrency ?? "—")
+            } else {
+                LabeledContent(card.isHandEntered ? "Your value" : "Value", value: model.marketCents(for: card)?.asCurrency ?? "—")
+            }
             // What it might come back worth, per grader, from the comps he
             // entered. The grader it is out at is the one that matters now.
             let atGrader = GradedComps.graderAtGrader(tags: card.tags)
@@ -221,7 +226,32 @@ private struct OwnedCardDetailBody: View {
                 selection: Binding(get: { card.acquiredAt }, set: { card.acquiredAt = $0; save() }),
                 displayedComponents: .date
             )
+        } header: {
+            Text("Value")
+        } footer: {
+            if let priceNote { Text(priceNote) }
         }
+        // A new condition is a new SKU, so its prices are fetched at once.
+        .task(id: model.skuKey(for: card)) {
+            guard let key = model.skuKey(for: card) else { return }
+            await model.conditionPrices.fetch([key], client: TCGplayerMarketClient())
+        }
+    }
+
+    /// Which prices the section shows: this condition's, or the catalog's
+    /// while TCGplayer has not answered for it.
+    private var priceNote: String? {
+        guard let key = model.skuKey(for: card) else { return nil }
+        let condition = key.condition
+        guard let entry = model.conditionPrices.entry(for: key) else {
+            return model.conditionPrices.isFetching
+                ? "Getting TCGplayer's \(condition) prices. Until then, the catalog's price for any condition."
+                : "The catalog's price for any condition. TCGplayer's \(condition) prices come on the next fetch."
+        }
+        guard entry.skuId != nil else {
+            return "TCGplayer has no \(condition) \(key.printing) listing. The catalog's price for any condition."
+        }
+        return "TCGplayer's \(condition) \(key.printing) prices, \(entry.fetchedAt.formatted(date: .abbreviated, time: .shortened))."
     }
 
     /// The scan the card came from, when it came from one.
@@ -548,6 +578,9 @@ struct CardCostSection: View {
         }
         if let purchase = card.sourceItem?.purchase {
             let vendor = purchase.vendor.isEmpty ? "the purchase" : purchase.vendor
+            if let start, purchase.date < start {
+                return "\(vendor) on \(purchase.date.formatted(date: .abbreviated, time: .omitted)) is from before the books started, so this card costs $0."
+            }
             return "Its share of \(vendor) on \(purchase.date.formatted(date: .abbreviated, time: .omitted)), split by market price."
         }
         if card.basisIsAllocated {

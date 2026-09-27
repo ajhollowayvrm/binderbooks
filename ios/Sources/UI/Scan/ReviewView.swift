@@ -188,7 +188,7 @@ struct ReviewView: View {
         } else {
             List(selection: $selection) {
                 ForEach(shown) { card in
-                    ReviewRow(card: card, hit: model.hit(for: card), marketCents: model.marketCents(for: card), heldCount: model.heldCount(for: card))
+                    ReviewRow(card: card, hit: model.hit(for: card), marketCents: model.tcgPrice(for: card)?.marketCents, lowCents: model.tcgPrice(for: card)?.lowCents, heldCount: model.heldCount(for: card))
                         .contentShape(Rectangle())
                         .onTapGesture {
                             if !editMode.isEditing { correcting = card }
@@ -245,7 +245,9 @@ struct ReviewView: View {
 private struct ReviewRow: View {
     let card: OwnedCard
     let hit: SearchHit?
+    /// TCGplayer's market price and lowest listing.
     let marketCents: Int?
+    var lowCents: Int? = nil
     let heldCount: Int
 
     var body: some View {
@@ -273,8 +275,7 @@ private struct ReviewRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            Text(marketCents?.asCurrency ?? "—")
-                .font(.body.monospacedDigit())
+            TCGPriceText(marketCents: marketCents, lowCents: lowCents, font: .body, alignment: .trailing)
         }
     }
 }

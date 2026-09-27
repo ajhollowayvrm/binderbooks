@@ -10,7 +10,6 @@ struct InventoryView: View {
 
     @Environment(CatalogController.self) private var catalog
     @Environment(InventoryModel.self) private var model
-    @Environment(RecentlyViewed.self) private var recents
     @Environment(\.modelContext) private var modelContext
     @Environment(InventorySelection.self) private var selection
     @Environment(\.scenePhase) private var scenePhase
@@ -20,7 +19,6 @@ struct InventoryView: View {
     @State private var showTagFilter = false
     @State private var showMetrics = false
     @State private var showMasterSet = false
-    @State private var recentHits: [SearchHit] = []
     @AppStorage(cardLayoutKey) private var layout: CardLayout = .grid
     @AppStorage(InventorySort.defaultsKey) private var defaultSort: InventorySort = .newest
     @AppStorage(MasterSetHold.defaultsKey) private var masterSetGroups = ""
@@ -38,6 +36,11 @@ struct InventoryView: View {
     private var tagUses: [TagUse] { model.tagUses(in: cards) }
     private var committed: [OwnedCard] { cards.filter(\.isCommitted) }
     private var pricedIds: [Int] { PriceRefresh.productIds(of: cards) }
+    /// The SKUs he holds. A new card or a new condition changes the set, and
+    /// the page fetches what is missing. See `ConditionPrices`.
+    private var heldSkuKeys: Set<ConditionPrices.Key> {
+        Set(committed.filter { !CardTagIndex.isSold($0) }.compactMap(model.skuKey(for:)))
+    }
 
     var body: some View {
         let rows = rows
@@ -76,6 +79,9 @@ struct InventoryView: View {
         .task(id: catalog.version) {
             await catalog.checkPrices(for: pricedIds)
         }
+        .task(id: heldSkuKeys) {
+            await model.conditionPrices.fetch(Array(heldSkuKeys), client: TCGplayerMarketClient())
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             if let checked = catalog.pricesCheckedAt, Date().timeIntervalSince(checked) < 15 * 60 { return }
@@ -105,9 +111,6 @@ struct InventoryView: View {
             if let db = catalog.database, allSets.isEmpty {
                 allSets = (try? await CatalogSearch(database: db).sets()) ?? []
             }
-        }
-        .task(id: recents.productIds) {
-            await loadRecents()
         }
         .onAppear {
             #if DEBUG
@@ -173,7 +176,6 @@ struct InventoryView: View {
                         SelectableStackRow(stack: stack)
                     }
                 }
-                recentlyViewedRows
             }
             .listStyle(.plain)
             .scrollDismissesKeyboard(.immediately)
@@ -191,7 +193,6 @@ struct InventoryView: View {
                             .padding(.horizontal, 12)
                             .padding(.top, 12)
                     }
-                    recentlyViewedGrid
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -207,55 +208,7 @@ struct InventoryView: View {
         }
     }
 
-    /// Catalog products he opened, newest first. Hidden while a chip or the
-    /// search field narrows the page, because it is not part of that answer.
-    private var showRecents: Bool { !recentHits.isEmpty && !isFiltered && !selection.isSelecting }
-
-    @ViewBuilder
-    private var recentlyViewedRows: some View {
-        if showRecents {
-            Section {
-                ForEach(recentHits) { hit in
-                    NavigationLink(value: hit) {
-                        ProductRow(hit: hit)
-                    }
-                }
-            } header: {
-                recentsHeader.textCase(nil)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var recentlyViewedGrid: some View {
-        if showRecents {
-            CardSectionHeader(title: "Recently viewed", trailing: AnyView(
-                Button("Clear") { recents.clear() }.font(.caption)
-            ))
-            ProductCardGrid(hits: recentHits)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
-        }
-    }
-
-    private var recentsHeader: some View {
-        HStack {
-            Text("Recently viewed")
-            Spacer()
-            Button("Clear") { recents.clear() }
-                .font(.caption)
-        }
-    }
-
     private var isFiltered: Bool { model.filter.isActive || !query.isEmpty }
-
-    private func loadRecents() async {
-        guard let db = catalog.database else {
-            recentHits = []
-            return
-        }
-        recentHits = (try? await CatalogSearch(database: db).hits(ids: recents.productIds)) ?? []
-    }
 
     // MARK: - Header
 

@@ -13,6 +13,8 @@ struct MasterSet: Equatable, Sendable {
         /// Nil only for a product with no price row.
         var printing: String?
         var marketCents: Int?
+        /// TCGplayer's lowest listing. Shown only; the totals read the market price.
+        var lowCents: Int? = nil
         /// Copies he holds in this printing.
         var ownedCount = 0
         /// Copies of this product with no printing set. They sit on the
@@ -90,7 +92,7 @@ struct MasterSet: Equatable, Sendable {
                 // With one printing there is nothing to confuse.
                 if rows.count == 1 { count += unset }
                 let note = rows.count > 1 && index == 0 ? unset : 0
-                slots.append(Slot(hit: hit, printing: row.subTypeName, marketCents: row.marketCents, ownedCount: count, unsetPrintingCount: note))
+                slots.append(Slot(hit: hit, printing: row.subTypeName, marketCents: row.marketCents, lowCents: row.lowCents, ownedCount: count, unsetPrintingCount: note))
             }
         }
         return MasterSet(slots: slots)

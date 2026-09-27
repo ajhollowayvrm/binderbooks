@@ -17,6 +17,10 @@ struct OwnedCardRow: View {
     var stack: InventoryStack?
 
     var body: some View {
+        if !row.card.isGone { line }
+    }
+
+    private var line: some View {
         HStack(alignment: .top, spacing: 12) {
             if row.card.isSlabbed {
                 SlabBadge(imageUrl: row.hit?.imageUrl, grader: row.card.graderRaw, grade: row.card.gradeLabel, cert: row.card.certNumber)
@@ -59,10 +63,14 @@ struct OwnedCardRow: View {
             Spacer(minLength: 8)
 
             VStack(alignment: .trailing, spacing: 3) {
-                Text(row.priceText)
-                    .font(.body.monospacedDigit())
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                if row.showsTCGPrices, let price = row.tcgPrice {
+                    TCGPriceText(marketCents: price.marketCents, lowCents: price.lowCents, font: .body, alignment: .trailing)
+                } else {
+                    Text(row.priceText)
+                        .font(.body.monospacedDigit())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
                 if let grader = row.graderAtGrader, row.projectedRange != nil {
                     Text("if \(grader.uppercased()) grades it")
                         .font(.caption2)

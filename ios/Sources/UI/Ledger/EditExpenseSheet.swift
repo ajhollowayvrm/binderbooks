@@ -8,6 +8,7 @@ struct EditExpenseSheet: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Query private var expenses: [BusinessExpense]
 
     @State private var date: Date
     @State private var vendor: String
@@ -42,8 +43,7 @@ struct EditExpenseSheet: View {
             Form {
                 Section {
                     DatePicker("Date", selection: $date, displayedComponents: .date)
-                    TextField("Paid to, e.g. Amazon", text: $vendor)
-                        .textInputAutocapitalization(.words)
+                    CounterpartyField(title: "Paid to", placeholder: "Paid to, e.g. Amazon", text: $vendor, options: Counterparties.names(expenses.map(\.vendor)))
                     MoneyField(label: "Amount", text: $amountText)
                 }
 

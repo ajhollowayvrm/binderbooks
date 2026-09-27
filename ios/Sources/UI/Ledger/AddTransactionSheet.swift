@@ -52,6 +52,10 @@ struct AddTransactionSheet: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Query private var purchases: [Purchase]
+    @Query private var sales: [Sale]
+    @Query private var gradings: [GradingSubmission]
+    @Query private var expenses: [BusinessExpense]
     @Environment(InventoryModel.self) private var inventory
 
     @State private var kind: Kind
@@ -117,8 +121,8 @@ struct AddTransactionSheet: View {
 
                 Section {
                     DatePicker("Date", selection: $date, displayedComponents: .date)
-                    TextField(whoLabel, text: $who)
-                        .textInputAutocapitalization(.words)
+                    CounterpartyField(title: whoTitle, placeholder: whoLabel, text: $who, options: whoOptions)
+                        .id(kind)
                     money(amountLabel, $amountText)
                 }
 
@@ -333,6 +337,25 @@ struct AddTransactionSheet: View {
     /// off what he was paid. The same three fields, the opposite direction.
     private var extrasLabel: String {
         kind.isMoneyIn ? "What came off it" : "On top of that"
+    }
+
+    private var whoTitle: String {
+        switch kind {
+        case .purchase: return "Vendor"
+        case .sale: return "Channel"
+        case .grading: return "Grader"
+        case .expense: return "Paid to"
+        }
+    }
+
+    /// The names he used before for this kind of entry.
+    private var whoOptions: [String] {
+        switch kind {
+        case .purchase: return Counterparties.names(purchases.map(\.vendor))
+        case .sale: return Counterparties.channels(sales)
+        case .grading: return Counterparties.names(gradings.map(\.graderRaw))
+        case .expense: return Counterparties.names(expenses.map(\.vendor))
+        }
     }
 
     private var whoLabel: String {

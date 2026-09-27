@@ -77,6 +77,9 @@ struct SearchHit: Identifiable, Hashable, Sendable {
     var publishedOn: String?
     var minMarketCents: Int?
     var maxMarketCents: Int?
+    /// TCGplayer's lowest listing for the printing with the top market price,
+    /// the printing `priceLabel` shows.
+    var topLowCents: Int? = nil
 
     var id: Int { productId }
 
@@ -93,6 +96,15 @@ struct SearchHit: Identifiable, Hashable, Sendable {
 
     /// "$3.21". Nil when TCGplayer has no market price for the product.
     var priceLabel: String? { topMarketCents?.asCurrency }
+}
+
+extension [ProductPrice] {
+    /// The row for a card in this printing. With no row for the printing, the
+    /// row with the lowest value, the same fallback `valueCents` readers use.
+    func row(for printing: String) -> ProductPrice? {
+        if let exact = first(where: { $0.subTypeName == printing }), exact.valueCents != nil { return exact }
+        return filter { $0.valueCents != nil }.min { ($0.valueCents ?? 0) < ($1.valueCents ?? 0) }
+    }
 }
 
 /// TCGplayer's category ids. The source fixes them, so the app may name them.

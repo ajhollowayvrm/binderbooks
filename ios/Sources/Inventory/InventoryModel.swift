@@ -6,6 +6,9 @@ struct InventoryRow: Identifiable {
     var card: OwnedCard
     var hit: SearchHit?
     var marketCents: Int?
+    /// TCGplayer's market price and lowest listing, which the row shows side
+    /// by side. `marketCents` is the one figure the sort and the totals read.
+    var tcgPrice: ProductPrice? = nil
 
     var id: UUID { card.id }
 
@@ -42,6 +45,12 @@ struct InventoryRow: Identifiable {
     /// The figure a value sort reads: the one `priceText` leads with. A
     /// projection sorts at its low end, because that is the figure he can
     /// count on.
+    /// True when the row shows TCGplayer's two prices. A slab with a comp
+    /// and a card out at a grader show his figure instead.
+    var showsTCGPrices: Bool {
+        gradedValueCents == nil && projectedRange == nil && tcgPrice != nil
+    }
+
     var sortValueCents: Int? {
         gradedValueCents ?? projectedRange?.lowerBound ?? marketCents
     }
@@ -181,6 +190,8 @@ final class InventoryModel {
     private(set) var hits: [Int: SearchHit] = [:]
     private(set) var prices: [Int: [ProductPrice]] = [:]
     private(set) var isLoading = false
+    /// TCGplayer's prices for each SKU he holds. See `ConditionPrices`.
+    let conditionPrices: ConditionPrices
 
     var database: @MainActor () -> CatalogDatabase? = { nil }
     /// The catalog the caches were built from. A swap invalidates them.
@@ -188,7 +199,8 @@ final class InventoryModel {
 
     /// Tests pass no sort, so a default saved on the simulator cannot reorder
     /// their rows.
-    init(sort: InventorySort = .newest) {
+    init(sort: InventorySort = .newest, conditionPrices: ConditionPrices? = nil) {
+        self.conditionPrices = conditionPrices ?? ConditionPrices()
         self.sort = sort
     }
 
@@ -210,7 +222,7 @@ final class InventoryModel {
         let parsed = OwnedCardQuery(query)
         let rows = cards
             .filter { $0.isCommitted && !CardTagIndex.isSold($0) && (!applyFilter || matches($0)) && matchesQuery($0, parsed) }
-            .map { InventoryRow(card: $0, hit: hits[$0.productId], marketCents: marketCents(for: $0)) }
+            .map { InventoryRow(card: $0, hit: hits[$0.productId], marketCents: marketCents(for: $0), tcgPrice: tcgPrice(for: $0)) }
         return (applyFilter ? sort : .newest).sorted(rows)
     }
 
@@ -244,13 +256,43 @@ final class InventoryModel {
         return all.filter { groupIds.contains($0.groupId) }
     }
 
-    /// A card with no catalog product has no catalog price. His own value
-    /// stands in, and it is nil until he types one.
+    /// The SKU a catalog card is: its product, printing, condition, and
+    /// language. Nil for a hand-entered card and for sealed, which TCGplayer
+    /// sells in one condition, so the catalog price is already its own.
+    /// A card with no printing takes the printing its catalog price comes from.
+    func skuKey(for card: OwnedCard) -> ConditionPrices.Key? {
+        guard card.productId > 0, !card.isSealedSelf, let hit = hits[card.productId], !hit.isSealed else { return nil }
+        let printing = card.printing.isEmpty ? prices[card.productId]?.row(for: "")?.subTypeName : card.printing
+        guard let printing else { return nil }
+        return ConditionPrices.Key(
+            productId: card.productId, condition: card.condition, printing: printing,
+            language: TCGplayerListingExport.language(categoryId: hit.categoryId)
+        )
+    }
+
+    /// TCGplayer's market price and lowest listing for the card: its own
+    /// condition's, once `conditionPrices` has them, else the catalog's row
+    /// for its printing. Nil for a hand-entered card or a product with no price.
+    ///
+    /// A fetched SKU with no price shows no price. The catalog's figure is a
+    /// Near Mint figure, and on a Damaged card it would be wrong.
+    func tcgPrice(for card: OwnedCard) -> ProductPrice? {
+        guard card.productId > 0 else { return nil }
+        if let key = skuKey(for: card), let entry = conditionPrices.entry(for: key), entry.skuId != nil {
+            return ProductPrice(
+                subTypeName: key.printing, marketCents: entry.marketCents,
+                asOf: entry.fetchedAt.formatted(date: .abbreviated, time: .omitted), lowCents: entry.lowCents
+            )
+        }
+        return prices[card.productId]?.row(for: card.printing)
+    }
+
+    /// The one figure the sort and the totals read: `valueCents` of
+    /// `tcgPrice`. A card with no catalog product has no catalog price. His
+    /// own value stands in, and it is nil until he types one.
     func marketCents(for card: OwnedCard) -> Int? {
         if card.productId == 0 { return card.manualMarketCents }
-        guard let rows = prices[card.productId], !rows.isEmpty else { return nil }
-        if let exact = rows.first(where: { $0.subTypeName == card.printing })?.valueCents { return exact }
-        return rows.compactMap(\.valueCents).min()
+        return tcgPrice(for: card)?.valueCents
     }
 
     func load(for cards: [OwnedCard]) async {

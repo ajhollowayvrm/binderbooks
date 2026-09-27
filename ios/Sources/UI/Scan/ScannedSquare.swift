@@ -5,7 +5,9 @@ import SwiftUI
 struct ScannedSquare: View {
     let card: OwnedCard
     let hit: SearchHit?
+    /// TCGplayer's market price and lowest listing.
     let marketCents: Int?
+    var lowCents: Int? = nil
     /// Copies of this product already in inventory.
     var heldCount: Int = 0
 
@@ -48,7 +50,7 @@ struct ScannedSquare: View {
             Text(hit?.name ?? card.ocrName ?? (card.certNumber != nil ? "Slab" : "Unknown"))
                 .font(.system(size: 10))
                 .lineLimit(1)
-            Text(marketCents?.asCurrency ?? " ")
+            Text(TCGPriceText.inline(marketCents: marketCents, lowCents: lowCents) ?? " ")
                 .font(.system(size: 10).monospacedDigit())
                 .foregroundStyle(.secondary)
         }

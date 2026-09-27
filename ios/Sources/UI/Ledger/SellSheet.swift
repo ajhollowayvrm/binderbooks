@@ -10,6 +10,7 @@ struct SellSheet: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Query private var sales: [Sale]
 
     @State private var channel = "TCGplayer"
     @State private var soldAt = Date()
@@ -37,7 +38,7 @@ struct SellSheet: View {
             Form {
                 Section {
                     DatePicker("Sold", selection: $soldAt, displayedComponents: .date)
-                    TextField("Channel, e.g. TCGplayer", text: $channel)
+                    CounterpartyField(title: "Channel", placeholder: "Channel, e.g. TCGplayer", text: $channel, options: Counterparties.channels(sales))
                         .textInputAutocapitalization(.words)
                     TextField("Order number", text: $orderId)
                     MoneyField(label: "Gross", text: $grossText)

@@ -15,8 +15,7 @@ struct RootView: View {
     private var openSessions: [ScanSession]
 
     @State private var search = SearchModel(context: .browsing)
-    @State private var recents = RecentlyViewed()
-    @State private var inventory = InventoryModel(sort: .storedDefault)
+    @State private var inventory = InventoryModel(sort: .storedDefault, conditionPrices: ConditionPrices(fileURL: ConditionPrices.defaultFileURL))
     @State private var launcher = ScannerLauncher()
     /// Here, not on the inventory page, so the selection lives through a
     /// keystroke that swaps the page for the search results.
@@ -142,7 +141,6 @@ struct RootView: View {
                 }
             }
         }
-        .environment(recents)
         .environment(inventory)
         .environment(launcher)
         .environment(selection)

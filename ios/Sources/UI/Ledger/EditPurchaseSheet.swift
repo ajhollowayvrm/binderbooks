@@ -13,6 +13,7 @@ struct EditPurchaseSheet: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Query private var purchases: [Purchase]
     @Environment(InventoryModel.self) private var inventory
 
     @State private var date: Date
@@ -66,8 +67,7 @@ struct EditPurchaseSheet: View {
             Form {
                 Section {
                     DatePicker("Bought", selection: $date, displayedComponents: .date)
-                    TextField("Vendor, e.g. Gamecraft", text: $vendor)
-                        .textInputAutocapitalization(.words)
+                    CounterpartyField(title: "Vendor", placeholder: "Vendor, e.g. Gamecraft", text: $vendor, options: Counterparties.names(purchases.map(\.vendor)))
                     TextField("What it was", text: $note, axis: .vertical)
                 }
 

@@ -299,7 +299,9 @@ struct CatalogSearch: Sendable {
            p.setTotal, p.setCode, p.rarity, p.isSealed, p.printingCount,
            s.name AS setName, s.publishedOn,
            (SELECT min(marketPriceCents) FROM price WHERE price.productId = p.productId) AS minMarket,
-           (SELECT max(marketPriceCents) FROM price WHERE price.productId = p.productId) AS maxMarket
+           (SELECT max(marketPriceCents) FROM price WHERE price.productId = p.productId) AS maxMarket,
+           (SELECT lowPriceCents FROM price WHERE price.productId = p.productId
+            ORDER BY marketPriceCents IS NULL, marketPriceCents DESC LIMIT 1) AS topLow
     FROM product p JOIN cardSet s ON s.groupId = p.groupId
     """
 
@@ -350,7 +352,7 @@ struct CatalogSearch: Sendable {
                 number: row["number"], numberNum: row["numberNum"], setTotal: row["setTotal"], setCode: row["setCode"],
                 rarity: row["rarity"], isSealed: (row["isSealed"] as Int) == 1, printingCount: row["printingCount"],
                 imageUrl: row["imageUrl"], publishedOn: row["publishedOn"],
-                minMarketCents: row["minMarket"], maxMarketCents: row["maxMarket"]
+                minMarketCents: row["minMarket"], maxMarketCents: row["maxMarket"], topLowCents: row["topLow"]
             )
         }
     }

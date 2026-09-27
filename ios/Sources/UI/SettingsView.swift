@@ -21,6 +21,9 @@ struct SettingsView: View {
     @State private var pendingSales: PendingSalesFile?
     @State private var showListingImporter = false
     @State private var pendingListings: PendingListingsFile?
+    @State private var singlesCount = 0
+    @State private var confirmSinglesWipe = false
+    @State private var singlesWipeMessage: String?
     @AppStorage("lastExportAt") private var lastExportAt: Double = 0
     @AppStorage(PPTKey.defaultsKey) private var pptKey = ""
     @AppStorage(SellingCostsKey.defaultsKey) private var costOverride = ""
@@ -132,6 +135,25 @@ struct SettingsView: View {
                 Text("There is no sync and no cloud backup. The export holds the whole collection store: \(purchases.count) purchases and \(cards.count) cards. The catalog is not included; it downloads again.")
             }
 
+            Section {
+                Button(role: .destructive) {
+                    confirmSinglesWipe = true
+                } label: {
+                    Label("Remove held raw singles (\(singlesCount))", systemImage: "trash")
+                }
+                .disabled(singlesCount == 0)
+                .confirmationDialog("Delete \(singlesCount) raw singles?", isPresented: $confirmSinglesWipe, titleVisibility: .visible) {
+                    Button("Delete \(singlesCount) cards", role: .destructive) { wipeSingles() }
+                }
+                if let singlesWipeMessage {
+                    Text(singlesWipeMessage)
+                }
+            } header: {
+                Text("Start over")
+            } footer: {
+                Text("Deletes every raw card you hold, so you can scan them again. Slabs, sealed items, personal-collection cards, cards at a grader, and sold cards stay. Purchases keep their cost. Export a backup first.")
+            }
+
             if let importError {
                 Section { Text(importError).foregroundStyle(.red) }
             }
@@ -151,6 +173,14 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task(id: cards.count + purchases.count) {
             prepareExport()
+            singlesCount = (try? SinglesWipe.targets(modelContext).count) ?? 0
+            #if DEBUG
+            // `CT_WIPE_SINGLES=1` runs the wipe, because simctl cannot tap.
+            if ProcessInfo.processInfo.environment["CT_WIPE_SINGLES"] == "1", singlesCount > 0 {
+                try? await Task.sleep(for: .seconds(2))
+                wipeSingles()
+            }
+            #endif
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
             handleImport(result)
@@ -160,6 +190,16 @@ struct SettingsView: View {
                 run(file, mode: mode)
             }
         }
+    }
+
+    private func wipeSingles() {
+        do {
+            let deleted = try SinglesWipe.run(modelContext)
+            singlesWipeMessage = "Deleted \(deleted) cards."
+        } catch {
+            singlesWipeMessage = error.localizedDescription
+        }
+        singlesCount = (try? SinglesWipe.targets(modelContext).count) ?? 0
     }
 
     /// What selling a card costs him, for the potential on the ledger's

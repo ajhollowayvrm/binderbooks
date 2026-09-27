@@ -39,9 +39,8 @@ struct ProductRow: View {
             Spacer(minLength: 8)
 
             VStack(alignment: .trailing, spacing: 3) {
-                if let price = hit.priceLabel {
-                    Text(price)
-                        .font(.body.monospacedDigit())
+                if hit.topMarketCents != nil || hit.topLowCents != nil {
+                    TCGPriceText(marketCents: hit.topMarketCents, lowCents: hit.topLowCents, font: .body, alignment: .trailing)
                 } else {
                     Text("No price")
                         .font(.caption)

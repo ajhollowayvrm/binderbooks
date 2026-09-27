@@ -30,11 +30,8 @@ struct ProductCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             art
-            if let price = hit.priceLabel {
-                Text(price)
-                    .font(.subheadline.monospacedDigit().weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+            if hit.topMarketCents != nil || hit.topLowCents != nil {
+                TCGPriceText(marketCents: hit.topMarketCents, lowCents: hit.topLowCents)
             } else {
                 Text("No price")
                     .font(.subheadline)

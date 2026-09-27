@@ -52,6 +52,11 @@ final class ScanSessionModel {
         prices[card.productId]?.map(\.subTypeName) ?? []
     }
 
+    /// TCGplayer's row for the card: its market price and its lowest listing.
+    func tcgPrice(for card: OwnedCard) -> ProductPrice? {
+        prices[card.productId]?.row(for: card.printing)
+    }
+
     /// Market value for the card's printing, else the lowest printing.
     func marketCents(for card: OwnedCard) -> Int? {
         guard let rows = prices[card.productId], !rows.isEmpty else { return nil }

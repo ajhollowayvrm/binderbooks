@@ -348,6 +348,12 @@ final class OwnedCard {
 
     var isIdentified: Bool { productId > 0 }
 
+    /// True when the card is not in a store. After a save deletes a card,
+    /// `isDeleted` is false and `modelContext` is nil, and a read of a stored
+    /// field crashes. A view can still hold the card for one update after
+    /// that save, so a cell must check this before it reads the card.
+    var isGone: Bool { modelContext == nil || isDeleted }
+
     /// A card in a slab, and so drawn as one. A cert number is not required:
     /// the imported ledger recorded the grade and never a cert, and a slab
     /// with a grade on its label is still a slab.

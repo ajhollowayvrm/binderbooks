@@ -260,9 +260,13 @@ private struct MasterSetRow: View {
                 unsetNote(slot)
             }
             Spacer(minLength: 8)
-            Text(slot.marketCents?.asCurrency ?? "No price")
-                .font(slot.marketCents == nil ? .caption : .body.monospacedDigit())
-                .foregroundStyle(slot.marketCents == nil ? .tertiary : .primary)
+            if slot.marketCents == nil && slot.lowCents == nil {
+                Text("No price")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                TCGPriceText(marketCents: slot.marketCents, lowCents: slot.lowCents, font: .body, alignment: .trailing)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -296,10 +300,13 @@ private struct MasterSetCell: View {
                         .padding(4)
                 }
             }
-            Text(slot.marketCents?.asCurrency ?? "No price")
-                .font(.subheadline.monospacedDigit().weight(.semibold))
-                .foregroundStyle(slot.marketCents == nil ? .tertiary : .primary)
-                .lineLimit(1)
+            if slot.marketCents == nil && slot.lowCents == nil {
+                Text("No price")
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+            } else {
+                TCGPriceText(marketCents: slot.marketCents, lowCents: slot.lowCents)
+            }
             // The name stays, because the pattern prints share one number
             // and one piece of art, and only the name tells them apart.
             Text(slot.hit.name)
