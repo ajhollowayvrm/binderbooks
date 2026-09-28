@@ -4,9 +4,11 @@ import UniformTypeIdentifiers
 
 /// Pick cards, price them against TCGplayer, and share the Seller Portal CSV.
 ///
-/// The pricing export from Seller Portal comes first. It says what TCGplayer
+/// The pricing export from Seller Portal is optional. It says what TCGplayer
 /// lists now, and each row of the file adds the copies he holds less that
-/// stock. See `TCGplayerListingExport`.
+/// stock. With no pricing export, each row adds every copy he holds: right
+/// when TCGplayer lists none of them, as after he cleared his inventory on
+/// 2026-09-26. See `TCGplayerListingExport`.
 ///
 /// Every inventory card that can be listed is on the list and starts ticked.
 /// An unticked card leaves its SKU alone on TCGplayer. The cards that cannot
@@ -141,11 +143,16 @@ struct TCGplayerExportSheet: View {
                     pickingStock = true
                 } label: {
                     Label(
-                        checking ? "Reading…" : (stock == nil ? "Pick the pricing export…" : "Pick it again…"),
+                        checking ? "Reading…" : (stock == nil ? "Pick the pricing export (optional)…" : "Pick it again…"),
                         systemImage: "doc.text"
                     )
                 }
                 .disabled(checking || builder.isRunning)
+                if stock == nil {
+                    Label("With no pricing export, each row adds every copy you hold. A card TCGplayer already lists gets listed twice.", systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
                 if let stock {
                     LabeledContent("SKUs TCGplayer lists", value: "\(stock.rows.values.filter { $0.line.quantity > 0 }.count)")
                     if !stock.unmatched.isEmpty {
@@ -163,7 +170,7 @@ struct TCGplayerExportSheet: View {
             } header: {
                 Text("What TCGplayer lists now")
             } footer: {
-                Text("In Seller Portal, export your pricing file, then pick it here. Each row of the upload adds the copies you hold less the copies TCGplayer lists: one held and one listed adds 0 and only changes the price. TCGplayer takes a card off its stock when a buyer pays, so import your sold orders first. A row TCGplayer does not match stays as it is.")
+                Text("If TCGplayer lists nothing of yours, skip this. Otherwise, in Seller Portal, export your pricing file, then pick it here. Each row of the upload adds the copies you hold less the copies TCGplayer lists: one held and one listed adds 0 and only changes the price. TCGplayer takes a card off its stock when a buyer pays, so import your sold orders first. A row TCGplayer does not match stays as it is.")
             }
 
             if touchesMasterSet {
@@ -323,12 +330,12 @@ struct TCGplayerExportSheet: View {
             Button {
                 start(selected)
             } label: {
-                Text(builder.isRunning ? "Pricing…" : (stock == nil ? "Pick the pricing export first" : "Price \(selected.count) \(selected.count == 1 ? "card" : "cards")"))
+                Text(builder.isRunning ? "Pricing…" : "Price \(selected.count) \(selected.count == 1 ? "card" : "cards")")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(stock == nil || (selected.isEmpty && removing == 0) || builder.isRunning)
+            .disabled((selected.isEmpty && removing == 0) || builder.isRunning)
         }
         .padding()
         .background(.bar)
@@ -451,8 +458,7 @@ struct TCGplayerExportSheet: View {
         // every copy but one. A card he ticked by hand overrides the hold.
         let held = self.held
         let holdingOne = Set(selected.filter { held.contains($0.card.id) && $0.card.quantity > 1 }.map(\.card.id))
-        guard let stock else { return }
-        let plan = Export.plan(selected, prices: model.prices, holdingOne: holdingOne, stock: stock)
+        let plan = Export.plan(selected, prices: model.prices, holdingOne: holdingOne, stock: stock ?? Export.Stock())
         let shipping = Money.cents(from: shippingText) ?? 0
         run = Task {
             let result = await builder.build(plan, shippingChargedCents: shipping, market: TCGplayerMarketClient(), floorCents: floorCents)

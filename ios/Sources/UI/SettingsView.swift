@@ -175,6 +175,8 @@ struct SettingsView: View {
             prepareExport()
             singlesCount = (try? SinglesWipe.targets(modelContext).count) ?? 0
             #if DEBUG
+            // `CT_OPEN_LISTING_EXPORT=1` opens the TCGplayer listing sheet.
+            if ProcessInfo.processInfo.environment["CT_OPEN_LISTING_EXPORT"] == "1" { showListingExport = true }
             // `CT_WIPE_SINGLES=1` runs the wipe, because simctl cannot tap.
             if ProcessInfo.processInfo.environment["CT_WIPE_SINGLES"] == "1", singlesCount > 0 {
                 try? await Task.sleep(for: .seconds(2))

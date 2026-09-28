@@ -173,6 +173,20 @@ import Testing
         #expect(Export.skipReason(for: rows[4], prices: prices) == .noPrinting)
     }
 
+    /// With no pricing export, TCGplayer is taken to list nothing, so each
+    /// row adds every copy he holds. AJ lists this way after he cleared his
+    /// TCGplayer inventory on 2026-09-26.
+    @Test @MainActor func withNoPricingExportEachRowAddsEveryCopy() throws {
+        let prices = [1: [ProductPrice(subTypeName: "Holofoil", marketCents: 900, asOf: "2026-09-27")]]
+        let bulk = card(1)
+        bulk.quantity = 3
+        let plan = Export.plan([InventoryRow(card: bulk, hit: hit(1))], prices: prices)
+        let line = try #require(plan.lines.first)
+        #expect(line.stock == nil)
+        #expect(line.listed == 0)
+        #expect(line.addQuantity == 3)
+    }
+
     @Test @MainActor func aJapaneseCardAsksForTheJapaneseSku() {
         let prices = [3: [ProductPrice(subTypeName: "Holofoil", marketCents: 100, asOf: "2026-09-11")]]
         let plan = Export.plan([InventoryRow(card: card(3), hit: hit(3, category: TCGCategory.pokemonJapan))], prices: prices)
