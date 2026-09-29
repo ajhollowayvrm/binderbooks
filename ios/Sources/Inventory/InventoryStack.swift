@@ -80,6 +80,35 @@ struct InventoryStack: Identifiable {
         }
     }
 
+    /// Copies that carry the same labels, "PC" included.
+    struct LabelGroup: Identifiable {
+        /// The labels in the first copy's order. Empty for a copy with none.
+        var labels: [String]
+        var rows: [InventoryRow]
+
+        var id: [String] { labels.map(TagKey.of).sorted() }
+        var copies: Int { rows.reduce(0) { $0 + max(1, $1.card.quantity) } }
+        var title: String { labels.isEmpty ? "No labels" : labels.joined(separator: ", ") }
+    }
+
+    /// The copies, grouped by what they carry. Two copies at PSA and two with
+    /// no labels read as two groups, so he can pick the copy to list. Groups
+    /// are in the order their first copy sorted.
+    var labelGroups: [LabelGroup] {
+        var order: [[String]] = []
+        var groups: [[String]: LabelGroup] = [:]
+        for row in rows {
+            let labels = row.card.tags + (row.card.isPersonalCollection ? ["PC"] : [])
+            let key = labels.map(TagKey.of).sorted()
+            if groups[key] == nil {
+                order.append(key)
+                groups[key] = LabelGroup(labels: labels, rows: [])
+            }
+            groups[key]?.rows.append(row)
+        }
+        return order.compactMap { groups[$0] }
+    }
+
     /// What the line's badges say: the shared labels, then "1 of 2 listed"
     /// for each label only some copies carry.
     var badges: [String] {
@@ -152,7 +181,12 @@ struct InventoryStack: Identifiable {
     /// the card is gone — sold, deleted, or filtered off the page.
     static func stack(of cardID: UUID, in rows: [InventoryRow]) -> InventoryStack? {
         guard let lead = rows.first(where: { $0.card.id == cardID }) else { return nil }
-        let wanted = key(for: lead.card)
+        return stack(key: key(for: lead.card), in: rows)
+    }
+
+    /// The copies that share `key`. The stack screen keeps the key, so selling
+    /// or deleting the copy it opened on does not empty the screen.
+    static func stack(key wanted: Key, in rows: [InventoryRow]) -> InventoryStack? {
         let members = rows.filter { key(for: $0.card) == wanted }
         return members.isEmpty ? nil : InventoryStack(rows: members)
     }

@@ -44,6 +44,16 @@ final class InventorySelection {
         }
     }
 
+    /// A Select button lands here. No finger is down, so there is no lift
+    /// to ignore.
+    func start() {
+        startedAt = nil
+        withAnimation(.snappy(duration: 0.28)) {
+            isSelecting = true
+            ids = []
+        }
+    }
+
     func selectAll(_ ids: [UUID]) {
         startedAt = nil
         self.ids = Set(ids)

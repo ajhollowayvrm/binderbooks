@@ -206,4 +206,43 @@ import Testing
         #expect(InventoryStack.stack(of: goneID, in: rows) == nil)
         #expect(InventoryStack.stack(of: keptID, in: rows)?.copies == 2)
     }
+
+    /// Four copies, two at PSA. The stack screen shows two groups, so he can
+    /// tag one of the other two as listed and leave the rest alone.
+    @Test @MainActor func theCopiesGroupByTheirLabels() throws {
+        let made = packs(4)
+        made[1].tags = ["at PSA"]
+        made[3].tags = ["At PSA"]
+        try container.mainContext.save()
+        let model = inventory()
+
+        let stack = try #require(model.stacks(from: try fetch()).first)
+        #expect(stack.copies == 4)
+        #expect(stack.labelGroups.map(\.title) == ["No labels", "at PSA"])
+        #expect(stack.labelGroups.map(\.copies) == [2, 2])
+
+        // Tag one untagged copy. Only that copy changes.
+        let target = try #require(stack.labelGroups.first?.rows.first?.card)
+        CardTagEditor(context: container.mainContext).add(ReservedTag.listed, to: [target])
+
+        let after = try #require(model.stacks(from: try fetch()).first)
+        #expect(after.copies == 4)
+        #expect(after.labelGroups.map(\.title) == ["listed", "at PSA", "No labels"])
+        #expect(after.labelGroups.map(\.copies) == [1, 2, 1])
+        #expect(after.badges == ["1 of 4 listed", "2 of 4 at PSA"])
+    }
+
+    /// He sells the copy the stack screen opened on. The other copies stay.
+    @Test @MainActor func theStackKeyOutlivesItsLeadCopy() throws {
+        let made = packs(3)
+        try container.mainContext.save()
+        let model = inventory()
+        let key = InventoryStack.key(for: made[0])
+
+        made[0].tags = [ReservedTag.sold]
+        try container.mainContext.save()
+        let rows = model.rows(from: try fetch(), applyFilter: false)
+        #expect(InventoryStack.stack(of: made[0].id, in: rows) == nil)
+        #expect(InventoryStack.stack(key: key, in: rows)?.copies == 2)
+    }
 }
